@@ -1,0 +1,607 @@
+{\rtf1\ansi\ansicpg936\cocoartf2761
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <!DOCTYPE html>\
+<html lang="zh-CN">\
+<head>\
+    <meta charset="UTF-8">\
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">\
+    <title>MedReader Agent - \uc0\u28145 \u24230 \u25991 \u29486 \u21161 \u25163 </title>\
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>\
+    <style>\
+        :root \{\
+            --bg-app: #f0f2f5;\
+            --bg-white: #ffffff;\
+            --text-primary: #1f2329;\
+            --text-secondary: #8f959e;\
+            --border-color: #e5e6eb;\
+            --accent-color: #3370ff;\
+            --accent-hover: #2860e1;\
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);\
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);\
+        \}\
+\
+        * \{ box-sizing: border-box; margin: 0; padding: 0; \}\
+\
+        body \{\
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;\
+            background: var(--bg-app);\
+            color: var(--text-primary);\
+            height: 100vh;\
+            display: flex;\
+            flex-direction: column;\
+            overflow: hidden;\
+        \}\
+\
+        header \{\
+            background: var(--bg-white);\
+            border-bottom: 1px solid var(--border-color);\
+            padding: 0 24px;\
+            height: 56px;\
+            display: flex;\
+            align-items: center;\
+            justify-content: space-between;\
+            box-shadow: var(--shadow-sm);\
+            z-index: 10;\
+        \}\
+        .logo \{ font-weight: 700; font-size: 18px; color: var(--accent-color); display: flex; align-items: center; gap: 8px; \}\
+        .upload-btn \{ background: var(--accent-color); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; border: none; \}\
+        .upload-btn:hover \{ background: var(--accent-hover); \}\
+\
+        main \{ display: flex; flex: 1; overflow: hidden; \}\
+\
+        /* \uc0\u24038 \u20391 \u22823 \u32434  */\
+        #left-sidebar \{ width: 280px; background: var(--bg-white); border-right: 1px solid var(--border-color); padding: 16px; overflow-y: auto; \}\
+        .sidebar-title \{ font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; font-weight: 700; \}\
+        \
+        .outline-group \{ margin-bottom: 8px; \}\
+        .outline-header \{ padding: 10px 12px; border-radius: 6px; font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; background: #f2f3f5; font-weight: 600; \}\
+        .outline-header:hover \{ background: #e8e9eb; \}\
+        .arrow \{ width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #666; transition: transform 0.2s; \}\
+        .outline-group.collapsed .arrow \{ transform: rotate(-90deg); \}\
+        \
+        .outline-children \{ margin-top: 4px; padding-left: 20px; display: block; \}\
+        .outline-group.collapsed .outline-children \{ display: none; \}\
+        \
+        .outline-sub \{ padding: 8px 10px; font-size: 13px; color: #4e5969; border-left: 2px solid #ddd; margin-left: 6px; cursor: pointer; line-height: 1.4; \}\
+        .outline-sub:hover \{ color: var(--accent-color); border-left-color: var(--accent-color); background: #f7f9ff; \}\
+\
+        /* \uc0\u20013 \u38388  PDF \u21306  */\
+        #pdf-viewer \{ flex: 1; background: #e8e8e8; overflow: auto; display: flex; flex-direction: column; align-items: center; padding: 40px 0; position: relative; \}\
+        .pdf-page-container \{ position: relative; margin-bottom: 20px; box-shadow: var(--shadow-md); background: white; \}\
+        .pdf-page-container canvas \{ display: block; \}\
+        .text-layer \{ position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: hidden; opacity: 0.25; line-height: 1; \}\
+        .text-layer span \{ color: transparent; \}\
+        .text-layer span.highlight \{ background: rgba(255, 235, 59, 0.8); color: black !important; opacity: 1; \}\
+\
+        /* \uc0\u21491 \u20391 \u38754 \u26495  */\
+        #right-panel \{ width: 420px; border-left: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--bg-white); \}\
+        #right-top \{ flex: 1; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; overflow: hidden; \}\
+        #right-bottom \{ flex: 1.2; display: flex; flex-direction: column; overflow: hidden; \}\
+        \
+        .panel-header \{ padding: 14px 20px; border-bottom: 1px solid var(--border-color); font-weight: 600; font-size: 15px; background: #fafbfc; \}\
+        .panel-content \{ flex: 1; overflow-y: auto; padding: 20px; \}\
+\
+        /* \uc0\u32763 \u35793 \u21345 \u29255  */\
+        .translation-card \{ background: #f9fafb; border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 16px; \}\
+        .original-text \{ font-size: 13px; color: var(--text-secondary); border-left: 3px solid #dcdfe6; padding-left: 10px; margin-bottom: 10px; line-height: 1.6; \}\
+        .translated-text \{ font-size: 14px; line-height: 1.7; \}\
+        .loading-dots span \{ display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-color); margin: 0 2px; animation: bounce 1s infinite alternate; \}\
+        .loading-dots span:nth-child(2) \{ animation-delay: 0.2s; \}\
+        .loading-dots span:nth-child(3) \{ animation-delay: 0.4s; \}\
+        @keyframes bounce \{ to \{ opacity: 0.3; transform: translateY(-4px); \} \}\
+\
+        /* \uc0\u21010 \u35789 \u23567 \u29699  */\
+        #translate-bubble \{ position: absolute; background: var(--accent-color); color: white; padding: 4px 10px; border-radius: 12px; font-size: 12px; cursor: pointer; display: none; box-shadow: var(--shadow-md); z-index: 100; user-select: none; \}\
+        #translate-bubble::after \{ content: ''; position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%); border-width: 5px 5px 0 5px; border-style: solid; border-color: var(--accent-color) transparent transparent transparent; \}\
+\
+        /* \uc0\u22270 \u29255 \u26694 \u36873 \u36974 \u32617  */\
+        #selection-box \{ position: absolute; border: 2px dashed var(--accent-color); background: rgba(51, 112, 255, 0.2); display: none; pointer-events: none; z-index: 99; \}\
+\
+        /* Agent \uc0\u32842 \u22825 \u21306  */\
+        .chat-message \{ margin-bottom: 16px; max-width: 90%; \}\
+        .chat-message.user \{ margin-left: auto; text-align: right; \}\
+        .chat-bubble \{ display: inline-block; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; text-align: left; white-space: pre-wrap; \}\
+        .chat-message.user .chat-bubble \{ background: var(--accent-color); color: white; border-bottom-right-radius: 2px; \}\
+        .chat-message.agent .chat-bubble \{ background: #f2f3f5; color: var(--text-primary); border-bottom-left-radius: 2px; \}\
+        \
+        .chat-image-preview \{ max-width: 100%; border-radius: 8px; margin-bottom: 8px; border: 1px solid #ddd; \}\
+        \
+        .chat-input-area \{ border-top: 1px solid var(--border-color); padding: 12px; background: #fafbfc; \}\
+        .image-preview-area \{ padding: 0 12px; background: #fafbfc; display: none; \}\
+        .preview-container \{ position: relative; display: inline-block; \}\
+        .preview-container img \{ max-width: 120px; max-height: 120px; border-radius: 4px; border: 1px solid #ddd; \}\
+        .remove-img-btn \{ position: absolute; top: -5px; right: -5px; background: red; color: white; border-radius: 50%; width: 18px; height: 18px; text-align: center; line-height: 16px; cursor: pointer; font-size: 12px; \}\
+        \
+        .chat-input-box \{ display: flex; gap: 8px; \}\
+        .chat-input \{ flex: 1; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; font-size: 14px; resize: none; height: 40px; outline: none; \}\
+        .chat-input:focus \{ border-color: var(--accent-color); \}\
+        .chat-send-btn \{ background: var(--accent-color); color: white; border: none; padding: 0 16px; border-radius: 6px; cursor: pointer; font-weight: 500; \}\
+\
+        .empty-state \{ text-align: center; color: var(--text-secondary); margin-top: 60px; font-size: 14px; \}\
+    </style>\
+</head>\
+<body>\
+\
+    <header>\
+        <div class="logo">\uc0\u55357 \u56516  MedReader Agent</div>\
+        <div>\
+            <input type="file" id="file-input" accept="application/pdf" style="display: none;">\
+            <button class="upload-btn" onclick="document.getElementById('file-input').click()">\uc0\u19978 \u20256  PDF \u25991 \u29486 </button>\
+        </div>\
+    </header>\
+\
+    <main>\
+        <!-- \uc0\u24038 \u20391 \u22823 \u32434  -->\
+        <aside id="left-sidebar">\
+            <div class="sidebar-title">\uc0\u34892 \u25991 \u36923 \u36753 \u19982 \u28145 \u24230 \u35299 \u26512 </div>\
+            <div id="outline-container" style="font-size: 14px; color: #8f959e; text-align: center; margin-top: 20px;">\
+                \uc0\u19978 \u20256 \u25991 \u29486 \u21518 <br>Agent \u23558 \u33258 \u21160 \u20998 \u26512 \u36923 \u36753 \u32467 \u26500 \
+            </div>\
+        </aside>\
+\
+        <!-- \uc0\u20013 \u38388  PDF -->\
+        <div id="pdf-viewer">\
+            <div class="empty-state" id="pdf-empty">\
+                <h3>\uc0\u55358 \u56812  \u27426 \u36814 \u20351 \u29992 \u22522 \u30784 \u21307 \u23398 \u25991 \u29486 \u21161 \u25163 </h3>\
+                <p style="margin-top:10px;">\uc0\u35831 \u28857 \u20987 \u21491 \u19978 \u35282 \u19978 \u20256  PDF \u25991 \u29486 </p>\
+                <p style="margin-top:20px; font-size:12px; color:#aaa;">\uc0\u25903 \u25345 \u21010 \u35789 \u32763 \u35793 \u12289 \u22270 \u34920 \u26694 \u36873 \u25552 \u38382 </p>\
+            </div>\
+            <div id="translate-bubble">\uc0\u35793 </div>\
+            <div id="selection-box"></div>\
+        </div>\
+\
+        <!-- \uc0\u21491 \u20391 \u38754 \u26495  -->\
+        <aside id="right-panel">\
+            <div id="right-top">\
+                <div class="panel-header">\uc0\u55357 \u56589  \u21010 \u35789 \u32763 \u35793 </div>\
+                <div class="panel-content" id="translate-panel">\
+                    <div class="empty-state"><p>\uc0\u22312  PDF \u20013 \u21010 \u36873 \u33521 \u25991 <br>\u21363 \u21487 \u36827 \u34892 \u32763 \u35793 </p></div>\
+                </div>\
+            </div>\
+            <div id="right-bottom">\
+                <div class="panel-header">\uc0\u55358 \u56598  Agent \u21161 \u25163  (\u25903 \u25345 \u22270 \u34920 \u25552 \u38382 )</div>\
+                <div class="panel-content" id="chat-panel">\
+                    <div class="empty-state"><p>\uc0\u21521  Agent \u25552 \u38382 \u20851 \u20110 \u26412 \u25991 \u29486 \u30340 \u20219 \u20309 \u38382 \u39064 <br>\u25110 \u22312 PDF\u22270 \u34920 \u19978 \u30011 \u26694 \u25552 \u38382 </p></div>\
+                </div>\
+                <div class="image-preview-area" id="image-preview-area">\
+                    <div class="preview-container">\
+                        <img id="preview-img" src="">\
+                        <div class="remove-img-btn" onclick="clearImagePreview()">x</div>\
+                    </div>\
+                </div>\
+                <div class="chat-input-area">\
+                    <div class="chat-input-box">\
+                        <textarea class="chat-input" id="chat-input" placeholder="\uc0\u36755 \u20837 \u38382 \u39064 \u65292 \u25110 \u26694 \u36873 \u22270 \u34920 \u21518 \u25552 \u38382 ..." rows="1"></textarea>\
+                        <button class="chat-send-btn" onclick="sendChatMessage()">\uc0\u21457 \u36865 </button>\
+                    </div>\
+                </div>\
+            </div>\
+        </aside>\
+    </main>\
+\
+    <script>\
+        // \uc0\u9888 \u65039  \u35686 \u21578 \u65306 \u21069 \u31471 \u26292 \u38706  API Key \u26497 \u19981 \u23433 \u20840 \u65292 \u20165 \u20379 \u26412 \u22320 \u27979 \u35797 \u65281 \
+        const DEEPSEEK_API_KEY = "sk-edb16a1b2daa4982a45307247934cd91";\
+        const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";\
+        \
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';\
+\
+        let currentPdfDoc = null;\
+        let fullTextContent = "";\
+        let capturedImageBase64 = null;\
+\
+        // --- 1. PDF \uc0\u19978 \u20256 \u19982 \u28210 \u26579  ---\
+        document.getElementById('file-input').addEventListener('change', handleFileUpload);\
+\
+        async function handleFileUpload(e) \{\
+            const file = e.target.files[0];\
+            if (!file) return;\
+\
+            document.getElementById('pdf-empty').style.display = 'none';\
+            document.getElementById('pdf-viewer').innerHTML = '<div class="empty-state">PDF \uc0\u21152 \u36733 \u20013 ...</div>';\
+            document.getElementById('outline-container').innerHTML = '<div class="loading-dots"><span></span><span></span><span></span> Agent \uc0\u27491 \u22312 \u28145 \u24230 \u35299 \u26512 \u36923 \u36753 ...</div>';\
+            document.getElementById('translate-panel').innerHTML = '';\
+            \
+            const fileReader = new FileReader();\
+            fileReader.onload = async function(e) \{\
+                const typedArray = new Uint8Array(e.target.result);\
+                currentPdfDoc = await pdfjsLib.getDocument(typedArray).promise;\
+                \
+                document.getElementById('pdf-viewer').innerHTML = '';\
+                recreateOverlays();\
+                fullTextContent = "";\
+\
+                for (let i = 1; i <= Math.min(currentPdfDoc.numPages, 10); i++) \{\
+                    await renderPage(i);\
+                \}\
+\
+                analyzeDocumentStructure();\
+            \};\
+            fileReader.readAsArrayBuffer(file);\
+        \}\
+\
+        async function renderPage(pageNum) \{\
+            const page = await currentPdfDoc.getPage(pageNum);\
+            const viewport = page.getViewport(\{ scale: 1.5 \});\
+            \
+            const pageContainer = document.createElement('div');\
+            pageContainer.className = 'pdf-page-container';\
+            pageContainer.style.width = viewport.width + 'px';\
+            pageContainer.style.height = viewport.height + 'px';\
+\
+            const canvas = document.createElement('canvas');\
+            const context = canvas.getContext('2d');\
+            canvas.width = viewport.width;\
+            canvas.height = viewport.height;\
+            pageContainer.appendChild(canvas);\
+            document.getElementById('pdf-viewer').appendChild(pageContainer);\
+\
+            await page.render(\{ canvasContext: context, viewport: viewport \}).promise;\
+\
+            const textLayerDiv = document.createElement('div');\
+            textLayerDiv.className = 'text-layer';\
+            pageContainer.appendChild(textLayerDiv);\
+            \
+            const textContent = await page.getTextContent();\
+            pdfjsLib.renderTextLayer(\{\
+                textContentSource: textContent,\
+                container: textLayerDiv,\
+                viewport: viewport,\
+                textDivs: []\
+            \});\
+\
+            textContent.items.forEach(item => \{\
+                fullTextContent += item.str + " ";\
+            \});\
+        \}\
+\
+        function recreateOverlays() \{\
+            let bubble = document.createElement('div');\
+            bubble.id = 'translate-bubble';\
+            bubble.innerText = '\uc0\u35793 ';\
+            bubble.onclick = triggerTranslate;\
+            document.getElementById('pdf-viewer').appendChild(bubble);\
+\
+            let selBox = document.createElement('div');\
+            selBox.id = 'selection-box';\
+            document.getElementById('pdf-viewer').appendChild(selBox);\
+        \}\
+\
+        // --- 2. \uc0\u21010 \u35789 \u32763 \u35793  ---\
+        document.addEventListener('mouseup', (e) => \{\
+            if (!e.target.closest('.text-layer')) return;\
+            const selection = window.getSelection();\
+            const selectedText = selection.toString().trim();\
+            const bubble = document.getElementById('translate-bubble');\
+            \
+            if (selectedText.length > 5) \{\
+                const range = selection.getRangeAt(0);\
+                const rect = range.getBoundingClientRect();\
+                const viewerRect = document.getElementById('pdf-viewer').getBoundingClientRect();\
+                \
+                bubble.style.left = (rect.left - viewerRect.left + rect.width / 2 - 12) + 'px';\
+                bubble.style.top = (rect.top - viewerRect.top - 30) + 'px';\
+                bubble.style.display = 'block';\
+            \} else \{\
+                bubble.style.display = 'none';\
+            \}\
+        \});\
+\
+        async function triggerTranslate() \{\
+            const selectedText = window.getSelection().toString().trim();\
+            if (!selectedText) return;\
+            document.getElementById('translate-bubble').style.display = 'none';\
+            \
+            const panel = document.getElementById('translate-panel');\
+            if (panel.querySelector('.empty-state')) panel.innerHTML = '';\
+\
+            const cardId = 'card-' + Date.now();\
+            panel.insertAdjacentHTML('afterbegin', `\
+                <div class="translation-card" id="$\{cardId\}">\
+                    <div class="original-text">$\{selectedText\}</div>\
+                    <div class="translated-text loading-dots"><span></span><span></span><span></span> \uc0\u32763 \u35793 \u20013 ...</div>\
+                </div>\
+            `);\
+\
+            try \{\
+                const res = await fetch(DEEPSEEK_API_URL, \{\
+                    method: "POST",\
+                    headers: \{ "Content-Type": "application/json", "Authorization": `Bearer $\{DEEPSEEK_API_KEY\}` \},\
+                    body: JSON.stringify(\{\
+                        model: "deepseek-chat",\
+                        messages: [\
+                            \{ role: "system", content: "\uc0\u20320 \u26159 \u22522 \u30784 \u21307 \u23398 \u32763 \u35793 \u19987 \u23478 \u12290 \u23558 \u33521 \u25991 \u32763 \u35793 \u25104 \u20013 \u25991 \u65292 \u22522 \u22240 /\u34507 \u30333 \u21517 \u20445 \u30041 \u33521 \u25991 \u12290 \u21482 \u36820 \u22238 \u32763 \u35793 \u32467 \u26524 \u12290 " \},\
+                            \{ role: "user", content: selectedText \}\
+                        ],\
+                        temperature: 0.1\
+                    \})\
+                \});\
+                const data = await res.json();\
+                document.querySelector(`#$\{cardId\} .translated-text`).classList.remove('loading-dots');\
+                document.querySelector(`#$\{cardId\} .translated-text`).innerText = data.choices[0].message.content;\
+            \} catch (err) \{\
+                document.querySelector(`#$\{cardId\} .translated-text`).innerText = "\uc0\u32763 \u35793 \u22833 \u36133 \u12290 ";\
+            \}\
+            window.getSelection().removeAllRanges();\
+        \}\
+\
+        // --- 3. \uc0\u22270 \u29255 \u26694 \u36873 \u19982 \u25130 \u22270 \u36923 \u36753  ---\
+        let isDrawing = false;\
+        let startX, startY;\
+        let targetCanvas = null;\
+\
+        document.addEventListener('mousedown', (e) => \{\
+            if (e.target.tagName === 'CANVAS' && e.target.closest('.pdf-page-container')) \{\
+                targetCanvas = e.target;\
+                isDrawing = true;\
+                \
+                const viewerRect = document.getElementById('pdf-viewer').getBoundingClientRect();\
+                startX = e.clientX - viewerRect.left + document.getElementById('pdf-viewer').scrollLeft;\
+                startY = e.clientY - viewerRect.top + document.getElementById('pdf-viewer').scrollTop;\
+                \
+                const selBox = document.getElementById('selection-box');\
+                selBox.style.left = startX + 'px';\
+                selBox.style.top = startY + 'px';\
+                selBox.style.width = '0px';\
+                selBox.style.height = '0px';\
+                selBox.style.display = 'block';\
+                e.preventDefault();\
+            \}\
+        \});\
+\
+        document.addEventListener('mousemove', (e) => \{\
+            if (isDrawing) \{\
+                const viewerRect = document.getElementById('pdf-viewer').getBoundingClientRect();\
+                const currentX = e.clientX - viewerRect.left + document.getElementById('pdf-viewer').scrollLeft;\
+                const currentY = e.clientY - viewerRect.top + document.getElementById('pdf-viewer').scrollTop;\
+                \
+                const width = currentX - startX;\
+                const height = currentY - startY;\
+                \
+                const selBox = document.getElementById('selection-box');\
+                selBox.style.width = Math.abs(width) + 'px';\
+                selBox.style.height = Math.abs(height) + 'px';\
+                \
+                if (width < 0) selBox.style.left = currentX + 'px';\
+                if (height < 0) selBox.style.top = currentY + 'px';\
+            \}\
+        \});\
+\
+        document.addEventListener('mouseup', (e) => \{\
+            if (isDrawing) \{\
+                isDrawing = false;\
+                const selBox = document.getElementById('selection-box');\
+                selBox.style.display = 'none';\
+                \
+                const rect = selBox.getBoundingClientRect();\
+                if (rect.width < 20 || rect.height < 20) return; // \uc0\u24573 \u30053 \u22826 \u23567 \u30340 \u26694 \u36873 \
+\
+                // \uc0\u25191 \u34892  Canvas \u25130 \u22270 \
+                const canvasRect = targetCanvas.getBoundingClientRect();\
+                const sourceX = parseFloat(selBox.style.left) - (canvasRect.left + document.getElementById('pdf-viewer').scrollLeft);\
+                const sourceY = parseFloat(selBox.style.top) - (canvasRect.top + document.getElementById('pdf-viewer').scrollTop);\
+                \
+                // \uc0\u31616 \u21270 \u22352 \u26631 \u35745 \u31639 \u65306 \u30452 \u25509 \u29992 \u26694 \u36873 \u30340 \u32477 \u23545 \u20301 \u32622 \u20943 \u21435 Canvas\u30340 \u32477 \u23545 \u20301 \u32622 \
+                const x1 = rect.left - canvasRect.left;\
+                const y1 = rect.top - canvasRect.top;\
+\
+                const tempCanvas = document.createElement('canvas');\
+                tempCanvas.width = rect.width;\
+                tempCanvas.height = rect.height;\
+                const ctx = tempCanvas.getContext('2d');\
+                ctx.drawImage(targetCanvas, x1, y1, rect.width, rect.height, 0, 0, rect.width, rect.height);\
+                \
+                capturedImageBase64 = tempCanvas.toDataURL('image/png');\
+                \
+                // \uc0\u26174 \u31034 \u22312 \u36755 \u20837 \u26694 \u19978 \u26041 \
+                document.getElementById('preview-img').src = capturedImageBase64;\
+                document.getElementById('image-preview-area').style.display = 'block';\
+                document.getElementById('chat-input').focus();\
+            \}\
+        \});\
+\
+        function clearImagePreview() \{\
+            capturedImageBase64 = null;\
+            document.getElementById('image-preview-area').style.display = 'none';\
+        \}\
+\
+        // --- 4. Agent Harness: \uc0\u29983 \u25104 \u28145 \u24230 \u36923 \u36753 \u22823 \u32434  ---\
+        async function analyzeDocumentStructure() \{\
+            const textForAnalysis = fullTextContent.substring(0, 6000);\
+            \
+            addChatMessage('agent', `\uc0\u25991 \u29486 \u24050 \u21152 \u36733 \u23436 \u25104 \u65292 \u20849  $\{currentPdfDoc.numPages\} \u39029 \u12290 \u27491 \u22312 \u20026 \u24744 \u29983 \u25104 \u28145 \u24230 \u36923 \u36753 \u35299 \u26512 ...`);\
+\
+            try \{\
+                const res = await fetch(DEEPSEEK_API_URL, \{\
+                    method: "POST",\
+                    headers: \{ "Content-Type": "application/json", "Authorization": `Bearer $\{DEEPSEEK_API_KEY\}` \},\
+                    body: JSON.stringify(\{\
+                        model: "deepseek-chat",\
+                        messages: [\
+                            \{ \
+                                role: "system", \
+                                content: `\uc0\u20320 \u26159 \u19968 \u20010 \u39030 \u23574 \u30340 \u22522 \u30784 \u21307 \u23398 \u25991 \u29486 \u20998 \u26512 \u19987 \u23478 \u12290 \u35831 \u20998 \u26512 \u20197 \u19979 \u25991 \u29486 \u25991 \u26412 \u65292 \u24182 \u20005 \u26684 \u25353 \u29031 \u20197 \u19979 6\u20010 \u32500 \u24230 \u25552 \u21462 \u36923 \u36753 \u22823 \u32434 \u65306 \
+                                1. \uc0\u31185 \u23398 \u38382 \u39064 \u22914 \u20309 \u25552 \u20986 \u21450 \u24847 \u20041 \
+                                2. \uc0\u36923 \u36753 \u19978 \u22914 \u20309 \u35777 \u26126 \u31185 \u23398 \u38382 \u39064 \
+                                3. \uc0\u20851 \u38190 \u30340 \u23454 \u39564 \u25216 \u26415 \
+                                4. \uc0\u36923 \u36753 \u38142 \u25509 \u30340 \u20851 \u38190 \u28857 \
+                                5. \uc0\u36923 \u36753 \u24635 \u32467 \
+                                6. \uc0\u34893 \u29983 \u30340 \u35838 \u39064 \
+                                \
+                                \uc0\u35201 \u27714 \u36820 \u22238 JSON\u25968 \u32452 \u26684 \u24335 \u65292 \u22823 \u26631 \u39064 \u19979 \u21253 \u21547 \u23567 \u26631 \u39064 \u65292 \u24182 \u25552 \u21462 \u29992 \u20110 \u21407 \u25991 \u23450 \u20301 \u30340 \u33521 \u25991 \u20851 \u38190 \u35789 \u12290 \
+                                \uc0\u26684 \u24335 \u31034 \u20363 \u65306 \
+                                [\
+                                  \{\
+                                    "title": "1. \uc0\u31185 \u23398 \u38382 \u39064 \u22914 \u20309 \u25552 \u20986 \u21450 \u24847 \u20041 ",\
+                                    "children": [\
+                                      \{"title": "\uc0\u31185 \u23398 \u38382 \u39064 \u30340 \u25552 \u20986 ", "keyword": "Parity and Lactation"\},\
+                                      \{"title": "\uc0\u31185 \u23398 \u24847 \u20041 ", "keyword": "immune surveillance"\}\
+                                    ]\
+                                  \}\
+                                ]\
+                                \uc0\u21482 \u36820 \u22238 JSON\u65292 \u19981 \u35201 \u22810 \u20313 \u25991 \u26412 \u12290 `\
+                            \},\
+                            \{ role: "user", content: textForAnalysis \}\
+                        ],\
+                        temperature: 0.2\
+                    \})\
+                \});\
+                const data = await res.json();\
+                const content = data.choices[0].message.content;\
+                \
+                const jsonStr = content.substring(content.indexOf('['), content.lastIndexOf(']') + 1);\
+                const outline = JSON.parse(jsonStr);\
+                \
+                renderOutline(outline);\
+                addChatMessage('agent', '\uc0\u28145 \u24230 \u36923 \u36753 \u35299 \u26512 \u23436 \u27605 \u65292 \u24050 \u26174 \u31034 \u22312 \u24038 \u20391 \u12290 \u24744 \u21487 \u20197 \u23637 \u24320 \u24182 \u28857 \u20987 \u23567 \u26631 \u39064 \u22312 \u21407 \u25991 \u20013 \u23450 \u20301 \u65281 ');\
+            \} catch (err) \{\
+                document.getElementById('outline-container').innerHTML = '<span style="color:red;">\uc0\u22823 \u32434 \u29983 \u25104 \u22833 \u36133 \u65292 \u35831 \u30452 \u25509 \u21521  Agent \u25552 \u38382 \u12290 </span>';\
+                addChatMessage('agent', '\uc0\u22823 \u32434 \u29983 \u25104 \u22833 \u36133 \u65292 \u20294 \u25105 \u24050 \u35760 \u24405 \u20840 \u25991 \u65292 \u24744 \u21487 \u20197 \u30452 \u25509 \u21521 \u25105 \u25552 \u38382 \u12290 ');\
+            \}\
+        \}\
+\
+        function renderOutline(outline) \{\
+            const container = document.getElementById('outline-container');\
+            container.innerHTML = '';\
+            \
+            outline.forEach(group => \{\
+                const groupHtml = `\
+                    <div class="outline-group">\
+                        <div class="outline-header" onclick="this.parentElement.classList.toggle('collapsed')">\
+                            <div class="arrow"></div>\
+                            <span>$\{group.title\}</span>\
+                        </div>\
+                        <div class="outline-children">\
+                            $\{group.children.map(child => `\
+                                <div class="outline-sub" onclick="jumpToText('$\{child.keyword\}')">$\{child.title\}</div>\
+                            `).join('')\}\
+                        </div>\
+                    </div>\
+                `;\
+                container.insertAdjacentHTML('beforeend', groupHtml);\
+            \});\
+        \}\
+\
+        // --- 5. \uc0\u21407 \u25991 \u36339 \u36716 \u19982 \u39640 \u20142  ---\
+        function jumpToText(keyword) \{\
+            if (!keyword) return;\
+            const spans = document.querySelectorAll('.text-layer span');\
+            const lowerKey = keyword.toLowerCase();\
+            let found = false;\
+            \
+            // \uc0\u31227 \u38500 \u20043 \u21069 \u30340 \u39640 \u20142 \
+            document.querySelectorAll('.text-layer span.highlight').forEach(s => s.classList.remove('highlight'));\
+            \
+            for (let span of spans) \{\
+                if (span.textContent.toLowerCase().includes(lowerKey)) \{\
+                    span.scrollIntoView(\{ behavior: 'smooth', block: 'center' \});\
+                    span.classList.add('highlight');\
+                    found = true;\
+                    break;\
+                \}\
+            \}\
+            \
+            if (!found) \{\
+                // \uc0\u22914 \u26524 \u25214 \u19981 \u21040 \u23436 \u25972 \u20851 \u38190 \u35789 \u65292 \u23581 \u35797 \u25353 \u21333 \u35789 \u25286 \u20998 \u25628 \u32034 \
+                const words = keyword.split(' ');\
+                for (let word of words) \{\
+                    if (word.length < 4) continue;\
+                    for (let span of spans) \{\
+                        if (span.textContent.toLowerCase().includes(word.toLowerCase())) \{\
+                            span.scrollIntoView(\{ behavior: 'smooth', block: 'center' \});\
+                            span.classList.add('highlight');\
+                            found = true;\
+                            break;\
+                        \}\
+                    \}\
+                    if (found) break;\
+                \}\
+            \}\
+\
+            if (!found) \{\
+                alert("\uc0\u26410 \u22312 \u24403 \u21069 \u21152 \u36733 \u30340 \u39029 \u38754 \u20013 \u25214 \u21040 \u20851 \u38190 \u35789 : " + keyword);\
+            \}\
+        \}\
+\
+        // --- 6. Agent \uc0\u32842 \u22825 \u36923 \u36753  ---\
+        function addChatMessage(role, text, imageUrl = null) \{\
+            const panel = document.getElementById('chat-panel');\
+            if (panel.querySelector('.empty-state')) panel.innerHTML = '';\
+            \
+            let imgHtml = imageUrl ? `<img src="$\{imageUrl\}" class="chat-image-preview">` : '';\
+            const msgHtml = `\
+                <div class="chat-message $\{role\}">\
+                    $\{role === 'user' ? imgHtml : ''\}\
+                    <div class="chat-bubble">$\{text\}</div>\
+                </div>\
+            `;\
+            panel.insertAdjacentHTML('beforeend', msgHtml);\
+            panel.scrollTop = panel.scrollHeight;\
+        \}\
+\
+        async function sendChatMessage() \{\
+            const input = document.getElementById('chat-input');\
+            const text = input.value.trim();\
+            if (!text && !capturedImageBase64) return;\
+\
+            const userMsg = text || "(\uc0\u38024 \u23545 \u26694 \u36873 \u30340 \u22270 \u34920 \u25552 \u38382 )";\
+            addChatMessage('user', userMsg, capturedImageBase64);\
+            \
+            const currentImage = capturedImageBase64;\
+            input.value = '';\
+            clearImagePreview();\
+\
+            const panel = document.getElementById('chat-panel');\
+            const loadingId = 'load-' + Date.now();\
+            panel.insertAdjacentHTML('beforeend', `\
+                <div class="chat-message agent" id="$\{loadingId\}">\
+                    <div class="chat-bubble loading-dots"><span></span><span></span><span></span> \uc0\u24605 \u32771 \u20013 ...</div>\
+                </div>\
+            `);\
+            panel.scrollTop = panel.scrollHeight;\
+\
+            try \{\
+                const contextText = fullTextContent.substring(0, 8000);\
+                let systemContent = `\uc0\u20320 \u26159 \u19968 \u20010 \u21307 \u23398 \u29983 \u31185 \u30740 \u21161 \u25163 \u12290 \u29992 \u25143 \u27491 \u22312 \u38405 \u35835 \u19968 \u31687 \u25991 \u29486 \u65292 \u20197 \u19979 \u26159 \u25991 \u29486 \u30340 \u21069 \u21322 \u37096 \u20998 \u25991 \u26412 \u65306 \\n\\n"""$\{contextText\}"""\\n\\n\u35831 \u22522 \u20110 \u27492 \u19978 \u19979 \u25991 \u22238 \u31572 \u38382 \u39064 \u12290 `;\
+                \
+                // \uc0\u27169 \u25311 \u22810 \u27169 \u24577 \u65306 \u30001 \u20110  DeepSeek API \u21487 \u33021 \u19981 \u25903 \u25345 \u22270 \u29255 \u65292 \u36825 \u37324 \u36890 \u36807 \u25991 \u23383 \u25552 \u31034  Agent \u29992 \u25143 \u19978 \u20256 \u20102 \u22270 \u29255 \
+                if (currentImage) \{\
+                    systemContent += `\\n\uc0\u29992 \u25143 \u25130 \u21462 \u20102 \u25991 \u29486 \u20013 \u30340 \u19968 \u24352 \u22270 \u34920 \u25110 \u29255 \u27573 \u65292 \u35831 \u20551 \u35774 \u20320 \u33021 \u30475 \u21040 \u23427 \u65292 \u24182 \u26681 \u25454 \u19978 \u19979 \u25991 \u24341 \u23548 \u29992 \u25143 \u20998 \u26512 \u12290 \u22914 \u26524 \u26080 \u27861 \u30830 \u23450 \u22270 \u34920 \u32454 \u33410 \u65292 \u35831 \u35753 \u29992 \u25143 \u25551 \u36848 \u22270 \u34920 \u20869 \u23481 \u12290 `;\
+                \}\
+\
+                const res = await fetch(DEEPSEEK_API_URL, \{\
+                    method: "POST",\
+                    headers: \{ "Content-Type": "application/json", "Authorization": `Bearer $\{DEEPSEEK_API_KEY\}` \},\
+                    body: JSON.stringify(\{\
+                        model: "deepseek-chat",\
+                        messages: [\
+                            \{ role: "system", content: systemContent \},\
+                            \{ role: "user", content: userMsg \}\
+                        ],\
+                        temperature: 0.3\
+                    \})\
+                \});\
+                const data = await res.json();\
+                \
+                document.getElementById(loadingId).remove();\
+                addChatMessage('agent', data.choices[0].message.content);\
+            \} catch (err) \{\
+                document.getElementById(loadingId).remove();\
+                addChatMessage('agent', '\uc0\u25265 \u27465 \u65292 \u22238 \u31572 \u22833 \u36133 \u65292 \u35831 \u26816 \u26597 \u32593 \u32476 \u25110  API \u35774 \u32622 \u12290 ');\
+            \}\
+        \}\
+\
+        document.getElementById('chat-input').addEventListener('keydown', function(e) \{\
+            if (e.key === 'Enter' && !e.shiftKey) \{\
+                e.preventDefault();\
+                sendChatMessage();\
+            \}\
+        \});\
+    </script>\
+</body>\
+</html>}
