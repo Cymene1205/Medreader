@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import ReactMarkdown from "react-markdown";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -77,7 +77,8 @@ export default function ChatPanel({
 
     try {
       if (hasImage) {
-        // Vision path
+        // Vision path — pass paper text as context so the model can connect
+        // the figure with the paper's narrative
         const res = await fetch("/api/vision", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -85,6 +86,7 @@ export default function ChatPanel({
             prompt: userMsg.content,
             image: attachedImage,
             history,
+            paperContext: paperText || undefined,
           }),
         });
         const data = await res.json();
@@ -230,7 +232,13 @@ export default function ChatPanel({
                   className="mb-2 rounded max-w-[200px] max-h-[160px] border border-border/60"
                 />
               )}
-              <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              {m.role === "assistant" && !m.error ? (
+                <div className="chat-markdown break-words">
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              )}
             </div>
             {m.role === "user" && (
               <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary flex items-center justify-center">
@@ -245,8 +253,10 @@ export default function ChatPanel({
             <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
               <Bot className="h-3.5 w-3.5 text-primary" />
             </div>
-            <div className="max-w-[80%] rounded-lg px-3 py-2 text-[13px] leading-relaxed bg-muted whitespace-pre-wrap break-words">
-              {streaming}
+            <div className="max-w-[80%] rounded-lg px-3 py-2 text-[13px] leading-relaxed bg-muted">
+              <div className="chat-markdown break-words">
+                <ReactMarkdown>{streaming}</ReactMarkdown>
+              </div>
               <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse align-middle" />
             </div>
           </div>
@@ -302,7 +312,7 @@ export default function ChatPanel({
           onKeyDown={onKeyDown}
           placeholder={
             hasImage
-              ? "针对框选的图片提问…（Enter 发送，Shift+Enter 换行）"
+              ? "针对框选的图片提问…（将按四段式解读：读图方法→关键数据→结合原文→一句话总结。Enter 发送）"
               : "向 Agent 提问…（Enter 发送，Shift+Enter 换行）"
           }
           className="min-h-[44px] max-h-[140px] resize-none text-[13px] scrollbar-thin"

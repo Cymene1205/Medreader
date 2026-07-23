@@ -8,7 +8,6 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, FileSearch, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -59,7 +58,7 @@ export default function OutlinePanel({
         ) : null}
       </div>
 
-      <ScrollArea className="flex-1 scrollbar-thin">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         <div className="p-2">
           {loading && (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
@@ -161,7 +160,7 @@ export default function OutlinePanel({
             </Accordion>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

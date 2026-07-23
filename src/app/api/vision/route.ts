@@ -6,7 +6,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, image, history } = await req.json();
+    const { prompt, image, history, paperContext } = await req.json();
     if (!image || typeof image !== "string") {
       return NextResponse.json(
         { error: "image (base64 data URL) is required" },
@@ -15,9 +15,10 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await callVision(
-      prompt || "请分析这张图片中的内容。",
+      prompt || "请按照四段式结构解读这张科研图表。",
       image,
-      Array.isArray(history) ? history : []
+      Array.isArray(history) ? history : [],
+      typeof paperContext === "string" ? paperContext : undefined
     );
 
     return NextResponse.json({ answer: result });

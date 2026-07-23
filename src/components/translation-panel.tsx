@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, Languages, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -82,7 +81,7 @@ export default function TranslationPanel({ selectedText, selectionNonce }: Props
         )}
       </div>
 
-      <ScrollArea className="flex-1 scrollbar-thin">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         <div className="p-3 space-y-3">
           {loading && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground p-3 rounded-md bg-muted/40">
@@ -121,7 +120,7 @@ export default function TranslationPanel({ selectedText, selectionNonce }: Props
             </div>
           ))}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
