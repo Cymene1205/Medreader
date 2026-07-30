@@ -52,3 +52,14 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# MedReader 项目特有
+/db/*.db
+/db/*.db-journal
+/uploads/
+/data/
+/prisma/dev.db
+.env.production
+.zscripts/
+agent-ctx/
+upload/
