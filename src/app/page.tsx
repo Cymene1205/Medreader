@@ -518,45 +518,36 @@ export default function Home() {
           <Panel defaultSize={20} minSize={14} collapsible={false}>
             <div className="h-full border-r bg-card flex flex-col">
               {/* HeadingNavigator at top — verbatim paper section/subsection
-                  titles, used for precise paragraph jumping. When 全文框架
-                  is collapsed below (and this panel is expanded), this panel
-                  grows to fill the space. Both panels share the same
-                  controlled collapse pattern (chevron-right header button)
-                  and both auto-collapse when new analysis results arrive. */}
-              <div
-                className={cn(
-                  "min-h-0",
-                  // HeadingNavigator expands only when 全文框架 below is
-                  // collapsed AND this panel itself is expanded.
-                  outlineCollapsed && !headingCollapsed ? "flex-1" : "flex-shrink-0"
-                )}
-              >
+                  titles, used for precise paragraph jumping.
+
+                  Per user request, this panel ALWAYS renders at its natural
+                  height (capped internally at 50vh with scroll) — it no
+                  longer expands to fill the leftover space when 全文框架
+                  below is collapsed. This way, when 原文段落导航 is expanded,
+                  the 全文框架 header sits right beneath the last section
+                  item instead of being pushed to the bottom of the visible
+                  area ("容易找不着了"). */}
+              <div className="flex-shrink-0 min-h-0">
                 <HeadingNavigator
                   structuredHeadings={outline?.structuredHeadings}
                   activeHeadingText={activeHeadingText}
                   onHeadingClick={onHeadingClick}
-                  fillContainer={outlineCollapsed && !headingCollapsed}
                   collapsed={headingCollapsed}
                   onCollapsedChange={setHeadingCollapsed}
                 />
               </div>
-              {/* Outline (6-dimension LLM-generated analysis) at bottom.
-                  When `outlineCollapsed` is true, this panel shrinks to
-                  header-only and the parent flex-1 is dropped so the
-                  HeadingNavigator above can grow.
-                  If BOTH panels are collapsed, we add flex-1 to the
-                  OutlinePanel wrapper so it pushes the HeadingNavigator
-                  header to the top and absorbs the leftover space — that
-                  way the empty area is part of the OutlinePanel header's
-                  background, not a weird gap. */}
+              {/* Outline (6-dimension LLM-generated analysis) — placed
+                  directly under the navigator. When expanded, it takes the
+                  remaining vertical space (flex-1). When collapsed, it
+                  shrinks to header-only and the leftover space stays empty
+                  below — exactly what the user asked for: "全文框架紧跟着
+                  最后一个上面的框框就行了,不用放到最底下". */}
               <div
                 className={cn(
-                  "border-t",
+                  "border-t border-border/60",
                   outlineCollapsed
-                    ? headingCollapsed
-                      ? "flex-1 min-h-0" // both collapsed: absorb space
-                      : "flex-shrink-0"    // only outline collapsed: header-only
-                    : "flex-1 min-h-0 overflow-hidden" // neither collapsed
+                    ? "flex-shrink-0"
+                    : "flex-1 min-h-0 overflow-hidden"
                 )}
               >
                 <OutlinePanel

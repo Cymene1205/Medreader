@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileSearch, ChevronRight, Expand, Quote } from "lucide-react";
+import { Loader2, LayoutGrid, FileSearch, ChevronRight, Expand, Quote } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 
@@ -130,15 +130,24 @@ export default function OutlinePanel({
       <button
         type="button"
         onClick={() => onCollapsedChange?.(!collapsed)}
-        className="w-full px-3 py-2.5 flex items-center gap-2 text-left hover:bg-muted/40 transition-colors flex-shrink-0"
+        className={cn(
+          "w-full px-3 py-2 flex items-center gap-2 text-left transition-colors flex-shrink-0",
+          "hover:bg-emerald-50/60 dark:hover:bg-emerald-950/30",
+          "border-b border-emerald-100/70 dark:border-emerald-900/40"
+        )}
         title={collapsed ? "展开全文框架" : "折叠全文框架"}
         aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
         aria-expanded={!collapsed}
       >
-        <FileSearch className="h-3.5 w-3.5 text-primary flex-shrink-0" />
-        <span className="text-[12px] font-semibold flex-1">全文框架</span>
+        <LayoutGrid className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+        <span className="text-[12px] font-semibold flex-1 text-emerald-700 dark:text-emerald-300">
+          全文框架
+        </span>
         {outline?.sections?.length ? (
-          <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
+          <Badge
+            variant="secondary"
+            className="text-[10px] h-4 px-1.5 bg-emerald-100/70 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+          >
             {outline.sections.length} 维度
           </Badge>
         ) : null}
@@ -149,7 +158,6 @@ export default function OutlinePanel({
           )}
         />
       </button>
-      {!collapsed && <div className="border-b" />}
 
       {/*
         Body — hidden when collapsed. We keep the Dialog mounted so a

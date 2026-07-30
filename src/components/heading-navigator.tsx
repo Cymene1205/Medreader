@@ -16,10 +16,10 @@ type Props = {
   /** Click handler — parent should jump the block reader / PDF to this heading. */
   onHeadingClick: (h: { title: string; origTitle: string }) => void;
   /**
-   * When true, the navigator expands to fill its parent container (used when
-   * the 全文框架 panel below is collapsed). When false (default), the
-   * navigator caps its height at 28vh and lets the 全文框架 panel take the
-   * rest of the vertical space.
+   * Kept for backward compatibility — no longer affects layout. The navigator
+   * now always renders at its natural height (capped at 50vh with internal
+   * scroll) so the 全文框架 panel below can sit right under the last section
+   * instead of being pushed to the bottom of the panel.
    */
   fillContainer?: boolean;
   /**
@@ -64,33 +64,33 @@ function renderHeadingText(text: string): ReactNode {
  *
  * Renders the LLM-analysed 2-level heading tree:
  *   - `kind: "major"` sections (Introduction / Results / Discussion /
- *     Methods / ...) appear as collapsible H1 cards with a coloured left
- *     bar, bold title, and a chevron toggle.
+ *     Methods / ...) appear as collapsible list items with a coloured left
+ *     bar (NO outer card border — the user explicitly asked for "only one
+ *     frame" instead of nested frames).
  *   - `kind: "metadata"` sections (Novelty and Significance, Data
  *     Availability, ...) are HIDDEN — the user wants the navigator to
- *     show the paper's actual structure, not journal boilerplate. They
- *     can still find those sections in the PDF tab.
- *   - Each major section's children (the real sub-sections, e.g.
- *     "梗死心脏中..." under "结果") appear as H2 list items inside the
- *     card when expanded.
+ *     show the paper's actual structure, not journal boilerplate.
+ *   - Each major section's children appear as indented H2 list items
+ *     when expanded.
  *
- * All major sections start COLLAPSED by default — when a paper has 6+
- * major sections, showing every sub-section inline makes the navigator
- * overwhelming. The user clicks a chevron to expand only the section
- * they care about.
+ * All major sections start COLLAPSED by default.
  *
- * Visual hierarchy (per user feedback "背景/方法/结果是大标题，结果下的
- * 具体内容是子标题，需要区分开"):
- *   - H1 (major section card): coloured left bar + bold 13px text +
- *     tinted background — clearly the "high-level" section title
- *   - H2 (sub-section item): medium 12px text, indented — clearly a
- *     sub-section under its parent H1
+ * Visual identity (per user request to distinguish from 全文框架):
+ *   - Header uses a blue accent (ListTree icon + sky-600 text)
+ *   - Each section item has a blue left bar (sky-500)
+ *   - No per-item card border — the panel itself is the only "frame"
+ *
+ * Layout (per user request "全文框架紧跟着最后一个上面的框框"):
+ *   - The navigator renders at its natural height (no flex-1 fill).
+ *   - Content is capped at 50vh; if there are many sections, the body
+ *     scrolls internally instead of pushing the 全文框架 panel to the
+ *     bottom of the visible area.
  */
 export default function HeadingNavigator({
   structuredHeadings,
   activeHeadingText,
   onHeadingClick,
-  fillContainer = false,
+  fillContainer: _fillContainer = false,
   collapsed: collapsedProp,
   onCollapsedChange,
 }: Props) {
@@ -140,18 +140,19 @@ export default function HeadingNavigator({
   const totalCount = majorSections.length;
 
   return (
-    <div
-      className={cn(
-        "border-t bg-card flex flex-col",
-        fillContainer && !collapsed ? "h-full" : ""
-      )}
-    >
+    <div className="border-t border-border/60 bg-card flex flex-col">
       <button
         onClick={toggleCollapsed}
-        className="w-full px-3 py-2 flex items-center gap-2 text-left hover:bg-muted/40 transition-colors flex-shrink-0"
+        className={cn(
+          "w-full px-3 py-2 flex items-center gap-2 text-left transition-colors flex-shrink-0",
+          "hover:bg-sky-50/60 dark:hover:bg-sky-950/30",
+          "border-b border-sky-100/70 dark:border-sky-900/40"
+        )}
       >
-        <ListTree className="h-3.5 w-3.5 text-primary" />
-        <span className="text-[12px] font-semibold flex-1">原文段落导航</span>
+        <ListTree className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 flex-shrink-0" />
+        <span className="text-[12px] font-semibold flex-1 text-sky-700 dark:text-sky-300">
+          原文段落导航
+        </span>
         <span className="text-[10px] text-muted-foreground">
           {totalCount} 个章节
         </span>
@@ -164,12 +165,7 @@ export default function HeadingNavigator({
       </button>
 
       {!collapsed && (
-        <div
-          className={cn(
-            "overflow-y-auto scrollbar-thin pb-2",
-            fillContainer ? "flex-1 min-h-0" : "max-h-[28vh]"
-          )}
-        >
+        <div className="overflow-y-auto scrollbar-thin max-h-[50vh] py-1">
           {majorSections.length === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground/70">
               {structuredHeadings
@@ -179,7 +175,7 @@ export default function HeadingNavigator({
           )}
 
           {majorSections.length > 0 && (
-            <ul className="px-1.5 py-1 space-y-1.5">
+            <ul className="px-1.5 space-y-0.5">
               {majorSections.map((section, idx) => {
                 const key = `sec-${idx}-${section.origTitle.slice(0, 30)}`;
                 const isGroupCollapsed = collapsedGroups.has(key);
@@ -193,24 +189,22 @@ export default function HeadingNavigator({
                   <li
                     key={key}
                     className={cn(
-                      "rounded-md border overflow-hidden",
+                      "rounded-md transition-colors",
                       sectionActive
-                        ? "border-primary/40 bg-primary/5"
-                        : "border-border/60 bg-background"
+                        ? "bg-sky-50 dark:bg-sky-950/40"
+                        : "hover:bg-muted/40"
                     )}
                   >
-                    {/* Major section header — coloured left bar + bold title + chevron */}
-                    <div
-                      className={cn(
-                        "flex items-center gap-1.5 pr-1.5 transition-colors",
-                        sectionActive ? "bg-primary/10" : "hover:bg-muted/50"
-                      )}
-                    >
-                      {/* Coloured left bar — clearly marks this as a major heading */}
+                    {/* Major section header — coloured left bar + bold title + chevron.
+                        No outer border (per user request: "only one frame"). */}
+                    <div className="flex items-center gap-1.5 pr-1.5">
+                      {/* Coloured left bar — the ONLY visual "frame" for the section */}
                       <div
                         className={cn(
-                          "w-1 self-stretch flex-shrink-0",
-                          sectionActive ? "bg-primary" : "bg-primary/50"
+                          "w-1 self-stretch flex-shrink-0 rounded-full",
+                          sectionActive
+                            ? "bg-sky-600 dark:bg-sky-400"
+                            : "bg-sky-400/70 dark:bg-sky-700/70"
                         )}
                       />
                       <button
@@ -223,7 +217,14 @@ export default function HeadingNavigator({
                         title={section.title}
                         className="flex-1 min-w-0 text-left py-1.5 pl-1"
                       >
-                        <span className="block text-[13px] font-bold text-foreground leading-snug line-clamp-2">
+                        <span
+                          className={cn(
+                            "block text-[13px] font-bold leading-snug line-clamp-2",
+                            sectionActive
+                              ? "text-sky-700 dark:text-sky-300"
+                              : "text-foreground"
+                          )}
+                        >
                           {renderHeadingText(section.title)}
                         </span>
                       </button>
@@ -247,9 +248,10 @@ export default function HeadingNavigator({
                       )}
                     </div>
 
-                    {/* Sub-section children — hidden when the group is collapsed */}
+                    {/* Sub-section children — hidden when the group is collapsed.
+                        No border-t separator (avoids the "two frames" feeling). */}
                     {hasChildren && !isGroupCollapsed && (
-                      <ul className="px-2 pb-1.5 pt-0.5 space-y-0.5 border-t border-border/40">
+                      <ul className="pl-3 pr-1 pb-1 pt-0 space-y-0.5">
                         {section.children.map((child: StructuredHeadingChild, ci) => {
                           const childActive =
                             activeHeadingText === child.title ||
@@ -266,10 +268,10 @@ export default function HeadingNavigator({
                                 title={child.title}
                                 className={cn(
                                   "w-full text-left px-2 py-1.5 rounded transition-colors",
-                                  "text-[12px] font-medium pl-3",
+                                  "text-[12px] font-medium",
                                   childActive
-                                    ? "bg-primary/10 text-primary ring-1 ring-primary/20"
-                                    : "text-foreground/90 hover:bg-muted"
+                                    ? "bg-sky-100/80 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300"
+                                    : "text-foreground/85 hover:bg-muted"
                                 )}
                               >
                                 <span className="block leading-snug line-clamp-2">
