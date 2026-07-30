@@ -782,3 +782,68 @@ Files Created:
 Files Modified:
 - src/app/api/upload/route.ts (UPLOADS_DIR 可配置)
 - src/app/api/paper-images/route.ts (ALLOWED_ROOT 可配置)
+
+---
+Task ID: v15-project-whitepaper
+Agent: main (Super Z)
+Task: 生成 MedReader Agent 项目白皮书 Word 文档（用户准备 GitHub 部署，需要完整项目文档）
+
+Work Log:
+- 用户需求: 完整白皮书 + 产品品牌风 + Word 输出 + 7 章节（项目背景/核心功能/应用场景/技术路线/部署运维/Roadmap/关于开发者）
+- 开发者信息: 陈禹墨 / 华科同济医学院 / 行止集公众号 / 基础医学院资助
+
+- 文档规划（Outline 工具）:
+  - 9 sections: 封面 / 目录 / 7 章正文
+  - 设计: 产品品牌风（深蓝封面 + 医学紫 accent）
+  - 字体: SimHei 标题 + Microsoft YaHei 正文
+  - 参考: Apple 产品白皮书 + Notion 文档风格
+
+- 实现:
+  - scripts/generate-doc.js — 主脚本：调色板、组件构造器、封面、TOC、Document 装配
+  - scripts/generate-doc-body.js — 7 章正文内容（约 12000 字）
+
+- 关键设计决策:
+  - 封面: 16838 wrapper table + 深蓝背景 (#0F1B2D) + 紫色 accent (#7C3AED)
+  - 标题: MedReader Agent 大字 (40pt) + 中文副标题 + tagline
+  - 元信息: 左侧紫色 accent 条 + 项目类型/开发者/机构/版本/日期
+  - 页脚: 顶部 accent 线 + "行止集 BioRhythm / 计算医学" + "Project Whitepaper · 2026"
+
+  - 目录: 独立 section，罗马数字页码 (i, ii)
+  - TableOfContents 元素 + 灰色斜体提示「右键更新域」
+  - 后处理: add_toc_placeholders.py --auto 添加 65 个 heading 书签
+
+  - 正文: 阿拉伯数字页码（重置为 1），紫色 H1 + 黑色 H2/H3
+  - 页眉: 右对齐 "MedReader Agent · 项目白皮书" + 底部紫色 accent 线
+  - 页脚: 居中 — X — 格式
+
+  - 表格: infoTable 用于 4.1 技术栈表，紫色 header + 浅紫 alt 行
+  - 引用: blockQuote 用于 1.2 节末和 7.4 致谢
+
+- 内容覆盖:
+  - 第1章 项目背景与意义: 1.1 文献阅读困境 / 1.2 现有方案局限 / 1.3 设计理念 / 1.4 项目意义
+  - 第2章 核心功能: 2.1 五面板布局 / 2.2 PDF+图像定位 / 2.3 智能解析 / 2.4 六维度分析（6 个子维度）/ 2.5 思维导图 / 2.6 Agent 提问 / 2.7 段落智能导航 / 2.8 用户系统
+  - 第3章 应用场景: 3.1 医学生 / 3.2 研究生综述 / 3.3 PI 评估 / 3.4 跨学科 / 3.5 编辑审稿 / 3.6 临床医生
+  - 第4章 技术路线: 4.1 技术栈表 / 4.2 系统架构 / 4.3 PDF 解析流程 / 4.4 LLM 调用策略 / 4.5 段落导航结构分析 / 4.6 思维导图布局 / 4.7 用户系统配额 / 4.8 性能容错
+  - 第5章 部署运维: 5.1 部署架构 / 5.2 环境变量 / 5.3 一键部署脚本 / 5.4 数据备份 / 5.5 运维命令 / 5.6 资源扩展
+  - 第6章 Roadmap: 6.1 短期（多 LLM/协作/私有化/移动端）/ 6.2 中期（知识图谱/跨文献对比/引用网络）/ 6.3 长期（个人助手/综述生成/ELN 集成）
+  - 第7章 关于开发者: 7.1 背景 / 7.2 开发动机 / 7.3 开发过程 / 7.4 致谢（含学院资助）/ 7.5 联系方式 / 7.6 版权声明 / 7.7 持续迭代声明
+
+- 验证:
+  - postcheck.py: 7/9 passed, 0 errors, 2 warnings（无害: blank-page 是 TOC 后必需分页；line-spacing 是大字号必需的 atLeast）
+  - VLM 三页截图验证: 封面专业沉稳、目录格式规范、正文层级清晰、页码正确
+
+Stage Summary:
+- ✅ 生成完整白皮书: /home/z/my-project/download/MedReader-Agent-项目白皮书.docx (37 KB)
+- ✅ 同时导出 PDF: /home/z/my-project/download/MedReader-Agent-项目白皮书.pdf (517 KB)
+- ✅ 7 章 + 封面 + 目录共约 12000 字
+- ✅ 产品品牌风（深蓝封面 + 医学紫 accent）+ 完整页眉页脚 + 罗马/阿拉伯分节页码
+- ✅ 开发者信息齐全: 陈禹墨 / 华科同济医学院 / 行止集公众号 / 学院资助致谢
+- ✅ TOC 可右键更新域、65 个 heading 书签已添加
+- ✅ postcheck 0 errors
+- ✅ VLM 视觉验证通过
+
+Files Created:
+- scripts/generate-doc.js (主脚本)
+- scripts/generate-doc-body.js (章节内容)
+- download/MedReader-Agent-项目白皮书.docx (最终交付)
+- download/MedReader-Agent-项目白皮书.pdf (PDF 版本)
