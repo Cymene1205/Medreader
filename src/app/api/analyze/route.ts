@@ -3,6 +3,7 @@ import { resolveLLMConfig, callLLM, parseJsonLoose } from "@/lib/llm";
 import { trackEvent } from "@/lib/track";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import type { StructuredHeading } from "@/components/outline-panel";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -130,70 +131,82 @@ function extractHeadings(markdown: string): Array<{ level: number; text: string 
   return out;
 }
 
-// Heuristic: does this heading look like English (Latin-only characters)?
-// If so, we need to translate it for the Chinese UI. If it's already
-// Chinese or mixed (e.g. "TNBC 微环境"), keep as-is.
-function looksEnglish(s: string): boolean {
-  if (!s) return false;
-  // Strip superscripts / subscripts markup, math symbols, common punctuation
-  const cleaned = s.replace(/<sup>[^<]*<\/sup>|<sub>[^<]*<\/sub>/g, "")
-    .replace(/[\u00b9\u00b2\u00b3\u2070-\u2079\u2080-\u2089]/g, "")
-    .replace(/[^\p{L}]/gu, "");
-  if (!cleaned) return false;
-  // Count Latin letters vs CJK characters
-  const latin = (cleaned.match(/[A-Za-z]/g) || []).length;
-  const cjk = (cleaned.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
-  // If there are no CJK characters at all and at least 2 Latin letters, treat as English
-  return cjk === 0 && latin >= 2;
-}
-
 /**
- * Batch-translate paper headings to Chinese.
+ * Analyse the raw MinerU heading list and produce a clean 2-level paper
+ * structure (major sections + their sub-sections), with English headings
+ * translated to Chinese.
  *
- * - Headings that already contain Chinese (or are pure numbers/symbols)
- *   pass through unchanged.
- * - English headings are sent to the LLM in a single batch call with the
- *   instruction "translate each to a concise Chinese heading; preserve any
- *   HTML tags like <sup> as-is".
- * - The original verbatim text is preserved in `origText` so the click
- *   handler in HeadingNavigator can still find the exact matching block.
- * - If translation fails for any reason, we fall back to the original text
- *   so the navigator still works (just shows English).
+ * Why we need this: MinerU extracts H1/H2/H3 from the PDF markdown, but
+ * the levels are often misleading. A typical Cell Press paper has
+ * "Novelty and Significance" as H1 with "已知 / 本文贡献 / 非标准缩写 /
+ * 方法 / 数据可用性 / 结果 / 梗死心脏中... / SiglecF..." all as H2
+ * underneath — even though "梗死心脏中..." and "SiglecF..." are actually
+ * Results sub-sections that belong to a "结果" H1, not siblings of "已知".
  *
- * Returns the same array shape as extractHeadings plus an `origText`
- * field on each item.
+ * The LLM is asked to:
+ *   1. Identify real major sections (Introduction, Results, Discussion,
+ *      Methods, ...) and treat them as top-level nodes.
+ *   2. Identify journal boilerplate (Novelty and Significance, Highlights,
+ *      Data Availability, Abbreviations, Author Contributions, ...) and
+ *      tag them as `kind: "metadata"` so the navigator can hide them.
+ *   3. Promote mis-nested sub-sections to their proper parent. If the
+ *      paper has Results sub-sections but no Results H1, synthesise one.
+ *   4. Translate every English heading to concise Chinese, preserving
+ *      any <sup>/<sub> HTML tags verbatim.
+ *
+ * On any failure we fall back to a flat list (every heading becomes a
+ * major section with no children) so the navigator still works.
  */
-async function translateHeadings(
+async function analyzeHeadings(
   headings: Array<{ level: number; text: string }>,
+  paperTitle: string,
   cfg: ReturnType<typeof resolveLLMConfig>,
   userId: string | null,
   paperId: string | null
-): Promise<Array<{ level: number; text: string; origText: string }>> {
+): Promise<StructuredHeading[]> {
   if (headings.length === 0) return [];
 
-  // Identify which headings need translation.
-  const toTranslate: Array<{ idx: number; text: string }> = [];
-  headings.forEach((h, i) => {
-    if (looksEnglish(h.text)) toTranslate.push({ idx: i, text: h.text });
+  const inputJson = JSON.stringify({
+    paperTitle,
+    headings: headings.map((h) => ({ level: h.level, text: h.text })),
   });
 
-  // Nothing to translate → return as-is with origText mirroring text.
-  if (toTranslate.length === 0) {
-    return headings.map((h) => ({ ...h, origText: h.text }));
-  }
-
-  // Build a single LLM call. We send an indexed JSON array so the model
-  // returns a parallel array of Chinese translations, which we map back
-  // to the original indices.
-  const inputJson = JSON.stringify(toTranslate.map((t) => ({ idx: t.idx, text: t.text })));
   const systemPrompt =
-    "你是一个学术论文标题翻译助手。用户会给你一个 JSON 数组，每个元素含 idx 和 text 字段。" +
-    "text 是英文学术论文的章节标题（可能含 <sup>...</sup> 或 <sub>...</sub> HTML 标签，请原样保留）。" +
-    "请把每个 text 翻译成简洁的中文学术标题，保持学术性和原文含义。" +
-    "输出严格 JSON：一个对象，含 translations 数组，每个元素 {idx, text}，text 是翻译后的中文。" +
-    "不要任何额外文字，不要 markdown 代码块。";
+    "你是一个学术论文结构分析助手。用户会给你一篇论文的原始标题列表（从 PDF 解析的 markdown 提取的 H1/H2/H3），" +
+    "每个标题含 level（1/2/3）和 text（原文标题，可能是英文）。" +
+    "你的任务是分析这组标题，识别论文的真正结构，输出一个清晰的 2 级层级（主要章节 + 子小节），同时把英文标题翻译为中文。\n\n" +
+    "分析规则：\n" +
+    "1. 识别论文的主要章节（kind=\"major\"）。常见主要章节关键词（中英文）：\n" +
+    "   引言/Introduction/Background/背景；方法/Methods/STAR Methods/Experimental Procedures；" +
+    "结果/Results/Findings；讨论/Discussion；结论/Conclusion；图例/Figure Legends。\n" +
+    "   把这些作为顶层 major 节点。\n\n" +
+    "2. 识别期刊元数据/样板内容（kind=\"metadata\"）。常见关键词：\n" +
+    "   新颖性与意义/Novelty and Significance；亮点/Highlights；摘要/Abstract；" +
+    "关键资源表/Key Resources Table；数据可用性/Data Availability；作者贡献/Author Contributions；" +
+    "致谢/Acknowledgments；利益冲突/Competing Interests；补充材料/Supplemental Information；" +
+    "非标准缩写/Non-standard Abbreviations；已知/What is known；本文贡献的新信息/What this study adds。\n" +
+    "   把这些作为顶层 metadata 节点（children 通常为空）。\n\n" +
+    "3. 处理层级错位：\n" +
+    "   - 如果某主要章节（如\"结果\"）在原 markdown 中被错误地嵌套在元数据 H1 下，但你判断它应该是主要章节，请将其提升为 kind=\"major\" 顶层节点。\n" +
+    "   - 如果原文缺少主要章节总标题（例如直接列出了\"梗死心脏中...\"\"SiglecF...\"等结果子小节，但没有\"结果\"总标题），请创建一个 kind=\"major\" 的\"结果\"节点，把那些子项归入其 children。\n" +
+    "   - 如果原 H2/H3 是某个 major 的子小节，请将其放入对应 major 的 children 数组。\n" +
+    "   - 元数据节点的子项（如\"新颖性与意义\"下的\"已知\"\"本文贡献的新信息\"\"非标准缩写\"等）保留在 metadata 节点的 children 中，不要拆出去。\n\n" +
+    "4. 翻译：把每个英文标题翻译为简洁中文学术标题；保留 <sup>...</sup> 和 <sub>...</sub> HTML 标签原样不翻译；已经是中文的标题保持不变。\n\n" +
+    "5. 排序：major 节点按论文出现顺序排列在前；metadata 节点排在最后；每个节点的 children 按论文出现顺序排列。\n\n" +
+    "输出严格 JSON（不要 markdown 代码块，不要任何额外文字）：\n" +
+    "{\n" +
+    "  \"sections\": [\n" +
+    "    {\n" +
+    "      \"title\": \"引言\",            // 中文翻译\n" +
+    "      \"origTitle\": \"Introduction\",  // 原文 verbatim\n" +
+    "      \"kind\": \"major\",            // \"major\" 或 \"metadata\"\n" +
+    "      \"children\": [                // 子小节（metadata 通常为空）\n" +
+    "        { \"title\": \"...\", \"origTitle\": \"...\" }\n" +
+    "      ]\n" +
+    "    }\n" +
+    "  ]\n" +
+    "}";
 
-  const translations = new Map<number, string>();
   try {
     const raw = await callLLM(
       cfg,
@@ -203,42 +216,58 @@ async function translateHeadings(
       ],
       {
         json: true,
-        temperature: 0.2,
-        maxTokens: 4000,
+        temperature: 0.1,
+        maxTokens: 6000,
         usage: {
           userId,
-          action: "translate_headings",
+          action: "analyze_headings",
           paperId: typeof paperId === "string" ? paperId : null,
         },
       }
     );
     const parsed = parseJsonLoose(raw) as any;
-    const arr: any[] = Array.isArray(parsed)
+    const arr: any[] = Array.isArray(parsed?.sections)
+      ? parsed.sections
+      : Array.isArray(parsed)
       ? parsed
-      : Array.isArray(parsed?.translations)
-      ? parsed.translations
       : [];
-    for (const item of arr) {
-      if (item && typeof item.idx === "number" && typeof item.text === "string") {
-        translations.set(item.idx, item.text);
-      }
-    }
-  } catch (e) {
-    console.warn("[analyze] heading translation failed, falling back to original:", e);
-  }
 
-  // Build the final list. If we got a translation for an index, use it;
-  // otherwise fall back to the original text. Always set origText to the
-  // verbatim paper heading so the navigator's click handler can still
-  // find the exact block.
-  return headings.map((h, i) => {
-    const translated = translations.get(i);
-    return {
-      level: h.level,
-      text: translated || h.text,
-      origText: h.text,
-    };
-  });
+    const sections: StructuredHeading[] = arr.map((s) => ({
+      title: typeof s?.title === "string" ? s.title : "",
+      origTitle: typeof s?.origTitle === "string" ? s.origTitle : "",
+      kind: s?.kind === "metadata" ? "metadata" : "major",
+      children: Array.isArray(s?.children)
+        ? s.children
+            .map((c: any) => ({
+              title: typeof c?.title === "string" ? c.title : "",
+              origTitle:
+                typeof c?.origTitle === "string"
+                  ? c.origTitle
+                  : typeof c?.title === "string"
+                  ? c.title
+                  : "",
+            }))
+            .filter((c: any) => c.title && c.origTitle)
+        : [],
+    }));
+
+    // Filter out entries with no title — they're useless.
+    return sections.filter((s) => s.title);
+  } catch (e) {
+    console.warn(
+      "[analyze] heading structure analysis failed, falling back to flat list:",
+      e
+    );
+    // Fallback: every heading becomes a major section with no children.
+    // We don't translate here (the LLM call failed), so we just use the
+    // verbatim text. The navigator still works — just shows English.
+    return headings.map((h) => ({
+      title: h.text,
+      origTitle: h.text,
+      kind: "major" as const,
+      children: [],
+    }));
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -332,14 +361,28 @@ export async function POST(req: NextRequest) {
     // These are precise anchor points — clicking one jumps to the exact
     // paragraph in the block reader.
     //
-    // The headings come straight from the paper, so for English papers they
-    // will be English (e.g. "Results", "Discussion"). The user wants the
-    // 原文段落导航 panel to show Chinese, so we batch-translate every heading
-    // to Chinese via a single LLM call. The original (verbatim) text is
-    // preserved in `origText` so the click handler can still find the exact
-    // matching block in the block reader.
+    // The raw levels from MinerU are often misleading (e.g. Cell Press
+    // "Novelty and Significance" H1 with "已知 / 方法 / 结果 / 梗死心脏中..."
+    // all as H2 — even though the last one is a real Results sub-section).
+    // So we run the heading list through an LLM that:
+    //   1. Identifies the paper's true major sections (Introduction, Results,
+    //      Discussion, Methods, ...) vs journal boilerplate (Novelty and
+    //      Significance, Data Availability, ...).
+    //   2. Re-nests sub-sections under their correct major section
+    //      (promoting them out of misleading H1s when needed).
+    //   3. Translates every English heading to Chinese, preserving
+    //      <sup>/<sub> HTML tags.
+    //
+    // The output is a 2-level `structuredHeadings` tree that
+    // HeadingNavigator renders directly.
     const rawHeadings = markdown ? extractHeadings(markdown).slice(0, 80) : [];
-    const headings = await translateHeadings(rawHeadings, cfg, userId, paperId);
+    const structuredHeadings = await analyzeHeadings(
+      rawHeadings,
+      paperTitle,
+      cfg,
+      userId,
+      paperId
+    );
 
     // Track event (best-effort)
     try {
@@ -352,7 +395,7 @@ export async function POST(req: NextRequest) {
       outline: {
         title: paperTitle,
         sections,
-        headings,
+        structuredHeadings,
       },
     });
   } catch (e) {

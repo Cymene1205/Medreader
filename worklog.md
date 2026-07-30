@@ -586,3 +586,67 @@ Files Modified:
 - src/components/heading-navigator.tsx（重写：H1 卡片+折叠默认+renderHeadingText 解析 sup/sub）
 - src/lib/outline-to-flow.ts（移除节点视觉样式，只保留 sizing）
 - src/app/page.tsx（重命名+PDF 默认+auto-switch 逻辑+userTouchedTabRef）
+
+---
+Task ID: v12-structured-headings
+Agent: main (Super Z)
+Task: 原文段落导航逻辑重做（LLM 分析论文结构识别 major/metadata + 子小节正确归位）+ 交换 PDF/智能解析 tab 顺序
+
+Work Log:
+- 截图诊断：用户提供的 截屏2026-07-30 23.54.09.png 显示问题：
+  - 左侧"原文段落导航"展开"新颖性与意义"后，下面平铺了：已知/本文贡献/非标准缩写/方法/数据可用性/结果/梗死心脏中.../SiglecF...
+  - 这些全是 H2 同级，没有区分 major（Introduction/Results/Methods）vs 子小节（梗死心脏中.../SiglecF...）
+  - 根因：MinerU 直接从 PDF markdown 抽 H1/H2/H3，Cell Press 论文把"新颖性与意义"作为 H1，所有内容（包括真正的 Results 子小节）都嵌在它下面作为 H2
+
+- Fix 1: 新增 LLM 结构分析函数 analyzeHeadings() — src/app/api/analyze/route.ts
+  - 替换原 translateHeadings()（只翻译不分析结构）
+  - 新函数把整个 raw heading 列表（含 level 和 text）发给 LLM，要求：
+    1. 识别 major 章节（Introduction/Results/Discussion/Methods/Conclusion/Figure Legends）→ kind="major"
+    2. 识别期刊样板（Novelty and Significance/Highlights/Abstract/Data Availability/Author Contributions/Acknowledgments/Non-standard Abbreviations/What is known/What this study adds）→ kind="metadata"
+    3. 处理层级错位：被错误嵌套在元数据 H1 下的主要章节要提升为 major；缺少总标题的子小节（如有 Results 子小节但没 Results H1）要合成一个 major 节点
+    4. 翻译英文标题为中文，保留 <sup>/<sub> HTML 标签
+    5. major 在前，metadata 在后，children 按论文出现顺序
+  - 输出 2 级树结构：sections[{title, origTitle, kind, children[{title, origTitle}]}]
+  - 失败回退：flat list（每个 heading 变成无 children 的 major）
+  - 移除不再使用的 looksEnglish() 辅助函数
+  - 新增 token usage action: "analyze_headings"
+
+- Fix 2: 新增类型 StructuredHeading / StructuredHeadingChild — src/components/outline-panel.tsx
+  - StructuredHeading: {title, origTitle, kind: "major"|"metadata", children: [{title, origTitle}]}
+  - Outline 新增字段 structuredHeadings（保留旧 headings 字段标 @deprecated）
+  - 注释说明：MinerU 原始 H1/H2/H3 不可靠，需要 LLM 重新分析
+
+- Fix 3: 重写 HeadingNavigator — src/components/heading-navigator.tsx
+  - props 从 headings 改为 structuredHeadings
+  - 只渲染 kind="major" 的章节（metadata 隐藏，用户可在 PDF 找）
+  - major 章节渲染为 H1 卡片（彩色左条 + 13px font-bold + chevron）
+  - children 渲染为 H2 列表项（12px font-medium + pl-3 缩进）
+  - 默认全部折叠，点 chevron 展开
+  - 保留 renderHeadingText() 解析 <sup>/<sub> HTML 标签
+
+- Fix 4: 交换 PDF ↔ 智能解析 tab 顺序 — src/app/page.tsx
+  - 原：智能解析 | 原文 PDF | 思维导图
+  - 新：原文 PDF | 智能解析 | 思维导图
+  - 默认仍为 PDF（用户上传瞬间看 PDF 等解析）
+  - 解析完成自动切到智能解析（userTouchedTabRef 机制不变）
+
+- Fix 5: 更新 onHeadingClick 签名 — src/app/page.tsx
+  - 参数类型从 PaperHeading 改为 {title, origTitle}
+  - 用 h.origTitle 做 block 匹配，h.title 做 active 高亮
+
+Stage Summary:
+- ✅ 原文段落导航逻辑重做：
+  - sample-paper.pdf：4 个 major 章节（引言/结果/讨论/方法），结果下 4 个子小节正确归位
+  - Cell Press 真实论文：3 个 major 章节（方法/结果/讨论），结果下 10 个子小节（梗死心脏中.../SiglecF.../抗Ly6G.../NicheNet.../scRNA-Seq.../图6...）全部正确归在"结果"下
+  - 期刊样板（新颖性与意义/已知/本文贡献/非标准缩写/数据可用性）正确隐藏
+  - SiglecF<sup>hi</sup> 等带 HTML 标签的标题正确渲染为上标
+- ✅ Tab 顺序：原文 PDF | 智能解析 | 思维导图（PDF 在左）
+- ✅ 默认 PDF → 解析完自动切智能解析
+- tsc --noEmit: 0 errors in src/
+- VLM 双重验证两个截图均通过
+
+Files Modified:
+- src/components/outline-panel.tsx（新增 StructuredHeading / StructuredHeadingChild 类型）
+- src/app/api/analyze/route.ts（analyzeHeadings 替换 translateHeadings，移除 looksEnglish）
+- src/components/heading-navigator.tsx（重写为渲染 structuredHeadings 2 级树）
+- src/app/page.tsx（交换 tab 顺序 + onHeadingClick 签名更新 + 移除未用 import）

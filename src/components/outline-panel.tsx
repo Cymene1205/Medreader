@@ -45,11 +45,50 @@ export type PaperHeading = {
   origText?: string; // verbatim original heading (for block matching)
 };
 
+/**
+ * A sub-section under a major paper section.
+ *
+ * `title` is the Chinese translation (for display); `origTitle` is the
+ * verbatim original heading (for block matching in the reader).
+ */
+export type StructuredHeadingChild = {
+  title: string;
+  origTitle: string;
+};
+
+/**
+ * A major paper section (Introduction / Results / Discussion / Methods ...)
+ * or a journal-metadata section (Novelty and Significance, Highlights,
+ * Data Availability, ...).
+ *
+ * The LLM analyses the raw MinerU heading list and produces this 2-level
+ * tree because raw markdown levels are often unreliable — e.g. Cell Press
+ * papers put "Novelty and Significance" as H1 and dump "已知 / 方法 /
+ * 结果 / 梗死心脏中... / SiglecF..." all as H2 underneath, even though the
+ * last two are actually Results sub-sections that belong to a "结果" H1.
+ *
+ * - `kind: "major"` → rendered as a collapsible H1 card with children
+ * - `kind: "metadata"` → hidden from the navigator (journal boilerplate)
+ */
+export type StructuredHeading = {
+  title: string;
+  origTitle: string;
+  kind: "major" | "metadata";
+  children: StructuredHeadingChild[];
+};
+
 export type Outline = {
   title?: string;
   sections: OutlineSection[];
-  /** Verbatim H2/H3 headings extracted from MinerU markdown — used by HeadingNavigator. */
+  /** @deprecated Use structuredHeadings instead. Kept for backward compat. */
   headings?: PaperHeading[];
+  /**
+   * LLM-analysed 2-level heading tree used by HeadingNavigator.
+   * Major paper sections (Introduction/Results/...) become top-level nodes
+   * with their real sub-sections as children. Journal boilerplate
+   * (Novelty and Significance, Data Availability, ...) is filtered out.
+   */
+  structuredHeadings?: StructuredHeading[];
 };
 
 type Props = {

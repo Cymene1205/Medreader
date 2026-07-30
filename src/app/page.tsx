@@ -8,7 +8,6 @@ import OutlinePanel, {
   type Outline,
   type OutlineChild,
   type OutlineSection,
-  type PaperHeading,
 } from "@/components/outline-panel";
 import TranslationPanel from "@/components/translation-panel";
 import ChatPanel from "@/components/chat-panel";
@@ -354,23 +353,21 @@ export default function Home() {
   /**
    * Heading-navigator click — translated Chinese heading label.
    *
-   * The displayed label `h.text` is the Chinese translation (so the user
+   * The displayed label `h.title` is the Chinese translation (so the user
    * sees 中文 in the 原文段落导航 panel). The block reader matches against
-   * the paper's verbatim markdown text, so we must use `h.origText`
+   * the paper's verbatim markdown text, so we must use `h.origTitle`
    * (the original English/verbatim heading) when calling scrollToText —
    * otherwise the fuzzy matcher wouldn't find the heading block in the
    * (English) paper.
-   *
-   * If origText is missing (older analyze response), fall back to text.
    */
   const onHeadingClick = useCallback(
-    (h: PaperHeading) => {
+    (h: { title: string; origTitle: string }) => {
       // For active-state matching in HeadingNavigator we use the displayed
-      // text (so the row highlights when the user re-clicks the same item).
-      setActiveHeadingText(h.text);
+      // title (so the row highlights when the user re-clicks the same item).
+      setActiveHeadingText(h.title);
       setActiveChildId(undefined);
-      // But for block matching, prefer the verbatim origText.
-      const matchText = h.origText || h.text;
+      // But for block matching, prefer the verbatim origTitle.
+      const matchText = h.origTitle || h.title;
       setHighlightToken({
         quote: matchText,
         keywords: [],
@@ -535,7 +532,7 @@ export default function Home() {
                 )}
               >
                 <HeadingNavigator
-                  headings={outline?.headings}
+                  structuredHeadings={outline?.structuredHeadings}
                   activeHeadingText={activeHeadingText}
                   onHeadingClick={onHeadingClick}
                   fillContainer={outlineCollapsed && !headingCollapsed}
@@ -589,13 +586,13 @@ export default function Home() {
               >
                 <div className="border-b bg-background/80 backdrop-blur-sm px-3 py-1.5 flex items-center gap-2">
                   <TabsList className="h-8">
-                    <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                      智能解析
-                    </TabsTrigger>
                     <TabsTrigger value="pdf" className="text-xs gap-1.5 h-7">
                       <FileText className="h-3.5 w-3.5" />
                       原文 PDF
+                    </TabsTrigger>
+                    <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      智能解析
                     </TabsTrigger>
                     <TabsTrigger value="mindmap" className="text-xs gap-1.5 h-7">
                       <Network className="h-3.5 w-3.5" />
