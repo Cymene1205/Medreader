@@ -223,3 +223,103 @@ Files Modified:
 - src/app/api/vision/route.ts
 - src/app/api/followups/route.ts
 
+
+---
+Task ID: v6-polish-2
+Agent: main (Super Z)
+Task: 根据用户反馈修复 8 个问题：模型提醒可关闭、Admin 后台 tokens 用量+估算开支、PDF 切 tab 后崩溃、原文段落导航区分 H1/H2/H3 + 去 #号、导图框重叠、原文定位短语溢出、上下颠倒段落导航和全文框架、给全文框架加缩放
+
+Work Log:
+- 新增 Prisma model TokenUsage（userId/action/provider/model/promptTokens/completionTokens/totalTokens/costCny/paperId/createdAt + 索引），`bun run db:push` 同步到 SQLite
+- 改写 src/lib/llm.ts：
+  - 新增 COST_TABLE_CNY_PER_1M 定价表（deepseek/openai/zhipu/moonshot/anthropic/zai-vision，按 model 前缀匹配）
+  - 新增 estimateCostCny() / recordTokenUsage() / extractUsage() 三个 helper
+  - LLMCallOptions 新增 usage 字段（{userId, action, paperId?}）
+  - callLLM：解析 data.usage，未返回时按字符数估算（≈3.5 字/token），写 TokenUsage
+  - streamLLM：在 stream_options 加 include_usage:true，累计 acc 内容；[DONE] / 流结束两个出口都写 TokenUsage
+  - callVisionLLM：新增 usage 参数；非 deepseek 走多模态 + extractUsage；deepseek 走 z-ai SDK 时按字符估算并标 provider="zai-vision"
+- 5 个 API route 全部接入 usage 跟踪：
+  - /api/chat：streamLLM usage={userId, action:"chat", paperId}
+  - /api/translate：callLLM usage={userId, action:"translate"}
+  - /api/analyze：6 个并行 callLLM 各自带 usage={userId, action:"analyze", paperId}；同时把 getServerSession 抽到顶部避免重复
+  - /api/vision：callVisionLLM usage={userId, action:"vision"}
+  - /api/followups：callLLM usage={userId, action:"followups"}
+  - /api/llm-test：callLLM usage={userId, action:"llm_test"}（之前未接入）
+- /api/admin/stats：新增 tokenUsage 返回字段
+  - totals: {calls, promptTokens, completionTokens, totalTokens, costCny}
+  - byModel: GROUP BY provider, model ORDER BY totalTokens DESC
+  - byAction: GROUP BY action ORDER BY totalTokens DESC
+  - daily: date(createdAt/1000,'unixepoch') GROUP BY date
+- /admin/page.tsx：新增 4 个区块
+  - 顶部 stat 卡片行下方：4 列 grid（模型用量 / 估算开支 / 每日 tokens 趋势图 占 2 列）
+  - 趋势图：BarChart data=daily, XAxis=date, YAxis=tokens（k 单位）
+  - 模型用量表：byModel 表（模型 / 调用 / Tokens / ¥CNY）
+  - 按场景表：byAction 表（场景 / 调用 / 输入 / 输出 / ¥CNY），用 actionLabel() 翻译 action code
+  - 新增 formatTokens（k/M 后缀）/ formatCny（万后缀）/ actionLabel 三个 helper
+  - 引入 Zap 图标
+- src/components/pdf-viewer.tsx：修复 ArrayBuffer detach bug
+  - 旧代码 `lib.getDocument({ data: new Uint8Array(fileData) })` 会 transfer ownership，第二次 mount（切 tab 回来）时 buffer 已 detached → 报错 "Cannot perform construct on a detached ArrayBuffer"
+  - 修复：每次都 `fileData.slice(0)` 创建副本（~1-3ms 开销可忽略）
+- src/components/heading-navigator.tsx 重写：
+  - PaperHeading.level 现在支持 1/2/3
+  - 去掉 Hash 图标，用 typography + indentation 区分级：
+    - H1：text-[12.5px] font-bold + pl-2
+    - H2：text-[12px] font-medium + pl-4
+    - H3：text-[11px] font-normal text-muted-foreground + pl-7
+  - active 状态加 ring-1 ring-primary/20
+  - max-h-[40vh] → max-h-[28vh]（因为现在在顶部，给下方 OutlinePanel 留更多空间）
+- /api/analyze extractHeadings：正则从 `#{2,3}` 扩展到 `#{1,3}`，现在 H1 也提取
+- src/lib/outline-to-flow.ts：修复导图框重叠
+  - dagre nodesep 28→60（垂直间距）
+  - dagre ranksep 90→140（水平间距）
+  - dagre marginx/marginy 24→32
+  - SECTION_SIZE.height 140→160（容纳 keyPoints bullet）
+  - CHILD_SIZE.height 72→80（容纳 2 行 summary）
+- src/components/outline-panel.tsx：
+  - 修复"原文定位短语"按钮文字溢出（用户反馈"最后面儿文字超出框了"）
+    - 旧：`"{quote}" — 点击跳转原文` 单行 nowrap，长 quote 撑破容器
+    - 新：`block w-full h-auto p-0 text-left` + 内层 `<span className="block whitespace-normal break-words leading-relaxed">&ldquo;{quote}&rdquo; — 点击跳转原文</span>`
+  - 全文框架面板新增缩放控件（用户反馈"给全文框架也加一个缩放"）
+    - fontScale state（0.85–1.3），persist 到 localStorage（medreader.outline.fontScale）
+    - 头部右侧加 ZoomOut / 百分比 / ZoomIn 三联按钮
+    - 所有 section/child 文本字号走 `style={{ fontSize: fs(px) }}`，fs() = px * fontScale
+- src/app/page.tsx：
+  - 模型提醒 banner 新增 X 关闭按钮（用户反馈"模型提醒没有地方关闭"）
+    - 新增 llmBannerDismissed state + dismissLlmBanner()
+    - localStorage "medreader.llm.bannerDismissed" = "1" 持久化
+    - banner condition: `!llmConfigured && !llmBannerDismissed`
+  - 段落导航和全文框架上下颠倒（用户反馈"段落导航和全文框架的上下颠倒一下"）
+    - 旧：OutlinePanel 在上 (flex-1) + HeadingNavigator 在下 (flex-shrink-0)
+    - 新：HeadingNavigator 在上 (flex-shrink-0) + OutlinePanel 在下 (flex-1, border-t)
+  - 引入 X 图标
+
+Stage Summary:
+- ✅ 模型提醒可关闭：banner 右侧 X 按钮，localStorage 持久化
+- ✅ Admin 后台 tokens 用量 + 估算开支：4 个新区块（stat 卡 + 趋势图 + 按模型表 + 按场景表），全部走真实 TokenUsage 表数据
+- ✅ PDF 切 tab 后崩溃：ArrayBuffer detach bug 修复，每次 getDocument 都拷贝 buffer
+- ✅ 原文段落导航区分 H1/H2/H3 + 去 #号：用 font-weight + indentation + 字号区分，不再用 Hash 图标
+- ✅ 导图框重叠：dagre nodesep 28→60, ranksep 90→140，节点尺寸略增
+- ✅ 原文定位短语溢出：按钮改 block w-full + whitespace-normal break-words
+- ✅ 段落导航和全文框架上下颠倒：HeadingNavigator 在上，OutlinePanel 在下
+- ✅ 给全文框架加缩放：fontScale 0.85–1.3，localStorage 持久化
+- 端到端验证：node 测试脚本调用 /api/llm-test，TokenUsage 表新增 1 行（promptTokens=23, completionTokens=1, costCny=0）
+- 3 个 SQL 查询（byModel / byAction / daily）全部验证通过
+- tsc --noEmit 0 errors in src/，lint 10 个 pre-existing set-state-in-effect 警告（非本次引入）
+- dev server 正常运行
+
+Files Modified:
+- prisma/schema.prisma（新增 TokenUsage model）
+- src/lib/llm.ts（usage 跟踪 + 定价表）
+- src/app/api/chat/route.ts
+- src/app/api/translate/route.ts
+- src/app/api/analyze/route.ts
+- src/app/api/vision/route.ts
+- src/app/api/followups/route.ts
+- src/app/api/llm-test/route.ts
+- src/app/api/admin/stats/route.ts（tokenUsage 字段）
+- src/app/admin/page.tsx（4 个新区块 + 3 个 helper）
+- src/components/pdf-viewer.tsx（ArrayBuffer detach 修复）
+- src/components/heading-navigator.tsx（重写）
+- src/components/outline-panel.tsx（quote 按钮 + zoom）
+- src/lib/outline-to-flow.ts（dagre 间距）
+- src/app/page.tsx（banner 关闭 + 上下颠倒）

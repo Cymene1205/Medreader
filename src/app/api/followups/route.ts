@@ -86,6 +86,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Resolve user ID for token usage tracking.
+    let userId: string | null = null;
+    try {
+      const session = await getServerSession(authOptions);
+      userId = (session?.user as any)?.id ?? null;
+    } catch {
+      // ignore
+    }
+
     const userPrompt =
       `用户提问：\n${question.slice(0, 2000)}\n\n` +
       `你的回答：\n${answer.slice(0, 3000)}\n\n` +
@@ -99,15 +108,18 @@ export async function POST(req: NextRequest) {
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userPrompt },
       ],
-      { json: true, temperature: 0.5, maxTokens: 800 }
+      {
+        json: true,
+        temperature: 0.5,
+        maxTokens: 800,
+        usage: { userId, action: "followups" },
+      }
     );
 
     const followUps = extractFollowUps(raw);
 
     // Best-effort tracking
     try {
-      const session = await getServerSession(authOptions);
-      const userId: string | null = (session?.user as any)?.id ?? null;
       await trackEvent(
         userId,
         "followups",

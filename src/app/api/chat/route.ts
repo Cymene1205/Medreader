@@ -76,6 +76,11 @@ export async function POST(req: NextRequest) {
           for await (const delta of streamLLM(cfg, fullMessages, {
             temperature: 0.4,
             maxTokens: 2500,
+            usage: {
+              userId,
+              action: "chat",
+              paperId: typeof paperId === "string" ? paperId : null,
+            },
           })) {
             acc += delta;
             controller.enqueue(

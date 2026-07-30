@@ -175,6 +175,91 @@ export async function GET() {
       db.chatLog.count(),
     ]);
 
+    // --- LLM token usage (last 30 days) ---
+    // Aggregated by provider+model for the 模型用量 panel.
+    const tokenUsageByModelRaw = await db.$queryRawUnsafe<RawRow[]>(
+      `SELECT provider,
+              model,
+              COUNT(*)                              AS calls,
+              COALESCE(SUM(promptTokens), 0)        AS promptTokens,
+              COALESCE(SUM(completionTokens), 0)    AS completionTokens,
+              COALESCE(SUM(totalTokens), 0)         AS totalTokens,
+              COALESCE(SUM(costCny), 0)             AS costCny
+         FROM TokenUsage
+        WHERE createdAt >= ?
+        GROUP BY provider, model
+        ORDER BY totalTokens DESC`,
+      cutoff
+    );
+    const tokenUsageByModel = tokenUsageByModelRaw.map((r) => ({
+      provider: String(r.provider),
+      model: String(r.model),
+      calls: Number(r.calls),
+      promptTokens: Number(r.promptTokens),
+      completionTokens: Number(r.completionTokens),
+      totalTokens: Number(r.totalTokens),
+      costCny: Number(r.costCny),
+    }));
+
+    // Aggregated by action for the breakdown chart
+    const tokenUsageByActionRaw = await db.$queryRawUnsafe<RawRow[]>(
+      `SELECT action,
+              COUNT(*)                              AS calls,
+              COALESCE(SUM(promptTokens), 0)        AS promptTokens,
+              COALESCE(SUM(completionTokens), 0)    AS completionTokens,
+              COALESCE(SUM(totalTokens), 0)         AS totalTokens,
+              COALESCE(SUM(costCny), 0)             AS costCny
+         FROM TokenUsage
+        WHERE createdAt >= ?
+        GROUP BY action
+        ORDER BY totalTokens DESC`,
+      cutoff
+    );
+    const tokenUsageByAction = tokenUsageByActionRaw.map((r) => ({
+      action: String(r.action),
+      calls: Number(r.calls),
+      promptTokens: Number(r.promptTokens),
+      completionTokens: Number(r.completionTokens),
+      totalTokens: Number(r.totalTokens),
+      costCny: Number(r.costCny),
+    }));
+
+    // Daily token usage (last 30 days) for the trend chart
+    const tokenUsageDailyRaw = await db.$queryRawUnsafe<RawRow[]>(
+      `SELECT date(createdAt/1000, 'unixepoch') AS date,
+              COALESCE(SUM(totalTokens), 0)     AS tokens,
+              COALESCE(SUM(costCny), 0)         AS costCny
+         FROM TokenUsage
+        WHERE createdAt >= ?
+        GROUP BY date(createdAt/1000, 'unixepoch')
+        ORDER BY date ASC`,
+      cutoff
+    );
+    const tokenUsageDaily = tokenUsageDailyRaw.map((r) => ({
+      date: String(r.date),
+      tokens: Number(r.tokens),
+      costCny: Number(r.costCny),
+    }));
+
+    // Totals across the 30-day window
+    const tokenTotals = tokenUsageByModel.reduce(
+      (acc, m) => {
+        acc.calls += m.calls;
+        acc.promptTokens += m.promptTokens;
+        acc.completionTokens += m.completionTokens;
+        acc.totalTokens += m.totalTokens;
+        acc.costCny += m.costCny;
+        return acc;
+      },
+      {
+        calls: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costCny: 0,
+      }
+    );
+
     return NextResponse.json({
       dailyActive,
       dailyActions,
@@ -184,6 +269,13 @@ export async function GET() {
       downFeedbacks,
       totalUsers,
       totalChats,
+      // NEW — LLM token usage + estimated cost (last 30 days)
+      tokenUsage: {
+        totals: tokenTotals,
+        byModel: tokenUsageByModel,
+        byAction: tokenUsageByAction,
+        daily: tokenUsageDaily,
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

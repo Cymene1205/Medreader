@@ -1,17 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ListTree, ChevronRight, Hash } from "lucide-react";
+import { useState } from "react";
+import { ListTree, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 
 export type PaperHeading = {
-  level: number; // 2 or 3
-  text: string; // verbatim heading text
+  level: number; // 1, 2, or 3
+  text: string; // verbatim heading text (no leading #)
 };
 
 type Props = {
-  /** Verbatim H2/H3 headings extracted from MinerU markdown by /api/analyze. */
+  /** Verbatim H1/H2/H3 headings extracted from MinerU markdown by /api/analyze. */
   headings: PaperHeading[] | undefined;
   /** Currently active heading text (the one the reader is showing). */
   activeHeadingText?: string;
@@ -22,11 +21,19 @@ type Props = {
 /**
  * Left-side "原文段落导航" panel.
  *
- * Lists all verbatim H2/H3 headings extracted from the MinerU markdown so the
+ * Lists all verbatim H1/H2/H3 headings extracted from the MinerU markdown so the
  * user can click any of them to jump to the exact paragraph in the block
  * reader. Unlike the 6-dimension outline (which is LLM-generated and may
  * paraphrase), these headings are EXACT strings from the paper — so the
  * block reader's `findBlockIndex` always lands on the right block.
+ *
+ * Visual differentiation by level:
+ *   - H1: bold + slightly larger text + accent color (text-primary)
+ *   - H2: medium weight + normal color (default look)
+ *   - H3: smaller + muted color + deeper indentation
+ *
+ * No "#" prefix is rendered — the level is conveyed by typography & indentation
+ * alone, which matches the user's request.
  */
 export default function HeadingNavigator({
   headings,
@@ -34,9 +41,6 @@ export default function HeadingNavigator({
   onHeadingClick,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
-
-  const h2 = useMemo(() => (headings || []).filter((h) => h.level === 2), [headings]);
-  const h3 = useMemo(() => (headings || []).filter((h) => h.level === 3), [headings]);
 
   return (
     <div className="border-t bg-card">
@@ -58,10 +62,10 @@ export default function HeadingNavigator({
       </button>
 
       {!collapsed && (
-        <div className="max-h-[40vh] overflow-y-auto scrollbar-thin pb-2">
+        <div className="max-h-[28vh] overflow-y-auto scrollbar-thin pb-2">
           {(!headings || headings.length === 0) && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground/70">
-              {headings ? "暂无 H2/H3 标题" : "导入 PDF 后从论文中提取"}
+              {headings ? "暂无标题" : "导入 PDF 后从论文中提取"}
             </div>
           )}
 
@@ -69,26 +73,35 @@ export default function HeadingNavigator({
             <ul className="px-1.5 space-y-0.5">
               {headings.map((h, idx) => {
                 const isActive = activeHeadingText && activeHeadingText === h.text;
-                const isH2 = h.level === 2;
+                const level = h.level || 2;
                 return (
                   <li key={idx}>
                     <button
                       onClick={() => onHeadingClick(h)}
-                      className={cn(
-                        "w-full text-left px-2 py-1.5 rounded text-[11.5px] transition-colors flex items-start gap-1.5",
-                        isH2 ? "font-semibold" : "font-normal pl-5",
-                        isActive
-                          ? "bg-primary/10 text-primary"
-                          : "hover:bg-muted text-foreground/80"
-                      )}
                       title={h.text}
-                    >
-                      {isH2 ? (
-                        <Hash className="h-3 w-3 mt-0.5 flex-shrink-0 opacity-60" />
-                      ) : (
-                        <span className="text-muted-foreground/40 mt-0.5 flex-shrink-0">·</span>
+                      className={cn(
+                        "w-full text-left px-2 py-1.5 rounded transition-colors",
+                        // Typography by level
+                        level === 1
+                          ? "text-[12.5px] font-bold text-foreground"
+                          : level === 2
+                          ? "text-[12px] font-medium text-foreground/90"
+                          : "text-[11px] font-normal text-muted-foreground",
+                        // Indentation by level
+                        level === 1
+                          ? "pl-2"
+                          : level === 2
+                          ? "pl-4"
+                          : "pl-7",
+                        // Active / hover state
+                        isActive
+                          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
+                          : "hover:bg-muted"
                       )}
-                      <span className="flex-1 leading-snug line-clamp-2">{h.text}</span>
+                    >
+                      <span className="block leading-snug line-clamp-2">
+                        {h.text}
+                      </span>
                     </button>
                   </li>
                 );

@@ -77,8 +77,18 @@ export default function PdfViewer({
     (async () => {
       try {
         const lib = pdfjsLibRef.current;
+        // CRITICAL: pdfjs's getDocument() TRANSFERS ownership of the
+        // ArrayBuffer (detaches it). If we pass the original `fileData`
+        // and the component later re-mounts (e.g. user switches tabs and
+        // comes back), the second call would see a detached buffer and
+        // fail with "Cannot perform construct on a detached ArrayBuffer".
+        //
+        // Fix: always slice(0) to create a fresh copy each time. The cost
+        // is one buffer copy per load (~1-3ms for a typical PDF), which
+        // is negligible compared to the actual parse cost.
+        const buf = fileData.slice(0);
         const loadingTask = lib.getDocument({
-          data: new Uint8Array(fileData),
+          data: new Uint8Array(buf),
         });
         const doc = await loadingTask.promise;
         if (cancelled) return;

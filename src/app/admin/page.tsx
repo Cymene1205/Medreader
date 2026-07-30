@@ -11,6 +11,7 @@ import {
   Shield,
   ThumbsDown,
   Users,
+  Zap,
 } from "lucide-react";
 import {
   Bar,
@@ -77,6 +78,40 @@ type DownFeedback = {
   createdAt: string | null;
   chatLogId: string | null;
 };
+type TokenUsageByModel = {
+  provider: string;
+  model: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costCny: number;
+};
+type TokenUsageByAction = {
+  action: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costCny: number;
+};
+type TokenUsageDaily = {
+  date: string;
+  tokens: number;
+  costCny: number;
+};
+type TokenUsage = {
+  totals: {
+    calls: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costCny: number;
+  };
+  byModel: TokenUsageByModel[];
+  byAction: TokenUsageByAction[];
+  daily: TokenUsageDaily[];
+};
 type Stats = {
   dailyActive: DailyActive[];
   dailyActions: DailyAction[];
@@ -86,6 +121,7 @@ type Stats = {
   downFeedbacks: DownFeedback[];
   totalUsers: number;
   totalChats: number;
+  tokenUsage?: TokenUsage;
 };
 
 // Chart colors mapped to the dim-N CSS variables so they follow the theme.
@@ -128,6 +164,33 @@ function datePart(iso: string | null): string {
   if (!iso) return "";
   // ISO strings start with YYYY-MM-DD regardless of T or space separator.
   return iso.slice(0, 10);
+}
+
+/** Format a token count with thousands separators + k/M suffix. */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** Format a CNY cost: large numbers use 万, small numbers use 4 decimals. */
+function formatCny(n: number): string {
+  if (n >= 10_000) return `${(n / 10_000).toFixed(2)}万`;
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
+
+/** Human-readable label for an LLM action code. */
+function actionLabel(action: string): string {
+  const map: Record<string, string> = {
+    analyze: "大纲分析",
+    chat: "Agent 提问",
+    translate: "翻译",
+    vision: "图表解读",
+    followups: "追问生成",
+    llm_test: "连通性测试",
+  };
+  return map[action] || action;
 }
 
 // ---------- Page ----------
@@ -441,6 +504,242 @@ export default function AdminPage() {
                       />
                     </PieChart>
                   </ResponsiveContainer>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* LLM Token Usage & Estimated Cost */}
+        <section className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Zap className="h-3.5 w-3.5 text-[var(--dim-3)]" />
+                模型用量 (近30天)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <Skeleton className="h-[120px] w-full" />
+              ) : (
+                <div className="space-y-2.5">
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground">总 Tokens</p>
+                    <p className="text-2xl font-semibold tabular-nums">
+                      {formatTokens(data?.tokenUsage?.totals.totalTokens ?? 0)}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div>
+                      <span className="text-muted-foreground">输入 </span>
+                      <span className="font-medium tabular-nums">
+                        {formatTokens(data?.tokenUsage?.totals.promptTokens ?? 0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">输出 </span>
+                      <span className="font-medium tabular-nums">
+                        {formatTokens(data?.tokenUsage?.totals.completionTokens ?? 0)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    共 {data?.tokenUsage?.totals.calls ?? 0} 次调用
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <span className="text-[var(--dim-4)]">¥</span>
+                估算开支 (CNY)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <Skeleton className="h-[120px] w-full" />
+              ) : (
+                <div className="space-y-2.5">
+                  <div>
+                    <p className="text-[10px] uppercase text-muted-foreground">近30天</p>
+                    <p className="text-2xl font-semibold tabular-nums text-[var(--dim-4)]">
+                      ¥ {formatCny(data?.tokenUsage?.totals.costCny ?? 0)}
+                    </p>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    基于公开定价表估算，仅供参考；非实际账单
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    日均 ¥ {formatCny((data?.tokenUsage?.totals.costCny ?? 0) / 30)}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Daily tokens trend */}
+          <Card className="shadow-sm lg:col-span-2">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">每日 Tokens 用量趋势</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <Skeleton className="h-[140px] w-full" />
+              ) : (
+                <div style={{ width: "100%", height: 140 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={data?.tokenUsage?.daily ?? []}
+                      margin={{ top: 4, right: 8, bottom: 0, left: -10 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                        tickFormatter={(v: string) => formatDateShort(v)}
+                        stroke="var(--border)"
+                      />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                        stroke="var(--border)"
+                        tickFormatter={(v: number) =>
+                          v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
+                        }
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          background: "var(--card)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          fontSize: 12,
+                          color: "var(--foreground)",
+                        }}
+                        formatter={(v: number) => [formatTokens(v), "Tokens"]}
+                      />
+                      <Bar
+                        dataKey="tokens"
+                        name="Tokens"
+                        fill="var(--dim-3)"
+                        radius={[2, 2, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Token usage breakdown tables */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Zap className="h-3.5 w-3.5 text-[var(--dim-3)]" />
+                按模型 / 服务商
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-3">
+              {loading ? (
+                <Skeleton className="h-[200px] w-full" />
+              ) : (
+                <div className="max-h-[260px] overflow-y-auto scrollbar-thin">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card z-10">
+                      <TableRow>
+                        <TableHead className="text-xs">模型</TableHead>
+                        <TableHead className="text-xs text-right">调用</TableHead>
+                        <TableHead className="text-xs text-right">Tokens</TableHead>
+                        <TableHead className="text-xs text-right">¥ CNY</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(data?.tokenUsage?.byModel ?? []).length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-xs text-muted-foreground text-center py-6">
+                            暂无调用记录
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        (data?.tokenUsage?.byModel ?? []).map((m, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="text-xs">
+                              <div className="font-mono text-[11px]">{m.model}</div>
+                              <div className="text-[10px] text-muted-foreground uppercase">{m.provider}</div>
+                            </TableCell>
+                            <TableCell className="text-xs text-right tabular-nums">{m.calls}</TableCell>
+                            <TableCell className="text-xs text-right tabular-nums">
+                              {formatTokens(m.totalTokens)}
+                            </TableCell>
+                            <TableCell className="text-xs text-right tabular-nums text-[var(--dim-4)]">
+                              {formatCny(m.costCny)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Activity className="h-3.5 w-3.5 text-[var(--dim-2)]" />
+                按功能场景
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-3">
+              {loading ? (
+                <Skeleton className="h-[200px] w-full" />
+              ) : (
+                <div className="max-h-[260px] overflow-y-auto scrollbar-thin">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card z-10">
+                      <TableRow>
+                        <TableHead className="text-xs">场景</TableHead>
+                        <TableHead className="text-xs text-right">调用</TableHead>
+                        <TableHead className="text-xs text-right">输入 Tokens</TableHead>
+                        <TableHead className="text-xs text-right">输出 Tokens</TableHead>
+                        <TableHead className="text-xs text-right">¥ CNY</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(data?.tokenUsage?.byAction ?? []).length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="text-xs text-muted-foreground text-center py-6">
+                            暂无调用记录
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        (data?.tokenUsage?.byAction ?? []).map((a, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="text-xs">
+                              <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+                                {actionLabel(a.action)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-right tabular-nums">{a.calls}</TableCell>
+                            <TableCell className="text-xs text-right tabular-nums">
+                              {formatTokens(a.promptTokens)}
+                            </TableCell>
+                            <TableCell className="text-xs text-right tabular-nums">
+                              {formatTokens(a.completionTokens)}
+                            </TableCell>
+                            <TableCell className="text-xs text-right tabular-nums text-[var(--dim-4)]">
+                              {formatCny(a.costCny)}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
               )}
             </CardContent>

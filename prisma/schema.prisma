@@ -126,3 +126,24 @@ model DailyQuota {
   @@unique([userId, action, day])
   @@index([action, day])
 }
+
+// Per-call LLM token usage + estimated cost — populated by src/lib/llm.ts
+// for every callLLM / streamLLM / callVisionLLM invocation.
+// Used by the admin dashboard to show token consumption and estimate cost.
+model TokenUsage {
+  id               String   @id @default(cuid())
+  userId           String?  // null = anonymous
+  action           String   // "analyze" | "chat" | "translate" | "vision" | "followups" | "llm_test"
+  provider         String   // "deepseek" | "openai" | "zhipu" | "moonshot" | "anthropic" | "custom"
+  model            String
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costCny          Float    @default(0)  // estimated cost in CNY (RMB)
+  paperId          String?
+  createdAt        DateTime @default(now())
+
+  @@index([action, createdAt])
+  @@index([provider, createdAt])
+  @@index([createdAt])
+}

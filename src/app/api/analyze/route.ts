@@ -115,13 +115,14 @@ function extractTitle(markdown: string, fallback: string): string {
   return (m?.[1]?.trim() || fallback || "未命名论文").slice(0, 200);
 }
 
-// Extract H2/H3 headings from MinerU markdown — these are the verbatim
+// Extract H1/H2/H3 headings from MinerU markdown — these are the verbatim
 // "thumbnail anchors" the user asked for. Returns {level, text}[].
+// Strips any leading # marks and surrounding whitespace from the captured text.
 function extractHeadings(markdown: string): Array<{ level: number; text: string }> {
   const out: Array<{ level: number; text: string }> = [];
   if (!markdown) return out;
   for (const line of markdown.split(/\r?\n/)) {
-    const m = line.match(/^(#{2,3})\s+(.+?)\s*$/);
+    const m = line.match(/^(#{1,3})\s+(.+?)\s*#*\s*$/);
     if (m) {
       out.push({ level: m[1].length, text: m[2].trim() });
     }
@@ -149,6 +150,15 @@ export async function POST(req: NextRequest) {
 
     const paperTitle = extractTitle(sourceText, title || "");
 
+    // Resolve user ID (anonymous allowed) for token usage tracking.
+    let userId: string | null = null;
+    try {
+      const session = await getServerSession(authOptions);
+      userId = (session?.user as any)?.id ?? null;
+    } catch {
+      // ignore
+    }
+
     // Fire 6 parallel LLM calls — one per dimension — for much richer output.
     // Each call gets the full paper text so the model can ground its answer.
     const sectionPromises = DIMENSIONS.map(async (dim) => {
@@ -169,7 +179,16 @@ export async function POST(req: NextRequest) {
             },
             { role: "user", content: userPrompt },
           ],
-          { json: true, temperature: 0.3, maxTokens: 4000 }
+          {
+            json: true,
+            temperature: 0.3,
+            maxTokens: 4000,
+            usage: {
+              userId,
+              action: "analyze",
+              paperId: typeof paperId === "string" ? paperId : null,
+            },
+          }
         );
         const parsed = parseJsonLoose(raw) as any;
         return {
@@ -205,8 +224,6 @@ export async function POST(req: NextRequest) {
 
     // Track event (best-effort)
     try {
-      const session = await getServerSession(authOptions);
-      const userId = (session?.user as any)?.id;
       await trackEvent(userId, "analyze", JSON.stringify({ paperId, title: paperTitle }));
     } catch {
       // ignore tracking errors

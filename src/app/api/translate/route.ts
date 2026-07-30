@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
         },
         { role: "user", content: text },
       ],
-      { temperature: 0.2, maxTokens: 2000 }
+      {
+        temperature: 0.2,
+        maxTokens: 2000,
+        usage: { userId, action: "translate" },
+      }
     );
 
     return NextResponse.json({ translation: result.trim() });

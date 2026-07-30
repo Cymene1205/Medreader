@@ -54,16 +54,22 @@ const MINIMAP_FALLBACK = "#94A3B8";
 
 // Node sizing used both for rendering hints and dagre layout
 const ROOT_SIZE = { width: 220, height: 72 };
-const SECTION_SIZE = { width: 280, height: 140 };
-const CHILD_SIZE = { width: 220, height: 72 };
+const SECTION_SIZE = { width: 280, height: 160 };
+const CHILD_SIZE = { width: 220, height: 80 };
 
-// Dagre layout configuration
+// Dagre layout configuration.
+// `nodesep` = vertical gap between sibling nodes in the same rank
+// `ranksep` = horizontal gap between ranks (root → section → child)
+//
+// Tuned to avoid box overlap when sections have many children. The previous
+// values (nodesep: 28, ranksep: 90) caused sibling boxes to visually collide
+// when a section had 4+ children — bumped to nodesep: 60, ranksep: 140.
 const DAGRE_CONFIG = {
   rankdir: "LR" as const,
-  nodesep: 28,
-  ranksep: 90,
-  marginx: 24,
-  marginy: 24,
+  nodesep: 60,
+  ranksep: 140,
+  marginx: 32,
+  marginy: 32,
 };
 
 function dimColorFor(index: number): string {

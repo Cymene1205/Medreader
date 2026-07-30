@@ -38,7 +38,8 @@ export async function POST(req: NextRequest) {
       prompt || "请按照四段式结构解读这张科研图表。",
       image,
       Array.isArray(history) ? history : [],
-      typeof paperContext === "string" ? paperContext : undefined
+      typeof paperContext === "string" ? paperContext : undefined,
+      { userId, action: "vision" }
     );
 
     return NextResponse.json({ answer: result });

@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileSearch, ChevronRight, Expand, Quote } from "lucide-react";
+import { Loader2, FileSearch, ChevronRight, Expand, Quote, ZoomIn, ZoomOut } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 
@@ -40,7 +40,7 @@ export type OutlineSection = {
 };
 
 export type PaperHeading = {
-  level: number; // 2 or 3 — verbatim H2/H3 from MinerU markdown
+  level: number; // 1, 2, or 3 — verbatim H1/H2/H3 from MinerU markdown
   text: string;
 };
 
@@ -72,6 +72,28 @@ export default function OutlinePanel({
 }: Props) {
   const [openItems, setOpenItems] = useState<string[]>([]);
   const [detailSection, setDetailSection] = useState<OutlineSection | null>(null);
+  // Font scale for the outline body — user can zoom in/out via toolbar
+  // buttons. Range: 0.85 (compact) to 1.25 (large). Persisted across reloads.
+  const [fontScale, setFontScale] = useState<number>(() => {
+    if (typeof window === "undefined") return 1;
+    const v = Number(localStorage.getItem("medreader.outline.fontScale"));
+    return Number.isFinite(v) && v >= 0.8 && v <= 1.3 ? v : 1;
+  });
+
+  const bumpFont = (delta: number) => {
+    setFontScale((cur) => {
+      const next = Math.min(1.3, Math.max(0.85, Math.round((cur + delta) * 100) / 100));
+      try {
+        localStorage.setItem("medreader.outline.fontScale", String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  // Helper: scale a px size string (e.g. "13px") by the current font scale.
+  const fs = (px: number) => `${(px * fontScale).toFixed(1)}px`;
 
   return (
     <div className="flex flex-col h-full bg-card">
@@ -79,10 +101,36 @@ export default function OutlinePanel({
         <FileSearch className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">全文框架</span>
         {outline?.sections?.length ? (
-          <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1.5">
+          <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
             {outline.sections.length} 维度
           </Badge>
         ) : null}
+        {/* Spacer pushes zoom controls to the right */}
+        <div className="ml-auto flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0"
+            onClick={() => bumpFont(-0.05)}
+            title="缩小字体"
+            disabled={fontScale <= 0.85}
+          >
+            <ZoomOut className="h-3 w-3" />
+          </Button>
+          <span className="text-[10px] text-muted-foreground w-8 text-center tabular-nums">
+            {Math.round(fontScale * 100)}%
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0"
+            onClick={() => bumpFont(0.05)}
+            title="放大字体"
+            disabled={fontScale >= 1.3}
+          >
+            <ZoomIn className="h-3 w-3" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
@@ -134,11 +182,17 @@ export default function OutlinePanel({
                           {idx + 1}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium leading-snug">
+                          <div
+                            className="font-medium leading-snug"
+                            style={{ fontSize: fs(13) }}
+                          >
                             {section.title}
                           </div>
                           {section.summary && (
-                            <div className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+                            <div
+                              className="text-muted-foreground mt-0.5 line-clamp-2"
+                              style={{ fontSize: fs(11) }}
+                            >
                               {section.summary}
                             </div>
                           )}
@@ -148,10 +202,11 @@ export default function OutlinePanel({
                                 <span
                                   key={i}
                                   className={cn(
-                                    "text-[9px] px-1.5 py-px rounded",
+                                    "px-1.5 py-px rounded",
                                     dimClass(idx, "bg-soft"),
                                     dimClass(idx, "text")
                                   )}
+                                  style={{ fontSize: fs(9) }}
                                 >
                                   {kp.length > 12 ? kp.slice(0, 12) + "…" : kp}
                                 </span>
@@ -183,11 +238,12 @@ export default function OutlinePanel({
                           key={child.id}
                           onClick={() => onChildClick(child, section)}
                           className={cn(
-                            "w-full text-left px-2 py-1.5 rounded text-[12px] transition-colors group/item flex items-start gap-1.5",
+                            "w-full text-left px-2 py-1.5 rounded transition-colors group/item flex items-start gap-1.5",
                             activeChildId === child.id
                               ? "bg-primary/10 text-primary"
                               : "hover:bg-muted text-foreground/80"
                           )}
+                          style={{ fontSize: fs(12) }}
                         >
                           <ChevronRight className="h-3 w-3 mt-0.5 flex-shrink-0 opacity-50 group-hover/item:opacity-100" />
                           <div className="flex-1 min-w-0">
@@ -195,7 +251,10 @@ export default function OutlinePanel({
                               {child.title}
                             </div>
                             {child.summary && (
-                              <div className="text-[11px] text-muted-foreground/80 mt-0.5 line-clamp-2">
+                              <div
+                                className="text-muted-foreground/80 mt-0.5 line-clamp-2"
+                                style={{ fontSize: fs(11) }}
+                              >
                                 {child.summary}
                               </div>
                             )}
@@ -204,7 +263,8 @@ export default function OutlinePanel({
                                 {child.keywords.slice(0, 3).map((kw, i) => (
                                   <span
                                     key={i}
-                                    className="text-[9px] px-1 py-px rounded bg-muted text-muted-foreground"
+                                    className="px-1 py-px rounded bg-muted text-muted-foreground"
+                                    style={{ fontSize: fs(9) }}
                                   >
                                     {kw}
                                   </span>
@@ -280,7 +340,7 @@ export default function OutlinePanel({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-auto p-0 text-[12px] italic text-muted-foreground hover:text-primary justify-start"
+                      className="block w-full h-auto p-0 text-left text-[12px] italic text-muted-foreground hover:text-primary"
                       onClick={() => {
                         onChildClick(
                           {
@@ -294,7 +354,9 @@ export default function OutlinePanel({
                         setDetailSection(null);
                       }}
                     >
-                      "{detailSection.quote}" — 点击跳转原文
+                      <span className="block whitespace-normal break-words leading-relaxed">
+                        &ldquo;{detailSection.quote}&rdquo; — 点击跳转原文
+                      </span>
                     </Button>
                   </div>
                 )}

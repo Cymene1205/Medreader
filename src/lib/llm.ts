@@ -25,6 +25,7 @@
  */
 
 import ZAI from "z-ai-web-dev-sdk";
+import { db } from "@/lib/db";
 
 export type LLMProvider = "deepseek" | "openai" | "zhipu" | "moonshot" | "anthropic" | "custom";
 
@@ -46,7 +47,149 @@ export type LLMCallOptions = {
   maxTokens?: number;
   /** stop sequences */
   stop?: string[];
+  /** When provided, the call will be recorded to the TokenUsage table for the
+   *  admin dashboard. Best-effort — failures are silently swallowed. */
+  usage?: {
+    userId?: string | null;
+    action: string; // "analyze" | "chat" | "translate" | "vision" | "followups" | "llm_test"
+    paperId?: string | null;
+  };
 };
+
+// --- Cost-per-1M-tokens (in CNY) for known providers/models --------------
+// Sources: official pricing pages as of 2025-09. Used only for rough
+// estimation in the admin dashboard; not billed.
+//
+// Format: { provider: { "model-prefix": { input, output } } }
+// "model-prefix" matches by startsWith on the lowercase model name.
+// An empty-string key ("") acts as a wildcard default for the provider.
+const COST_TABLE_CNY_PER_1M: Record<string, Record<string, { input: number; output: number }>> = {
+  deepseek: {
+    "deepseek-chat": { input: 1, output: 2 },         // ¥1 / ¥2 per 1M (cache miss)
+    "deepseek-reasoner": { input: 4, output: 16 },
+  },
+  openai: {
+    "gpt-4o-mini": { input: 1.05, output: 4.2 },
+    "gpt-4o": { input: 17.5, output: 70 },
+    "gpt-4-turbo": { input: 70, output: 210 },
+    "gpt-3.5": { input: 3.5, output: 7 },
+  },
+  zhipu: {
+    "glm-4-flash": { input: 0.1, output: 0.1 },
+    "glm-4-air": { input: 0.5, output: 0.5 },
+    "glm-4-plus": { input: 35, output: 35 },
+    "glm-4": { input: 70, output: 70 },
+  },
+  moonshot: {
+    "moonshot-v1-8k": { input: 8.4, output: 8.4 },
+    "moonshot-v1-32k": { input: 16.8, output: 16.8 },
+    "moonshot-v1-128k": { input: 42, output: 42 },
+  },
+  anthropic: {
+    "claude-3-5-sonnet": { input: 21.7, output: 109 },
+    "claude-3-5-haiku": { input: 5.6, output: 28 },
+    "claude-3-opus": { input: 109, output: 545 },
+  },
+  // Vision fallback (z-ai-web-dev-sdk) — keyed under a separate "provider"
+  // name "zai-vision" so the admin dashboard can attribute it correctly.
+  "zai-vision": {
+    "": { input: 0.5, output: 0.5 },
+  },
+};
+
+function estimateCostCny(
+  provider: string,
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+  _isVisionFallback: boolean = false
+): number {
+  // Look up the rate table for this provider. Falls back to deepseek rates
+  // for unknown providers so we always produce a non-zero estimate.
+  const table = COST_TABLE_CNY_PER_1M[provider] || COST_TABLE_CNY_PER_1M.deepseek;
+  // Find the longest matching prefix (or the "" wildcard).
+  let best: { input: number; output: number } | undefined;
+  let bestLen = -1;
+  const mLower = (model || "").toLowerCase();
+  for (const [prefix, rate] of Object.entries(table)) {
+    if (prefix === "") {
+      // Wildcard — only use if nothing else matches.
+      if (best === undefined) best = rate;
+      continue;
+    }
+    if (mLower.startsWith(prefix) && prefix.length > bestLen) {
+      best = rate;
+      bestLen = prefix.length;
+    }
+  }
+  // Fallback: deepseek-chat rates
+  if (!best) best = { input: 1, output: 2 };
+  const costIn =
+    (promptTokens / 1_000_000) * best.input;
+  const costOut =
+    (completionTokens / 1_000_000) * best.output;
+  return Math.round((costIn + costOut) * 10000) / 10000; // 4 decimal places
+}
+
+/**
+ * Persist a single LLM call's token usage + estimated cost to the TokenUsage
+ * table. Best-effort — silently swallows DB errors so it never breaks the
+ * main request flow.
+ */
+async function recordTokenUsage(args: {
+  userId?: string | null;
+  action: string;
+  provider: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  paperId?: string | null;
+  isVisionFallback?: boolean;
+}): Promise<void> {
+  try {
+    const costCny = estimateCostCny(
+      args.provider,
+      args.model,
+      args.promptTokens,
+      args.completionTokens,
+      args.isVisionFallback
+    );
+    await db.tokenUsage.create({
+      data: {
+        userId: args.userId || null,
+        action: args.action,
+        provider: args.provider,
+        model: args.model,
+        promptTokens: args.promptTokens || 0,
+        completionTokens: args.completionTokens || 0,
+        totalTokens: args.totalTokens || 0,
+        costCny,
+        paperId: args.paperId || null,
+      },
+    });
+  } catch (e) {
+    // Silent failure — tracking should never break the user-facing call
+    console.warn("[recordTokenUsage] failed:", e);
+  }
+}
+
+/** Extract usage numbers from an OpenAI-compatible chat completion response. */
+function extractUsage(data: any): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} {
+  const u = data?.usage;
+  if (!u) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  return {
+    promptTokens: Number(u.prompt_tokens || u.promptTokens || 0) || 0,
+    completionTokens: Number(u.completion_tokens || u.completionTokens || 0) || 0,
+    totalTokens:
+      Number(u.total_tokens || u.totalTokens || 0) ||
+      (Number(u.prompt_tokens || 0) + Number(u.completion_tokens || 0)),
+  };
+}
 
 // --- Server-side defaults from env (used when client doesn't supply) ---------
 const ENV_DEFAULTS: Record<LLMProvider, { baseUrl: string; apiKey: string; model: string }> = {
@@ -151,7 +294,33 @@ export async function callLLM(
     throw new Error(`LLM error ${res.status} (${cfg.provider}/${cfg.model}): ${errText.slice(0, 400)}`);
   }
   const data = await res.json();
-  return data?.choices?.[0]?.message?.content ?? "";
+  const content = data?.choices?.[0]?.message?.content ?? "";
+
+  // Record token usage (best-effort) when caller requested it.
+  if (opts.usage) {
+    const u = extractUsage(data);
+    // If the API didn't return usage, estimate prompt tokens from message length.
+    // (Many OpenAI-compat proxies omit usage in JSON-mode calls.)
+    let prompt = u.promptTokens;
+    let completion = u.completionTokens;
+    if (prompt === 0 && completion === 0) {
+      const approxChars = messages.reduce((a, m) => a + (m.content?.length || 0), 0);
+      prompt = Math.ceil(approxChars / 3.5);
+      completion = Math.ceil(content.length / 3.5);
+    }
+    await recordTokenUsage({
+      userId: opts.usage.userId,
+      action: opts.usage.action,
+      provider: cfg.provider,
+      model: cfg.model,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: prompt + completion,
+      paperId: opts.usage.paperId,
+    });
+  }
+
+  return content;
 }
 
 // --- OpenAI-compatible streaming chat completion (SSE) ----------------------
@@ -166,6 +335,9 @@ export async function* streamLLM(
     messages,
     temperature: opts.temperature ?? 0.3,
     stream: true,
+    // Request usage to be sent in the final stream chunk (OpenAI & several
+    // OpenAI-compatible providers honor this when stream_options is set).
+    stream_options: { include_usage: true },
   };
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts.stop) body.stop = opts.stop;
@@ -188,6 +360,14 @@ export async function* streamLLM(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let acc = "";
+  // Token usage extracted from the final stream chunk (if the provider
+  // sent it back in the include_usage flow).
+  let usageFromStream: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -199,15 +379,65 @@ export async function* streamLLM(
       const trimmed = line.trim();
       if (!trimmed.startsWith("data:")) continue;
       const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") return;
+      if (payload === "[DONE]") {
+        // After [DONE], if we have usage, record it (or estimate from content).
+        if (opts.usage) {
+          let prompt = usageFromStream?.promptTokens ?? 0;
+          let completion = usageFromStream?.completionTokens ?? 0;
+          if (prompt === 0 && completion === 0) {
+            const approxChars = messages.reduce((a, m) => a + (m.content?.length || 0), 0);
+            prompt = Math.ceil(approxChars / 3.5);
+            completion = Math.ceil(acc.length / 3.5);
+          }
+          await recordTokenUsage({
+            userId: opts.usage.userId,
+            action: opts.usage.action,
+            provider: cfg.provider,
+            model: cfg.model,
+            promptTokens: prompt,
+            completionTokens: completion,
+            totalTokens: prompt + completion,
+            paperId: opts.usage.paperId,
+          });
+        }
+        return;
+      }
       try {
         const json = JSON.parse(payload);
         const delta = json?.choices?.[0]?.delta?.content;
-        if (delta) yield delta as string;
+        if (delta) {
+          acc += delta;
+          yield delta as string;
+        }
+        // Some providers put usage in the final chunk's `usage` field.
+        if (json?.usage && !usageFromStream) {
+          usageFromStream = extractUsage(json);
+        }
       } catch {
         // ignore keepalive / partial
       }
     }
+  }
+
+  // Stream ended without [DONE] — still record usage if requested.
+  if (opts.usage) {
+    let prompt = usageFromStream?.promptTokens ?? 0;
+    let completion = usageFromStream?.completionTokens ?? 0;
+    if (prompt === 0 && completion === 0) {
+      const approxChars = messages.reduce((a, m) => a + (m.content?.length || 0), 0);
+      prompt = Math.ceil(approxChars / 3.5);
+      completion = Math.ceil(acc.length / 3.5);
+    }
+    await recordTokenUsage({
+      userId: opts.usage.userId,
+      action: opts.usage.action,
+      provider: cfg.provider,
+      model: cfg.model,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: prompt + completion,
+      paperId: opts.usage.paperId,
+    });
   }
 }
 
@@ -224,7 +454,12 @@ export async function callVisionLLM(
   prompt: string,
   imageBase64: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  paperContext?: string
+  paperContext?: string,
+  usage?: {
+    userId?: string | null;
+    action: string;
+    paperId?: string | null;
+  }
 ): Promise<string> {
   // Structured system prompt for figure reading
   const systemPrompt = `你是一位资深的科研论文图表解读助手。当用户给你一张科研图表（柱状图、折线图、流式细胞图、热图、Western Blot、免疫荧光、HE 染色、Kaplan-Meier 生存曲线、UMAP/t-SNE、火山图等）时，请严格按照以下四段式结构作答，每段使用清晰的中文小标题（用 **加粗** 标记）：
@@ -291,7 +526,31 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
       throw new Error(`Vision LLM error ${res.status}: ${errText.slice(0, 400)}`);
     }
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content ?? "";
+    const content = data?.choices?.[0]?.message?.content ?? "";
+
+    if (usage) {
+      const u = extractUsage(data);
+      let promptT = u.promptTokens;
+      let completionT = u.completionTokens;
+      if (promptT === 0 && completionT === 0) {
+        // Rough estimate: image ≈ 1k tokens + all message text / 3.5
+        const approxChars = systemPrompt.length + (prompt?.length || 0) + history.reduce((a, m) => a + (m.content?.length || 0), 0);
+        promptT = Math.ceil(approxChars / 3.5) + 1000;
+        completionT = Math.ceil(content.length / 3.5);
+      }
+      await recordTokenUsage({
+        userId: usage.userId,
+        action: usage.action,
+        provider: cfg.provider,
+        model: cfg.model,
+        promptTokens: promptT,
+        completionTokens: completionT,
+        totalTokens: promptT + completionT,
+        paperId: usage.paperId,
+      });
+    }
+
+    return content;
   }
 
   // Default DeepSeek provider doesn't support vision; fall back to z-ai SDK.
@@ -312,7 +571,27 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
     messages: zaiMessages,
     thinking: { type: "disabled" },
   } as any);
-  return response?.choices?.[0]?.message?.content ?? "";
+  const content = response?.choices?.[0]?.message?.content ?? "";
+
+  if (usage) {
+    // z-ai SDK doesn't expose usage in the response; estimate from content.
+    const approxChars = systemPrompt.length + (prompt?.length || 0) + history.reduce((a, m) => a + (m.content?.length || 0), 0);
+    const promptT = Math.ceil(approxChars / 3.5) + 1000;
+    const completionT = Math.ceil(content.length / 3.5);
+    await recordTokenUsage({
+      userId: usage.userId,
+      action: usage.action,
+      provider: "zai-vision",
+      model: "glm-4.5v",
+      promptTokens: promptT,
+      completionTokens: completionT,
+      totalTokens: promptT + completionT,
+      paperId: usage.paperId,
+      isVisionFallback: true,
+    });
+  }
+
+  return content;
 }
 
 // --- Helpers for parsing the LLM response into JSON --------------------------

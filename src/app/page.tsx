@@ -34,6 +34,7 @@ import {
   LayoutGrid,
   Settings2,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -73,8 +74,22 @@ export default function Home() {
   const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("blocks");
   const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
   const [llmConfigured, setLlmConfigured] = useState(false);
+  // Tracks whether the user has dismissed the "default DeepSeek" warning banner.
+  // Persisted in localStorage so it stays dismissed across reloads. Resetting
+  // is implicit: opening the settings dialog and saving a new config flips
+  // `llmConfigured` true, which makes the banner condition false anyway.
+  const [llmBannerDismissed, setLlmBannerDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
+
+  // On mount, check if the user previously dismissed the banner.
+  useEffect(() => {
+    try {
+      setLlmBannerDismissed(localStorage.getItem("medreader.llm.bannerDismissed") === "1");
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Re-check LLM config status whenever the dialog closes
   useEffect(() => {
@@ -89,6 +104,15 @@ export default function Home() {
   useEffect(() => {
     setLlmHeaders(refreshLLMHeaders());
   }, [llmSettingsOpen]);
+
+  const dismissLlmBanner = useCallback(() => {
+    setLlmBannerDismissed(true);
+    try {
+      localStorage.setItem("medreader.llm.bannerDismissed", "1");
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const onFile = useCallback(
     async (file: File) => {
@@ -411,37 +435,47 @@ export default function Home() {
         )}
       </header>
 
-      {/* LLM not-configured banner */}
-      {!llmConfigured && (
+      {/* LLM not-configured banner — dismissible */}
+      {!llmConfigured && !llmBannerDismissed && (
         <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-[11px] px-4 py-1.5 flex items-center gap-2">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>
+          <span className="flex-1">
             当前使用服务端默认 DeepSeek 配置。如需更换 LLM（OpenAI / 智谱 / Moonshot / 自定义 OpenAI 兼容端点），
             请点击右上角「模型设置」。
           </span>
+          <button
+            onClick={dismissLlmBanner}
+            title="不再提示"
+            className="flex-shrink-0 p-1 rounded hover:bg-amber-200/60 dark:hover:bg-amber-800/40 transition-colors"
+          >
+            <X className="h-3 w-3" />
+          </button>
         </div>
       )}
 
       {/* 5-panel resizable layout */}
       <div className="flex-1 min-h-0 hidden md:block">
         <PanelGroup direction="horizontal" autoSaveId="medreader-h">
-          {/* Left: Outline + Heading Navigator */}
+          {/* Left: Heading Navigator (top) + Outline Panel (bottom) */}
           <Panel defaultSize={20} minSize={14} collapsible={false}>
             <div className="h-full border-r bg-card flex flex-col">
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <OutlinePanel
-                  outline={outline}
-                  loading={outlineLoading}
-                  onChildClick={onChildClick}
-                  activeChildId={activeChildId}
-                />
-              </div>
-              {/* Heading Navigator at bottom of left panel */}
+              {/* Heading Navigator at top — verbatim paper section/subsection
+                  titles, used for precise paragraph jumping. */}
               <div className="flex-shrink-0">
                 <HeadingNavigator
                   headings={outline?.headings}
                   activeHeadingText={activeHeadingText}
                   onHeadingClick={onHeadingClick}
+                />
+              </div>
+              {/* Outline (6-dimension LLM-generated analysis) at bottom —
+                  takes the remaining space. */}
+              <div className="flex-1 min-h-0 overflow-hidden border-t">
+                <OutlinePanel
+                  outline={outline}
+                  loading={outlineLoading}
+                  onChildClick={onChildClick}
+                  activeChildId={activeChildId}
                 />
               </div>
             </div>
