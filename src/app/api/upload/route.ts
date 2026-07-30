@@ -6,7 +6,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { trackEvent } from "@/lib/track";
-import { parsePdf } from "@/lib/pdf-parse";
+import { parseWithMinerU, markdownToPlainText } from "@/lib/mineru";
+import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -22,11 +23,27 @@ try {
 
 export async function POST(req: NextRequest) {
   try {
-    // Re-ensure the directory exists (cheap if already present).
+    mkdirSync(UPLOADS_DIR, { recursive: true });
+
+    // Resolve the user (anonymous allowed, but quota differs by identity).
+    let userId: string | null = null;
     try {
-      mkdirSync(UPLOADS_DIR, { recursive: true });
+      const session = await getServerSession(authOptions);
+      userId = (session?.user as any)?.id ?? null;
     } catch {
-      // ignore
+      // ignore — anonymous upload allowed
+    }
+
+    // Quota check — MinerU is the expensive resource.
+    const quota = await checkAndIncrement("mineru_parse", userId, req);
+    if (!quota.ok) {
+      return NextResponse.json(
+        {
+          error: `今日 PDF 解析额度已用尽（${quota.count}/${quota.limit}）。明日 0:00 (UTC+8) 重置。`,
+          quota,
+        },
+        { status: 429 }
+      );
     }
 
     const formData = await req.formData();
@@ -48,15 +65,6 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuf);
     writeFileSync(storedPath, buffer);
 
-    // Optional: associate with a logged-in user (paper may be anonymous).
-    let userId: string | null = null;
-    try {
-      const session = await getServerSession(authOptions);
-      userId = (session?.user as any)?.id ?? null;
-    } catch {
-      // ignore — anonymous upload allowed
-    }
-
     // Create the Paper record with parseStatus="pending".
     const paper = await db.paper.create({
       data: {
@@ -67,15 +75,25 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Best-effort behaviour tracking. Never blocks the response.
     trackEvent(userId, "upload_pdf", originalName).catch(() => {});
 
-    // Fire-and-forget background parsing. The response returns immediately;
-    // the frontend polls GET /api/paper/[id] for status updates.
-    void parsePdfBackground(paper.id, storedPath);
+    // Fire-and-forget background parsing using MinerU.
+    // CRITICAL: must NEVER reject — attach .catch() to prevent the
+    // process from being killed by an unhandled rejection.
+    parsePdfBackground(paper.id, storedPath).catch((e) => {
+      console.error(`[upload] background parse crashed for ${paper.id}:`, e);
+      // Last-ditch effort to mark as error in DB
+      db.paper
+        .update({ where: { id: paper.id }, data: { parseStatus: "error" } })
+        .catch(() => {});
+    });
 
     return NextResponse.json(
-      { paperId: paper.id, uploadUrl: storedPath },
+      {
+        paperId: paper.id,
+        uploadUrl: storedPath,
+        quota: { count: quota.count, limit: quota.limit },
+      },
       { status: 200 }
     );
   } catch (e) {
@@ -86,29 +104,49 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * Run the parser in the background and update the Paper record on
- * completion. Errors are swallowed (status flips to "error") so the
- * background Promise never rejects.
+ * Run MinerU in the background, store markdown + blocks + imagesDir.
+ * Falls back to pdfjs-dist only on MinerU failure (and stores plain
+ * text only, no blocks).
  */
 async function parsePdfBackground(paperId: string, filePath: string): Promise<void> {
   try {
-    const text = await parsePdf(filePath);
+    const result = await parseWithMinerU(filePath);
     await db.paper.update({
       where: { id: paperId },
       data: {
         parseStatus: "done",
-        parsedText: text,
+        markdown: result.markdown,
+        blocksJson: JSON.stringify(result.blocks),
+        imagesDir: result.imagesDir,
+        pageCount: result.pageCount,
+        // Also store a plain-text version (for chat context redundancy)
+        parsedText: markdownToPlainText(result.markdown),
       },
     });
   } catch (e) {
-    console.error(`[upload] background parse failed for ${paperId}:`, e);
+    console.error(`[upload] MinerU parse failed for ${paperId}:`, e);
+    // Fallback: try pdfjs-dist
     try {
+      const { parsePdf } = await import("@/lib/pdf-parse");
+      const text = await parsePdf(filePath);
       await db.paper.update({
         where: { id: paperId },
-        data: { parseStatus: "error" },
+        data: {
+          parseStatus: "done",
+          parsedText: text,
+          // No markdown / blocks available in fallback mode
+        },
       });
-    } catch {
-      // ignore DB errors during error-state update
+    } catch (e2) {
+      console.error(`[upload] pdfjs fallback also failed for ${paperId}:`, e2);
+      try {
+        await db.paper.update({
+          where: { id: paperId },
+          data: { parseStatus: "error" },
+        });
+      } catch {
+        // ignore DB errors during error-state update
+      }
     }
   }
 }

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { callDeepSeek } from "@/lib/deepseek";
+import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -9,6 +12,21 @@ export async function POST(req: NextRequest) {
     const { text, target = "中文" } = await req.json();
     if (!text || typeof text !== "string") {
       return NextResponse.json({ error: "text is required" }, { status: 400 });
+    }
+
+    let userId: string | null = null;
+    try {
+      const session = await getServerSession(authOptions);
+      userId = (session?.user as any)?.id ?? null;
+    } catch {
+      // ignore
+    }
+    const quota = await checkAndIncrement("translate", userId, req);
+    if (!quota.ok) {
+      return NextResponse.json(
+        { error: `今日翻译额度已用尽（${quota.count}/${quota.limit}）。明日重置。` },
+        { status: 429 }
+      );
     }
 
     const result = await callDeepSeek(

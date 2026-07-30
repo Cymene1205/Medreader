@@ -59,16 +59,19 @@ keyPoints 列出该维度 3-5 个核心要点（每个 10-20 字）。
 
 export async function POST(req: NextRequest) {
   try {
-    const { text, title, paperId } = await req.json();
-    if (!text || typeof text !== "string") {
-      return NextResponse.json({ error: "text is required" }, { status: 400 });
+    const { text, markdown, title, paperId } = await req.json();
+    // Prefer MinerU markdown (richer structure); fall back to plain text.
+    const sourceText = (typeof markdown === "string" && markdown.trim())
+      ? markdown
+      : (typeof text === "string" ? text : "");
+    if (!sourceText) {
+      return NextResponse.json({ error: "text or markdown is required" }, { status: 400 });
     }
 
-    // Allow longer text since structured parsing is denser
     const truncated =
-      text.length > 30000 ? text.slice(0, 30000) + "\n...[truncated]" : text;
+      sourceText.length > 60000 ? sourceText.slice(0, 60000) + "\n...[truncated]" : sourceText;
 
-    const userPrompt = `请分析以下论文全文并按 6 个维度生成结构化层次化大纲。\n\n论文标题: ${title || "(未提供)"}\n\n论文全文:\n${truncated}`;
+    const userPrompt = `请分析以下论文全文并按 6 个维度生成结构化层次化大纲。\n\n论文标题: ${title || "(未提供)"}\n\n论文全文（Markdown 格式，含结构信息）:\n${truncated}`;
 
     const raw = await callDeepSeek(
       [

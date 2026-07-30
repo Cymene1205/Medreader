@@ -43,7 +43,9 @@ type Props = {
   onClearAttachedImage: () => void;
   /** selected text from PDF, used as additional chat context */
   selectedText: string;
-  /** full paper text extracted from the PDF — always passed as base context */
+  /** full paper markdown (MinerU) — preferred source of truth for chat context */
+  paperMarkdown?: string;
+  /** full paper text (fallback when markdown unavailable) */
   paperText?: string;
   /** current paper id (for ChatLog bookkeeping) */
   paperId?: string | null;
@@ -56,6 +58,7 @@ export default function ChatPanel({
   attachedImage,
   onClearAttachedImage,
   selectedText,
+  paperMarkdown,
   paperText,
   paperId,
 }: Props) {
@@ -190,8 +193,8 @@ export default function ChatPanel({
 
     try {
       if (hasImage) {
-        // Vision path — pass paper text as context so the model can connect
-        // the figure with the paper's narrative
+        // Vision path — pass paper markdown as context so the model can
+        // connect the figure with the paper's narrative.
         const res = await fetch("/api/vision", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -199,7 +202,7 @@ export default function ChatPanel({
             prompt: userMsg.content,
             image: attachedImage,
             history,
-            paperContext: paperText || undefined,
+            paperContext: paperMarkdown || paperText || undefined,
           }),
         });
         const data = await res.json();
@@ -216,13 +219,15 @@ export default function ChatPanel({
         onClearAttachedImage();
       } else {
         // Streaming text path (DeepSeek)
-        // Combine paper text (always) + currently selected snippet (if any)
+        // Prefer MinerU markdown as the source of truth; fall back to plain text.
+        // Always include the user's currently selected paragraph as additional context.
         let context = "";
-        if (paperText) {
-          context = `【论文全文】\n${paperText.slice(0, 10000)}`;
+        const paperSource = paperMarkdown || paperText || "";
+        if (paperSource) {
+          context = `【论文全文】\n${paperSource.slice(0, 14000)}`;
         }
         if (selectedText) {
-          context += `\n\n【用户当前选中的原文片段】\n"""\n${selectedText.slice(0, 2000)}\n"""`;
+          context += `\n\n【用户当前选中的段落】\n"""\n${selectedText.slice(0, 2000)}\n"""`;
         }
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -231,6 +236,7 @@ export default function ChatPanel({
             messages: history,
             question: userMsg.content,
             context,
+            markdown: paperMarkdown || undefined,
             paperId: paperId || undefined,
           }),
         });

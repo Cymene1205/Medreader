@@ -4,18 +4,20 @@ import { authOptions } from "@/lib/auth";
 import { streamDeepSeek, type ChatMessage } from "@/lib/deepseek";
 import { db } from "@/lib/db";
 import { trackEvent } from "@/lib/track";
+import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, question, context, paperId } = await req.json();
+    const { messages, question, context, markdown, paperId } = await req.json();
 
     // messages: prior chat history [{role, content}]
     // question: user's new question
-    // context: optional selected paper text snippet
-    // paperId: optional — associated paper for ChatLog bookkeeping
+    // context:  (legacy) selected paper text snippet — kept for backward compat
+    // markdown: full MinerU markdown — preferred source of truth
+    // paperId:  optional — associated paper for ChatLog bookkeeping
     const history: ChatMessage[] = Array.isArray(messages)
       ? messages.map((m: { role: string; content: string }) => ({
           role: m.role as "user" | "assistant" | "system",
@@ -23,23 +25,7 @@ export async function POST(req: NextRequest) {
         }))
       : [];
 
-    const system: ChatMessage = {
-      role: "system",
-      content:
-        "你是一位资深的科研文献分析助手，正在与用户一起阅读同一篇论文。" +
-        (context
-          ? `\n\n用户当前选中的原文片段（作为讨论上下文）：\n"""\n${context.slice(0, 3000)}\n"""`
-          : "") +
-        "\n\n请基于这篇论文，用清晰、专业的中文回答用户的问题。如果问题超出论文范围，可以适当补充通用知识但要明确说明。回答使用 Markdown。",
-    };
-
-    const fullMessages: ChatMessage[] = [
-      system,
-      ...history,
-      { role: "user", content: question },
-    ];
-
-    // Resolve the user once up-front (best-effort, anonymous allowed)
+    // Resolve user (anonymous allowed) and enforce quota.
     let userId: string | null = null;
     try {
       const session = await getServerSession(authOptions);
@@ -47,6 +33,39 @@ export async function POST(req: NextRequest) {
     } catch {
       // ignore — anonymous flow
     }
+    const quota = await checkAndIncrement("chat", userId, req);
+    if (!quota.ok) {
+      return new Response(
+        JSON.stringify({
+          error: `今日提问额度已用尽（${quota.count}/${quota.limit}）。明日重置。`,
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Build a single system prompt that ALWAYS contains the paper.
+    // Prefer the structured markdown (richer, includes section headers).
+    // Fall back to the legacy `context` field if no markdown available.
+    const paperContext =
+      (typeof markdown === "string" && markdown.trim())
+        ? markdown.slice(0, 16000)
+        : (typeof context === "string" ? context.slice(0, 12000) : "");
+
+    const system: ChatMessage = {
+      role: "system",
+      content:
+        "你是一位资深的科研文献分析助手，正在与用户一起阅读同一篇论文。" +
+        (paperContext
+          ? `\n\n【论文全文】（Markdown 格式，包含原文标题、章节、段落、表格、图片描述等结构信息）\n"""\n${paperContext}\n"""`
+          : "\n\n（注意：尚未加载到论文全文，请明确告知用户先上传并等待解析完成。）") +
+        "\n\n请严格基于论文内容回答用户问题。如果问题超出论文范围，可以适当补充通用知识但必须明确标注\"（通用知识，非论文内容）\"。引用论文内容时尽量保留原文措辞。回答使用 Markdown，专业术语首次出现时附英文原词。",
+    };
+
+    const fullMessages: ChatMessage[] = [
+      system,
+      ...history,
+      { role: "user", content: question },
+    ];
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -63,9 +82,6 @@ export async function POST(req: NextRequest) {
             );
           }
 
-          // After streaming finishes — persist the ChatLog (best-effort).
-          // A failure here must NOT break the stream; the user has already
-          // received their answer token-by-token.
           let chatLogId: string | null = null;
           try {
             const chatLog = await db.chatLog.create({
@@ -82,7 +98,6 @@ export async function POST(req: NextRequest) {
             console.warn("[chat] failed to save ChatLog:", e);
           }
 
-          // Track event (best-effort)
           try {
             await trackEvent(
               userId,
@@ -96,8 +111,6 @@ export async function POST(req: NextRequest) {
             // ignore
           }
 
-          // Emit the meta event BEFORE [DONE] so the client can attach
-          // feedback / follow-ups to the correct ChatLog row.
           if (chatLogId) {
             controller.enqueue(
               encoder.encode(

@@ -199,6 +199,32 @@
 .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.25); }
 
+/* ===== BlockReader flash (outline click → scroll-to-and-highlight) ===== */
+.block-flash {
+  animation: blockFlashAnim 2.2s ease-out;
+}
+@keyframes blockFlashAnim {
+  0% { background: rgba(250, 204, 21, 0.6); box-shadow: 0 0 0 4px rgba(250,204,21,0.2); }
+  60% { background: rgba(250, 204, 21, 0.2); }
+  100% { background: transparent; box-shadow: 0 0 0 0 rgba(250,204,21,0); }
+}
+
+/* ===== BlockReader table rendering (MinerU returns HTML in table_body) ===== */
+.block-reader-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.block-reader-table th, .block-reader-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.block-reader-table thead { background: var(--muted); }
+.block-reader-table th { font-weight: 600; }
+.block-reader-table tr:nth-child(even) { background: rgba(0,0,0,0.02); }
+
 /* ===== Chat markdown rendering ===== */
 .chat-markdown > *:first-child { margin-top: 0; }
 .chat-markdown > *:last-child { margin-bottom: 0; }

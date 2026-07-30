@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { callVision } from "@/lib/deepseek";
+import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -11,6 +14,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "image (base64 data URL) is required" },
         { status: 400 }
+      );
+    }
+
+    let userId: string | null = null;
+    try {
+      const session = await getServerSession(authOptions);
+      userId = (session?.user as any)?.id ?? null;
+    } catch {
+      // ignore
+    }
+    const quota = await checkAndIncrement("vision", userId, req);
+    if (!quota.ok) {
+      return NextResponse.json(
+        { error: `今日图片提问额度已用尽（${quota.count}/${quota.limit}）。明日重置。` },
+        { status: 429 }
       );
     }
 

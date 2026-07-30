@@ -67,7 +67,12 @@ model Paper {
   title       String
   filePath    String
   parseStatus String   @default("pending") // pending | done | error
-  parsedText  String?
+  parsedText  String?  // Plain-text fallback (pdfjs)
+  markdown    String?  // MinerU full.md content (knowledge base)
+  blocksJson  String?  // JSON-stringified MinerU content_list.json (block-level: page_idx/bbox/text_level)
+  imagesDir   String?  // local dir for extracted images
+  mineruTaskId  String? // MinerU batch_id or task_id
+  pageCount   Int?
   createdAt   DateTime @default(now())
   chatLogs    ChatLog[]
 }
@@ -102,7 +107,22 @@ model UsageEvent {
   id        String   @id @default(cuid())
   userId    String?
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  action    String // login | upload_pdf | analyze | chat | translate | vision | followups
+  action    String // login | upload_pdf | analyze | chat | translate | vision | followups | mineru_parse
   meta      String?
   createdAt DateTime @default(now())
+}
+
+// Daily quota tracking — one row per (user, day, action).
+// We cap per-user-per-day uploads (mineru quota) AND chat/translate calls.
+model DailyQuota {
+  id        String   @id @default(cuid())
+  userId    String?  // null = anonymous (identified by ip+ua hash stored in meta)
+  action    String   // "mineru_parse" | "chat" | "translate" | "vision"
+  day       String   // YYYY-MM-DD (UTC+8)
+  count     Int      @default(0)
+  meta      String?  // ip hash / extra info
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, action, day])
+  @@index([action, day])
 }

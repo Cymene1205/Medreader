@@ -1,242 +1,80 @@
 /**
- * PDF Parsing Module — Feature 3 (PDF Parsing Upgrade)
+ * PDF Parsing Module
  *
- * `parsePdf(filePath)` returns a markdown-like plain text representation of
- * the supplied PDF by trying three parsing backends in order of preference:
+ * Priority 1 — MinerU cloud service (highest quality, returns structured
+ *              markdown + block JSON with page_idx/bbox/text_level).
+ *              Enabled by MINERU_API_TOKEN env var. Falls through on
+ *              any failure.
  *
- * Priority 1 — MinerU remote service (highest quality, structured markdown).
- *   Enable by setting the environment variable:
- *     MINERU_API_URL=http://mineru.local:8000/api/v1
- *   Contract assumed:
- *     POST  {MINERU_API_URL}/file   (multipart/form-data, field "file" = PDF)
- *       -> { task_id: string } | { markdown: string }
- *     GET   {MINERU_API_URL}/task/{task_id}
- *       -> { status: "pending" | "processing" | "done" | "error", markdown?: string }
- *   If the env var is unset, the host is unreachable, or any unexpected
- *   response/timeout occurs, parsing silently falls through to Priority 2.
+ * Priority 2 — pdfjs-dist Node fallback (always available, MUST WORK).
+ *              Uses the legacy build with an explicitly imported worker
+ *              entry so GlobalWorkerOptions.workerSrc is set correctly.
  *
- * Priority 2 — `marker_single` CLI subprocess (datalab/marker, high quality).
- *   Install with:  pip install marker-pdf
- *   We spawn:      marker_single <pdf_path> --output_dir <tmp_dir>
- *   The CLI writes `{output_dir}/{basename}.md`. We read & return it.
- *   If the binary is not on PATH or the subprocess errors, falls through.
- *
- * Priority 3 — pdfjs-dist Node fallback (always available, MUST WORK).
- *   Uses pdfjs-dist's text extraction and reconstructs a readable layout
- *   by grouping text items into lines, detecting double-column pages,
- *   sorting reading order, and inserting paragraph breaks on large gaps.
- *   No external services required — only the `pdfjs-dist` npm package.
- *
- * To permanently switch to MinerU, set MINERU_API_URL and ensure the
- * service is reachable; the fallback layers will then never be exercised.
+ * The MinerU result is rich (markdown + blocks + images); callers should
+ * prefer parseWithMinerU() directly when they need the structured data.
+ * This module's parsePdf() returns a plain-text string for compatibility.
  */
 
 import { readFile, mkdtemp, rm } from "fs/promises";
 import { spawn } from "child_process";
 import { tmpdir } from "os";
 import { join, basename } from "path";
-
-const MINERU_API_URL = process.env.MINERU_API_URL;
-const MINERU_TIMEOUT_MS = 120_000; // 2 min polling budget
-const MINERU_POLL_INTERVAL_MS = 1500;
+import { parseWithMinerU, markdownToPlainText } from "./mineru";
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a PDF file at `filePath` into markdown-like text.
- * Tries MinerU -> marker_single -> pdfjs-dist, returning the first success.
+ * Parse a PDF into PLAIN TEXT.
+ * Tries MinerU first (best), then pdfjs-dist.
+ * For structured markdown + blocks, call parseWithMinerU() directly.
  */
 export async function parsePdf(filePath: string): Promise<string> {
-  // Priority 1 — MinerU remote service
-  const mineruResult = await tryMineru(filePath).catch(() => null);
-  if (mineruResult && mineruResult.trim().length > 0) {
-    return mineruResult;
+  // Priority 1 — MinerU
+  try {
+    const result = await parseWithMinerU(filePath);
+    if (result.markdown && result.markdown.trim().length > 0) {
+      return markdownToPlainText(result.markdown);
+    }
+  } catch (e) {
+    console.warn("[pdf-parse] MinerU failed, falling through to pdfjs:", e instanceof Error ? e.message : e);
   }
 
-  // Priority 2 — marker_single CLI
-  const markerResult = await tryMarker(filePath).catch(() => null);
-  if (markerResult && markerResult.trim().length > 0) {
-    return markerResult;
-  }
-
-  // Priority 3 — pdfjs-dist Node fallback (always available)
+  // Priority 2 — pdfjs-dist Node fallback
   return parseWithPdfjs(filePath);
 }
 
 // ---------------------------------------------------------------------------
-// Priority 1: MinerU
-// ---------------------------------------------------------------------------
-
-async function tryMineru(filePath: string): Promise<string | null> {
-  if (!MINERU_API_URL) return null;
-
-  const base = MINERU_API_URL.replace(/\/+$/, "");
-  const buffer = await readFile(filePath);
-
-  // Build multipart/form-data manually (no extra deps).
-  const boundary = "medreader-" + Math.random().toString(16).slice(2);
-  const fileName = basename(filePath);
-  const body = Buffer.concat([
-    Buffer.from(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n` +
-        `Content-Type: application/pdf\r\n\r\n`
-    ),
-    buffer,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
-
-  let resp: Response;
-  try {
-    resp = await fetch(`${base}/file`, {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        "Content-Length": String(body.length),
-      },
-      body,
-    });
-  } catch (e) {
-    console.warn("[pdf-parse] MinerU unreachable:", e);
-    return null;
-  }
-
-  if (!resp.ok) {
-    console.warn(`[pdf-parse] MinerU POST /file returned ${resp.status}`);
-    return null;
-  }
-
-  let data: any;
-  try {
-    data = await resp.json();
-  } catch {
-    console.warn("[pdf-parse] MinerU returned non-JSON");
-    return null;
-  }
-
-  // Direct markdown response — done in one shot.
-  if (typeof data.markdown === "string" && data.markdown.trim()) {
-    return data.markdown;
-  }
-
-  // Otherwise, treat as async task and poll.
-  const taskId: string | undefined = data.task_id || data.taskId || data.id;
-  if (!taskId) {
-    console.warn("[pdf-parse] MinerU response had no task_id:", data);
-    return null;
-  }
-
-  const deadline = Date.now() + MINERU_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(MINERU_POLL_INTERVAL_MS);
-    let sResp: Response;
-    try {
-      sResp = await fetch(`${base}/task/${taskId}`);
-    } catch (e) {
-      console.warn("[pdf-parse] MinerU poll failed:", e);
-      return null;
-    }
-    if (!sResp.ok) {
-      console.warn(`[pdf-parse] MinerU GET /task/${taskId} -> ${sResp.status}`);
-      return null;
-    }
-    let sData: any;
-    try {
-      sData = await sResp.json();
-    } catch {
-      continue;
-    }
-    const status: string = (sData.status || "").toLowerCase();
-    if (status === "done" || status === "completed" || status === "success") {
-      if (typeof sData.markdown === "string") return sData.markdown;
-      if (typeof sData.result === "string") return sData.result;
-      return null;
-    }
-    if (status === "error" || status === "failed") {
-      console.warn("[pdf-parse] MinerU task failed:", sData);
-      return null;
-    }
-    // pending / processing -> keep polling
-  }
-  console.warn("[pdf-parse] MinerU polling timed out");
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Priority 2: marker_single CLI
-// ---------------------------------------------------------------------------
-
-async function tryMarker(filePath: string): Promise<string | null> {
-  // Create a unique tmp output dir.
-  const outDir = await mkdtemp(join(tmpdir(), "marker-"));
-  try {
-    const code = await runSpawn("marker_single", [
-      filePath,
-      "--output_dir",
-      outDir,
-    ]);
-    if (code !== 0) {
-      console.warn(`[pdf-parse] marker_single exited with code ${code}`);
-      return null;
-    }
-    // marker writes <outDir>/<basename_without_ext>.md
-    const baseName = basename(filePath).replace(/\.pdf$/i, "");
-    const mdPath = join(outDir, `${baseName}.md`);
-    try {
-      const md = await readFile(mdPath, "utf-8");
-      return md;
-    } catch {
-      // Some marker versions nest output in a subfolder named after the file.
-      try {
-        const altMdPath = join(outDir, baseName, `${baseName}.md`);
-        return await readFile(altMdPath, "utf-8");
-      } catch {
-        return null;
-      }
-    }
-  } finally {
-    // Best-effort cleanup; ignore errors.
-    rm(outDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-function runSpawn(cmd: string, args: string[]): Promise<number> {
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(cmd, args, { stdio: "ignore" });
-    } catch {
-      resolve(-1);
-      return;
-    }
-    child.on("error", () => resolve(-1));
-    child.on("exit", (code) => resolve(typeof code === "number" ? code : -1));
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Priority 3: pdfjs-dist Node fallback
+// Priority 2: pdfjs-dist Node fallback (FIXED worker setup)
 // ---------------------------------------------------------------------------
 
 async function parseWithPdfjs(filePath: string): Promise<string> {
-  // The legacy build is built to work without a DOM. Try it first; if the
-  // path doesn't exist (different package layout), fall back to the main
-  // entry — both expose getDocument / GlobalWorkerOptions.
-  let pdfjs: any;
-  try {
-    pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  } catch {
-    pdfjs = await import("pdfjs-dist");
-  }
+  // Use the legacy build (designed for non-DOM environments).
+  const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-  // Disable worker — pdfjs will use a fake worker running on the main thread.
-  // workerSrc="" prevents any attempt to fetch an external worker script.
+  // ── FIX: explicitly set workerSrc to the legacy worker entry. ──
+  // The previous version left workerSrc="" which made pdfjs try to
+  // spawn a "fake worker" by dynamically importing its worker source
+  // file, but it couldn't locate it on disk. We use the .mjs path
+  // that ships with pdfjs-dist; Node can resolve it directly.
   try {
-    pdfjs.GlobalWorkerOptions.workerSrc = "";
+    // Resolve via Node module resolution
+    const workerUrl = new URL(
+      "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+      // `import.meta.url` works in ESM mode (Next.js compiles .ts to ESM)
+      import.meta.url
+    );
+    pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.href;
   } catch {
-    // Some builds expose workerSrc differently; ignore if not settable.
+    // Fallback: tell pdfjs to run worker on main thread (no worker).
+    try {
+      pdfjs.GlobalWorkerOptions.workerSrc = "";
+      // pdfjs-dist also exposes a "fake worker" path; setting
+      // disableWorker=true on the loadingTask below ensures it.
+    } catch {
+      // ignore
+    }
   }
 
   const fileBuffer = await readFile(filePath);
@@ -248,6 +86,8 @@ async function parseWithPdfjs(filePath: string): Promise<string> {
     isEvalSupported: false,
     disableFontFace: true,
     useSystemFonts: false,
+    // Run worker code on the main thread to avoid worker bootstrap issues.
+    disableWorker: true,
   });
 
   const doc = await loadingTask.promise;
@@ -312,13 +152,8 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
       }
     }
 
-    // Sort lines by Y descending — PDF coordinate origin is bottom-left,
-    // so higher Y values are visually at the top of the page.
     lines.sort((a, b) => b.y - a.y);
 
-    // Detect double-column layout: cluster line start X positions; if a
-    // large gap exists splitting lines into two distinct columns AND the
-    // gap sits roughly in the middle of the page, mark as two-column.
     const lineStartXs = lines
       .map((l) => Math.min(...l.items.map((it) => it.x)))
       .sort((a, b) => a - b);
@@ -335,8 +170,6 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
           gapIdx = i;
         }
       }
-      // Heuristic: gap should be > 8% of page width and the split should
-      // land in the middle 50% of the page (i.e. between 25% and 75%).
       const lowerBound = pageWidth * 0.25;
       const upperBound = pageWidth * 0.75;
       if (
@@ -350,7 +183,6 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
       }
     }
 
-    // Compute median line height for paragraph-break detection.
     const heights = items
       .map((it) => it.height)
       .filter((h) => h > 0)
@@ -359,8 +191,6 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
       heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 10;
 
     if (isTwoColumn) {
-      // Partition lines into left/right columns, then read each column
-      // top-to-bottom (already sorted) — left column first, then right.
       const left = lines.filter((l) => Math.min(...l.items.map((i) => i.x)) < splitX);
       const right = lines.filter((l) => Math.min(...l.items.map((i) => i.x)) >= splitX);
       return renderLines(left, medianHeight) + "\n" + renderLines(right, medianHeight);
@@ -378,15 +208,10 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
 
 function renderLines(lines: { y: number; items: TextItem[] }[], medianHeight: number): string {
   if (lines.length === 0) return "";
-
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Sort items in the line by X ascending (left -> right reading order).
     line.items.sort((a, b) => a.x - b.x);
-
-    // Join items, inserting a space when there's a horizontal gap between
-    // the end of one item and the start of the next.
     const parts: string[] = [];
     for (let j = 0; j < line.items.length; j++) {
       const it = line.items[j];
@@ -394,8 +219,6 @@ function renderLines(lines: { y: number; items: TextItem[] }[], medianHeight: nu
         const prev = line.items[j - 1];
         const prevEnd = prev.x + prev.width;
         const gap = it.x - prevEnd;
-        // Insert a space if there's a meaningful gap (more than ~25% of
-        // median char width, or item ended with EOL marker).
         const needsSpace = gap > medianHeight * 0.25 || prev.hasEOL;
         if (needsSpace && !it.str.startsWith(" ") && !parts[parts.length - 1]?.endsWith(" ")) {
           parts.push(" ");
@@ -405,22 +228,12 @@ function renderLines(lines: { y: number; items: TextItem[] }[], medianHeight: nu
     }
     const text = parts.join("").trimEnd();
     if (text) out.push(text);
-
-    // Detect paragraph break: gap to the next line is > 1.5x median height.
     if (i < lines.length - 1) {
       const gap = lines[i].y - lines[i + 1].y;
       if (gap > medianHeight * 1.5) {
-        out.push(""); // blank line separator
+        out.push("");
       }
     }
   }
   return out.join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

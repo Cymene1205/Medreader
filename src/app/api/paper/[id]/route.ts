@@ -5,11 +5,21 @@ export const runtime = "nodejs";
 
 /**
  * GET /api/paper/[id]
- * Returns the paper's parse status and (only when status === "done") the
- * parsed text. Used by the frontend to poll an in-flight parse job.
+ * Returns the paper's parse status and parsed content.
  *
- * Response 200:
- *   { id, title, parseStatus, parsedText | null, createdAt }
+ * Response 200 (status === "done"):
+ *   {
+ *     id, title, parseStatus,
+ *     parsedText,    // plain text fallback
+ *     markdown,      // MinerU full.md (knowledge base)
+ *     blocks,        // MinerU content_list.json parsed array
+ *     imagesDir,     // absolute path to extracted images (server-side only)
+ *     pageCount, createdAt
+ *   }
+ *
+ * Response 200 (status === "pending"):
+ *   { id, title, parseStatus: "pending", parsedText: null, ... }
+ *
  * Response 404:
  *   { error: "Paper not found" }
  */
@@ -27,6 +37,10 @@ export async function GET(
         title: true,
         parseStatus: true,
         parsedText: true,
+        markdown: true,
+        blocksJson: true,
+        imagesDir: true,
+        pageCount: true,
         createdAt: true,
       },
     });
@@ -38,16 +52,26 @@ export async function GET(
       );
     }
 
-    // Only expose parsedText once parsing has completed successfully.
-    const parsedText =
-      paper.parseStatus === "done" ? paper.parsedText : null;
+    const isDone = paper.parseStatus === "done";
+    let blocks: unknown = null;
+    if (isDone && paper.blocksJson) {
+      try {
+        blocks = JSON.parse(paper.blocksJson);
+      } catch {
+        blocks = null;
+      }
+    }
 
     return NextResponse.json(
       {
         id: paper.id,
         title: paper.title,
         parseStatus: paper.parseStatus,
-        parsedText,
+        parsedText: isDone ? paper.parsedText : null,
+        markdown: isDone ? paper.markdown : null,
+        blocks,
+        imagesDir: paper.imagesDir,
+        pageCount: paper.pageCount,
         createdAt: paper.createdAt,
       },
       { status: 200 }

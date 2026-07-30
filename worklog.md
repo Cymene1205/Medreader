@@ -98,3 +98,39 @@ Feature 7 mindmap is fully implemented. The `outlineToFlow` helper produces a 3-
 
 ### Stage Summary
 Feature 2 (admin dashboard) is fully implemented and spec-compliant. The API route defensively re-checks `role === "admin"` even though middleware already gates the path, computes 30-day daily active users / daily action breakdowns via SQLite raw SQL with `date(createdAt/1000, 'unixepoch')` truncation (BigInt-safe coercion via `toIsoDate`), and returns totals + recent lists + all down-vote feedbacks with full answer text for inline expansion. The client page renders three recharts visualizations (line / stacked bar / donut pie) using CSS variables that resolve exactly to the spec hex colors, two scrollable recent-user/recent-chat tables, and a filterable down-feedback table with click-to-expand answer rows. Loading (Skeleton) and error (403 / generic) states are handled. Lint and TypeScript checks pass.
+
+---
+Task ID: v4-mineru-rebuild
+Agent: main (Super Z)
+Task: 把 MedReader Agent 改造为 MinerU 驱动的分块阅读 + 单击段落翻译 + 6 维度大纲跳转 + 每日配额
+
+Work Log:
+- 调研 MinerU 云 API：POST /api/v4/file-urls/batch → PUT 上传 → GET /api/v4/extract-results/batch/{id} 轮询 → ZIP 含 full.md + content_list.json + images/
+- 更新 Prisma schema：Paper 表加 markdown/blocksJson/imagesDir/pageCount/mineruTaskId 字段；新建 DailyQuota 模型
+- 安装 jszip + remark-gfm + rehype-raw
+- 新建 src/lib/mineru.ts：MinerU 云 API 客户端，返回 markdown + blocks + imagesDir
+- 改写 src/lib/pdf-parse.ts：MinerU 为主路径，pdfjs-dist（修复 worker）兜底
+- 新建 src/lib/quota.ts：每日额度检查（mineru_parse: 10/天, chat: 50/天, translate: 100/天, vision: 20/天）
+- 改写 src/app/api/upload/route.ts：MinerU 后台解析 + 配额检查 + 错误兜底
+- 改写 src/app/api/paper/[id]/route.ts：返回 markdown + blocks + imagesDir
+- 新建 src/app/api/paper-images/route.ts：服务 MinerU 抽取的图片（含目录穿越防护）
+- 改写 src/app/api/analyze/route.ts：优先用 markdown 作为输入（max 60k chars）
+- 改写 src/app/api/chat/route.ts：system prompt 始终含 markdown 全文（16k）作上下文 + 配额
+- 改写 src/app/api/translate/route.ts + vision/route.ts：加配额检查
+- 新建 src/components/block-reader.tsx：MinerU 分块渲染（标题/段落/表格/图表/公式）+ 单击段落翻译 + 大纲点击高亮跳转
+- 改写 src/components/translation-panel.tsx：段落翻译历史栈（最新置顶）
+- 改写 src/app/page.tsx：3 Tab 布局（分块阅读默认/PDF/思维导图）+ MinerU 解析状态提示
+- 改写 src/components/chat-panel.tsx：优先用 paperMarkdown 作上下文
+- 加 CSS：block-flash 动画 + block-reader-table 表格样式
+- 加 instrumentation.ts：捕获未处理异常，避免后台 MinerU 任务崩溃整个进程
+- 端到端测试：上传 sample-paper.pdf → MinerU 4s 解析 → 6 维度大纲生成（15s）→ 段落翻译 → Agent 提问基于论文回答
+- 浏览器截图验证：分块阅读显示标题/段落/章节/页码；段落蓝色高亮 + 翻译卡片显示原文+译文；6 维度大纲全部生成；Agent 回答正确引用 TNBC/CD8+/TRM cells
+
+Stage Summary:
+- MinerU 集成完成：每个 PDF 都解析为 markdown + blocks，作为知识库长期存储
+- 大纲生成不再失败（之前 pdfjs worker 报错导致文本提取失败）
+- Agent 提问不再返回相同答案（之前 paperText 为空导致 DeepSeek 无法基于论文回答）
+- 大纲点击可跳转到 markdown 对应 block（通过 quote/keywords 模糊匹配）
+- 段落单击触发整段翻译（替换之前的选词翻译）
+- 每日额度：匿名用户 10 PDF/天、50 提问/天、100 翻译/天、20 图片提问/天
+- 渐进式加载：MinerU 解析期间显示快速文本预览，完成后切换到结构化分块视图

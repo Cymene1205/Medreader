@@ -12,6 +12,7 @@ import OutlinePanel, {
 import TranslationPanel from "@/components/translation-panel";
 import ChatPanel from "@/components/chat-panel";
 import MindmapView from "@/components/mindmap-view";
+import BlockReader, { type MinerUBlock, type BlockReaderHandle } from "@/components/block-reader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -24,6 +25,7 @@ import {
   Shield,
   FileText,
   Network,
+  LayoutGrid,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -41,21 +43,27 @@ export default function Home() {
   const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [paperText, setPaperText] = useState<string>("");
+  const [paperMarkdown, setPaperMarkdown] = useState<string | null>(null);
+  const [paperBlocks, setPaperBlocks] = useState<MinerUBlock[] | null>(null);
+  const [paperImagesDir, setPaperImagesDir] = useState<string | null>(null);
   const [paperId, setPaperId] = useState<string | null>(null);
 
   const [outline, setOutline] = useState<Outline | null>(null);
   const [outlineLoading, setOutlineLoading] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
   const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
+  const [mineruStatus, setMineruStatus] = useState<string>("");
 
   const [selectedText, setSelectedText] = useState<string>("");
+  const [selectedBlockIdx, setSelectedBlockIdx] = useState<number | null>(null);
   const [selectionNonce, setSelectionNonce] = useState(0);
 
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
-  const [activeView, setActiveView] = useState<"pdf" | "mindmap">("pdf");
+  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("blocks");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const blockReaderRef = useRef<BlockReaderHandle>(null);
 
   const onFile = useCallback(async (file: File) => {
     if (!file) return;
@@ -70,40 +78,68 @@ export default function Home() {
     setOutline(null);
     setOutlineError(null);
     setSelectedText("");
+    setSelectedBlockIdx(null);
     setAttachedImage(null);
+    setPaperMarkdown(null);
+    setPaperBlocks(null);
+    setPaperImagesDir(null);
     setUploadStage("uploading");
+    setMineruStatus("上传中…");
 
-    // Upload to server for parsing + persistence (Feature 3)
+    // Upload to server — quota is checked server-side.
     let serverPaperId: string | null = null;
     let serverParsedText: string | null = null;
+    let serverMarkdown: string | null = null;
+    let serverBlocks: MinerUBlock[] | null = null;
+    let serverImagesDir: string | null = null;
     try {
       const fd = new FormData();
       fd.append("file", file);
       const upRes = await fetch("/api/upload", { method: "POST", body: fd });
-      if (upRes.ok) {
-        const upData = await upRes.json();
-        serverPaperId = upData.paperId;
-        setPaperId(upData.paperId);
-        setUploadStage("parsing");
-        // Poll for parse status
-        for (let i = 0; i < 60; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          const sRes = await fetch(`/api/paper/${upData.paperId}`);
-          if (sRes.ok) {
-            const sData = await sRes.json();
-            if (sData.parseStatus === "done") {
-              serverParsedText = sData.parsedText;
-              break;
-            }
-            if (sData.parseStatus === "error") break;
+      if (upRes.status === 429) {
+        const j = await upRes.json().catch(() => ({}));
+        throw new Error(j.error || "今日解析额度已用尽");
+      }
+      if (!upRes.ok) {
+        const j = await upRes.json().catch(() => ({}));
+        throw new Error(j.error || `Upload failed HTTP ${upRes.status}`);
+      }
+      const upData = await upRes.json();
+      serverPaperId = upData.paperId;
+      setPaperId(upData.paperId);
+      setUploadStage("parsing");
+      setMineruStatus("MinerU 解析中（30-90 秒）…");
+
+      // Poll for parse status
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const sRes = await fetch(`/api/paper/${upData.paperId}`);
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData.parseStatus === "done") {
+            serverParsedText = sData.parsedText;
+            serverMarkdown = sData.markdown;
+            serverBlocks = sData.blocks;
+            serverImagesDir = sData.imagesDir;
+            break;
+          }
+          if (sData.parseStatus === "error") {
+            throw new Error("MinerU 解析失败，已尝试 pdfjs 兜底");
+          }
+          // Still pending/running — update status message
+          if (i % 5 === 0) {
+            setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
           }
         }
       }
     } catch (e) {
-      // server upload failed; fallback to client extraction
+      setOutlineError(e instanceof Error ? e.message : String(e));
+      setUploadStage("idle");
+      setMineruStatus("");
+      return;
     }
 
-    // Use server-parsed text if available; otherwise client extraction
+    // Use server-parsed content if available; otherwise client extraction
     let full = "";
     if (serverParsedText) {
       full = serverParsedText;
@@ -125,9 +161,15 @@ export default function Home() {
         // ignore; we'll still try analyze with empty text
       }
     }
-    setPaperText(full);
 
-    // Trigger analysis
+    // Progressive: set plain text + markdown/blocks as soon as they're available.
+    setPaperText(full);
+    setPaperMarkdown(serverMarkdown);
+    setPaperBlocks(serverBlocks);
+    setPaperImagesDir(serverImagesDir);
+    setMineruStatus("");
+
+    // Trigger analysis using markdown (preferred) or plain text
     setUploadStage("analyzing");
     setOutlineLoading(true);
     try {
@@ -136,6 +178,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: full,
+          markdown: serverMarkdown || undefined,
           title: file.name,
           paperId: serverPaperId,
         }),
@@ -158,8 +201,17 @@ export default function Home() {
     e.target.value = "";
   };
 
+  /** PDF text selection handler (legacy, for the PDF tab). */
   const onTextSelect = useCallback((text: string) => {
     setSelectedText(text);
+    setSelectedBlockIdx(null);
+    setSelectionNonce((n) => n + 1);
+  }, []);
+
+  /** BlockReader paragraph click — fires translation + marks active block. */
+  const onParagraphClick = useCallback((text: string, blockIdx: number) => {
+    setSelectedText(text);
+    setSelectedBlockIdx(blockIdx);
     setSelectionNonce((n) => n + 1);
   }, []);
 
@@ -175,8 +227,12 @@ export default function Home() {
         keywords: child.keywords || [],
         nonce: Date.now(),
       });
-      // Auto-switch to PDF view so the highlight is visible
-      setActiveView("pdf");
+      // Auto-switch to block reader so the highlight is visible
+      setActiveView("blocks");
+      // Also tell BlockReader imperatively (in case it's already mounted)
+      setTimeout(() => {
+        blockReaderRef.current?.scrollToText(child.quote || "", child.keywords || []);
+      }, 50);
     },
     []
   );
@@ -184,10 +240,12 @@ export default function Home() {
   const stageLabel: Record<UploadStage, string> = {
     idle: "",
     uploading: "上传中…",
-    parsing: "服务端解析中…",
+    parsing: "MinerU 解析中…",
     analyzing: "AI 分析中…",
     done: "分析完成",
   };
+
+  const isBusy = outlineLoading || uploadStage === "uploading" || uploadStage === "parsing";
 
   return (
     <div className="h-screen w-screen flex flex-col bg-background overflow-hidden">
@@ -199,7 +257,7 @@ export default function Home() {
           </div>
           <span className="font-semibold text-sm text-background">MedReader Agent</span>
           <span className="text-[10px] opacity-70 hidden sm:inline">
-            深度文献阅读助手
+            MinerU 驱动 · 分块阅读
           </span>
         </div>
 
@@ -207,7 +265,7 @@ export default function Home() {
 
         {/* Upload stage indicator */}
         {uploadStage !== "idle" && uploadStage !== "done" && (
-          <span className="text-[11px] opacity-80 flex items-center gap-1.5 mr-2">
+          <span className="text-[11px] opacity-90 flex items-center gap-1.5 mr-2">
             <Loader2 className="h-3 w-3 animate-spin" />
             {stageLabel[uploadStage]}
           </span>
@@ -225,9 +283,9 @@ export default function Home() {
           size="sm"
           variant="secondary"
           className="h-8 gap-1.5"
-          disabled={outlineLoading || uploadStage === "uploading" || uploadStage === "parsing"}
+          disabled={isBusy}
         >
-          {outlineLoading || uploadStage === "uploading" || uploadStage === "parsing" ? (
+          {isBusy ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <Upload className="h-3.5 w-3.5" />
@@ -287,12 +345,16 @@ export default function Home() {
           </Panel>
           <PanelResizeHandle className="resize-handle-h" />
 
-          {/* Center: PDF / Mindmap tabs */}
+          {/* Center: Blocks / PDF / Mindmap tabs */}
           <Panel defaultSize={52} minSize={30}>
             <div className="h-full flex flex-col bg-muted/30">
-              <Tabs value={activeView} onValueChange={(v) => setActiveView(v as "pdf" | "mindmap")} className="flex-1 flex flex-col min-h-0">
+              <Tabs value={activeView} onValueChange={(v) => setActiveView(v as "blocks" | "pdf" | "mindmap")} className="flex-1 flex flex-col min-h-0">
                 <div className="border-b bg-background/80 backdrop-blur-sm px-3 py-1.5 flex items-center gap-2">
                   <TabsList className="h-8">
+                    <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      分块阅读
+                    </TabsTrigger>
                     <TabsTrigger value="pdf" className="text-xs gap-1.5 h-7">
                       <FileText className="h-3.5 w-3.5" />
                       原文 PDF
@@ -308,6 +370,21 @@ export default function Home() {
                     </span>
                   )}
                 </div>
+
+                <TabsContent value="blocks" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
+                  <BlockReader
+                    ref={blockReaderRef}
+                    fallbackText={paperText}
+                    markdown={paperMarkdown}
+                    blocks={paperBlocks}
+                    imagesDir={paperImagesDir}
+                    loading={uploadStage === "parsing" || uploadStage === "uploading"}
+                    statusMessage={mineruStatus}
+                    onParagraphClick={onParagraphClick}
+                    highlightToken={highlightToken}
+                  />
+                </TabsContent>
+
                 <TabsContent value="pdf" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
                   <PdfViewer
                     fileData={fileData}
@@ -317,6 +394,7 @@ export default function Home() {
                     highlightToken={highlightToken}
                   />
                 </TabsContent>
+
                 <TabsContent value="mindmap" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
                   <MindmapView outline={outline} onChildClick={onChildClick} />
                 </TabsContent>
@@ -332,6 +410,7 @@ export default function Home() {
                 <div className="h-full border-b bg-card">
                   <TranslationPanel
                     selectedText={selectedText}
+                    selectedBlockIdx={selectedBlockIdx}
                     selectionNonce={selectionNonce}
                   />
                 </div>
@@ -343,7 +422,8 @@ export default function Home() {
                     attachedImage={attachedImage}
                     onClearAttachedImage={() => setAttachedImage(null)}
                     selectedText={selectedText}
-                    paperText={paperText}
+                    paperMarkdown={paperMarkdown || undefined}
+                    paperText={paperText || undefined}
                     paperId={paperId}
                   />
                 </div>
@@ -358,7 +438,7 @@ export default function Home() {
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[600px]">
           <div className="bg-destructive/10 border border-destructive/30 text-destructive text-xs px-4 py-2.5 rounded-md shadow-lg flex items-center gap-2">
             <Info className="h-3.5 w-3.5 flex-shrink-0" />
-            <span>大纲生成失败：{outlineError}</span>
+            <span>{outlineError}</span>
             <button
               className="ml-2 underline"
               onClick={() => setOutlineError(null)}
