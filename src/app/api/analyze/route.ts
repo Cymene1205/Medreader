@@ -130,6 +130,117 @@ function extractHeadings(markdown: string): Array<{ level: number; text: string 
   return out;
 }
 
+// Heuristic: does this heading look like English (Latin-only characters)?
+// If so, we need to translate it for the Chinese UI. If it's already
+// Chinese or mixed (e.g. "TNBC 微环境"), keep as-is.
+function looksEnglish(s: string): boolean {
+  if (!s) return false;
+  // Strip superscripts / subscripts markup, math symbols, common punctuation
+  const cleaned = s.replace(/<sup>[^<]*<\/sup>|<sub>[^<]*<\/sub>/g, "")
+    .replace(/[\u00b9\u00b2\u00b3\u2070-\u2079\u2080-\u2089]/g, "")
+    .replace(/[^\p{L}]/gu, "");
+  if (!cleaned) return false;
+  // Count Latin letters vs CJK characters
+  const latin = (cleaned.match(/[A-Za-z]/g) || []).length;
+  const cjk = (cleaned.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  // If there are no CJK characters at all and at least 2 Latin letters, treat as English
+  return cjk === 0 && latin >= 2;
+}
+
+/**
+ * Batch-translate paper headings to Chinese.
+ *
+ * - Headings that already contain Chinese (or are pure numbers/symbols)
+ *   pass through unchanged.
+ * - English headings are sent to the LLM in a single batch call with the
+ *   instruction "translate each to a concise Chinese heading; preserve any
+ *   HTML tags like <sup> as-is".
+ * - The original verbatim text is preserved in `origText` so the click
+ *   handler in HeadingNavigator can still find the exact matching block.
+ * - If translation fails for any reason, we fall back to the original text
+ *   so the navigator still works (just shows English).
+ *
+ * Returns the same array shape as extractHeadings plus an `origText`
+ * field on each item.
+ */
+async function translateHeadings(
+  headings: Array<{ level: number; text: string }>,
+  cfg: ReturnType<typeof resolveLLMConfig>,
+  userId: string | null,
+  paperId: string | null
+): Promise<Array<{ level: number; text: string; origText: string }>> {
+  if (headings.length === 0) return [];
+
+  // Identify which headings need translation.
+  const toTranslate: Array<{ idx: number; text: string }> = [];
+  headings.forEach((h, i) => {
+    if (looksEnglish(h.text)) toTranslate.push({ idx: i, text: h.text });
+  });
+
+  // Nothing to translate → return as-is with origText mirroring text.
+  if (toTranslate.length === 0) {
+    return headings.map((h) => ({ ...h, origText: h.text }));
+  }
+
+  // Build a single LLM call. We send an indexed JSON array so the model
+  // returns a parallel array of Chinese translations, which we map back
+  // to the original indices.
+  const inputJson = JSON.stringify(toTranslate.map((t) => ({ idx: t.idx, text: t.text })));
+  const systemPrompt =
+    "你是一个学术论文标题翻译助手。用户会给你一个 JSON 数组，每个元素含 idx 和 text 字段。" +
+    "text 是英文学术论文的章节标题（可能含 <sup>...</sup> 或 <sub>...</sub> HTML 标签，请原样保留）。" +
+    "请把每个 text 翻译成简洁的中文学术标题，保持学术性和原文含义。" +
+    "输出严格 JSON：一个对象，含 translations 数组，每个元素 {idx, text}，text 是翻译后的中文。" +
+    "不要任何额外文字，不要 markdown 代码块。";
+
+  const translations = new Map<number, string>();
+  try {
+    const raw = await callLLM(
+      cfg,
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: inputJson },
+      ],
+      {
+        json: true,
+        temperature: 0.2,
+        maxTokens: 4000,
+        usage: {
+          userId,
+          action: "translate_headings",
+          paperId: typeof paperId === "string" ? paperId : null,
+        },
+      }
+    );
+    const parsed = parseJsonLoose(raw) as any;
+    const arr: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.translations)
+      ? parsed.translations
+      : [];
+    for (const item of arr) {
+      if (item && typeof item.idx === "number" && typeof item.text === "string") {
+        translations.set(item.idx, item.text);
+      }
+    }
+  } catch (e) {
+    console.warn("[analyze] heading translation failed, falling back to original:", e);
+  }
+
+  // Build the final list. If we got a translation for an index, use it;
+  // otherwise fall back to the original text. Always set origText to the
+  // verbatim paper heading so the navigator's click handler can still
+  // find the exact block.
+  return headings.map((h, i) => {
+    const translated = translations.get(i);
+    return {
+      level: h.level,
+      text: translated || h.text,
+      origText: h.text,
+    };
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const cfg = resolveLLMConfig(req);
@@ -217,10 +328,18 @@ export async function POST(req: NextRequest) {
 
     const sections = await Promise.all(sectionPromises);
 
-    // Also extract the paper's verbatim H2/H3 headings from MinerU markdown.
+    // Also extract the paper's verbatim H1/H2/H3 headings from MinerU markdown.
     // These are precise anchor points — clicking one jumps to the exact
     // paragraph in the block reader.
-    const headings = markdown ? extractHeadings(markdown).slice(0, 80) : [];
+    //
+    // The headings come straight from the paper, so for English papers they
+    // will be English (e.g. "Results", "Discussion"). The user wants the
+    // 原文段落导航 panel to show Chinese, so we batch-translate every heading
+    // to Chinese via a single LLM call. The original (verbatim) text is
+    // preserved in `origText` so the click handler can still find the exact
+    // matching block in the block reader.
+    const rawHeadings = markdown ? extractHeadings(markdown).slice(0, 80) : [];
+    const headings = await translateHeadings(rawHeadings, cfg, userId, paperId);
 
     // Track event (best-effort)
     try {
@@ -233,7 +352,7 @@ export async function POST(req: NextRequest) {
       outline: {
         title: paperTitle,
         sections,
-        headings, // ← new: verbatim H2/H3 headings from the paper
+        headings,
       },
     });
   } catch (e) {

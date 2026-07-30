@@ -52,24 +52,33 @@ const ROOT_COLOR = "#475569";
 // Default MiniMap fallback color
 const MINIMAP_FALLBACK = "#94A3B8";
 
-// Node sizing used both for rendering hints and dagre layout
-const ROOT_SIZE = { width: 220, height: 72 };
-const SECTION_SIZE = { width: 280, height: 160 };
-const CHILD_SIZE = { width: 220, height: 80 };
+// Node sizing used both for rendering hints and dagre layout.
+//
+// These dimensions MUST match the actual rendered node sizes (set in the
+// `style` prop of the node and in `MindmapView`'s DimNode component).
+// If dagre thinks a node is smaller than it actually is, sibling nodes
+// will visually overlap. The previous values were too small for sections
+// that include title + 2-line summary + 3 keyPoints bullets, causing the
+// classic "box overlap" the user reported on long outlines.
+const ROOT_SIZE = { width: 220, height: 90 };
+const SECTION_SIZE = { width: 300, height: 220 };
+const CHILD_SIZE = { width: 240, height: 110 };
 
 // Dagre layout configuration.
 // `nodesep` = vertical gap between sibling nodes in the same rank
 // `ranksep` = horizontal gap between ranks (root → section → child)
 //
-// Tuned to avoid box overlap when sections have many children. The previous
-// values (nodesep: 28, ranksep: 90) caused sibling boxes to visually collide
-// when a section had 4+ children — bumped to nodesep: 60, ranksep: 140.
+// Tuned to avoid box overlap when sections have many children. The
+// previous values (nodesep: 28, ranksep: 90) caused sibling boxes to
+// visually collide when a section had 4+ children. Bumped substantially
+// to give each box clear separation even when the section node's actual
+// rendered height exceeds the dagre hint.
 const DAGRE_CONFIG = {
   rankdir: "LR" as const,
-  nodesep: 60,
-  ranksep: 140,
-  marginx: 32,
-  marginy: 32,
+  nodesep: 80,
+  ranksep: 180,
+  marginx: 48,
+  marginy: 48,
 };
 
 function dimColorFor(index: number): string {
@@ -130,6 +139,7 @@ export function outlineToFlow(
       fontWeight: 600,
       borderRadius: "8px",
       width: `${ROOT_SIZE.width}px`,
+      minHeight: `${ROOT_SIZE.height}px`,
     },
   });
 
@@ -163,6 +173,7 @@ export function outlineToFlow(
         fontWeight: 500,
         borderRadius: "8px",
         width: `${SECTION_SIZE.width}px`,
+        minHeight: `${SECTION_SIZE.height}px`,
       },
     });
 
@@ -199,6 +210,7 @@ export function outlineToFlow(
           fontWeight: 500,
           borderRadius: "8px",
           width: `${CHILD_SIZE.width}px`,
+          minHeight: `${CHILD_SIZE.height}px`,
         },
       });
 

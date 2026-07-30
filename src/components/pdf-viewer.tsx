@@ -446,18 +446,34 @@ function ImageSelectOverlay({
     try {
       const page = await pdfDoc.getPage(pageNumber);
       const viewport = page.getViewport({ scale });
-      // Render full page to offscreen canvas at devicePixelRatio
+      // Render full page to offscreen canvas at devicePixelRatio.
+      //
+      // CRITICAL: We must set the ctx transform to `ratio` so the PDF
+      // (which renders in logical units of viewport.width ×
+      // viewport.height) gets scaled up to fill the full physical
+      // canvas (viewport.width * ratio × viewport.height * ratio).
+      // Without this transform, the rendered content would only fill
+      // the top-left corner of the canvas at 1/ratio scale, and the
+      // subsequent crop (which uses ratio-scaled coordinates) would
+      // extract mostly blank pixels OR — when the crop region extends
+      // past the actually-rendered area — fall back to grabbing the
+      // entire visible page from the main canvas instead.
       const ratio = window.devicePixelRatio || 1;
       const off = document.createElement("canvas");
       off.width = Math.floor(viewport.width * ratio);
       off.height = Math.floor(viewport.height * ratio);
       const offCtx = off.getContext("2d")!;
+      offCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
       await page.render({
         canvasContext: offCtx,
         viewport,
         canvas: off,
       }).promise;
-      // Crop the rectangle (in CSS pixels, matching overlay coords)
+
+      // Crop the rectangle. rect.x/y/w/h are in CSS pixels relative to
+      // the overlay (which is inset-0 on pageDiv), so they match the
+      // PDF viewport's logical coordinate system. Multiply by ratio
+      // to get physical-pixel offsets into the offscreen canvas.
       const sx = Math.max(0, Math.floor(rect.x * ratio));
       const sy = Math.max(0, Math.floor(rect.y * ratio));
       const sw = Math.min(off.width - sx, Math.floor(rect.w * ratio));
@@ -470,6 +486,10 @@ function ImageSelectOverlay({
       out.width = sw;
       out.height = sh;
       const outCtx = out.getContext("2d")!;
+      // Reset transform on the output canvas so drawImage uses raw
+      // physical pixel coordinates (otherwise the ratio transform
+      // would scale the source image down incorrectly).
+      outCtx.setTransform(1, 0, 0, 1, 0, 0);
       outCtx.drawImage(off, sx, sy, sw, sh, 0, 0, sw, sh);
       const b64 = out.toDataURL("image/png");
       onCapture(b64);

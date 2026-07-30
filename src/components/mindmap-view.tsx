@@ -53,7 +53,8 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
         style={{
           background: bg,
           border: `1px solid ${bg}`,
-          width: 180,
+          width: 220,
+          minHeight: 90,
           boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
         }}
       >
@@ -72,7 +73,8 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
         style={{
           border: `1px solid ${color}`,
           borderLeft: `4px solid ${color}`,
-          width: 280,
+          width: 300,
+          minHeight: 220,
           boxShadow: selected ? `0 0 0 2px ${color}44` : undefined,
         }}
       >
@@ -125,7 +127,8 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
       style={{
         background: bg,
         border: `1px solid ${bg}`,
-        width: 220,
+        width: 240,
+        minHeight: 110,
         boxShadow: selected ? "0 0 0 2px #94A3B855" : undefined,
       }}
     >

@@ -323,16 +323,27 @@ export default function Home() {
   );
 
   /**
-   * Heading-navigator click — verbatim paper H2/H3 heading.
-   * Use the heading text itself as the quote (so the fuzzy matcher will find
-   * the exact heading block in the block reader). Don't force-switch tabs.
+   * Heading-navigator click — translated Chinese heading label.
+   *
+   * The displayed label `h.text` is the Chinese translation (so the user
+   * sees 中文 in the 原文段落导航 panel). The block reader matches against
+   * the paper's verbatim markdown text, so we must use `h.origText`
+   * (the original English/verbatim heading) when calling scrollToText —
+   * otherwise the fuzzy matcher wouldn't find the heading block in the
+   * (English) paper.
+   *
+   * If origText is missing (older analyze response), fall back to text.
    */
   const onHeadingClick = useCallback(
     (h: PaperHeading) => {
+      // For active-state matching in HeadingNavigator we use the displayed
+      // text (so the row highlights when the user re-clicks the same item).
       setActiveHeadingText(h.text);
       setActiveChildId(undefined);
+      // But for block matching, prefer the verbatim origText.
+      const matchText = h.origText || h.text;
       setHighlightToken({
-        quote: h.text,
+        quote: matchText,
         keywords: [],
         nonce: Date.now(),
       });
@@ -340,7 +351,7 @@ export default function Home() {
         setActiveView("blocks");
       }
       setTimeout(() => {
-        blockReaderRef.current?.scrollToText(h.text, []);
+        blockReaderRef.current?.scrollToText(matchText, []);
       }, 50);
     },
     [activeView]

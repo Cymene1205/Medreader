@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 
 export type PaperHeading = {
   level: number; // 1, 2, or 3
-  text: string; // verbatim heading text (no leading #)
+  text: string; // Chinese-translated label (for display)
+  origText?: string; // verbatim original heading (for block matching)
 };
 
 type Props = {

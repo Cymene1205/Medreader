@@ -41,7 +41,8 @@ export type OutlineSection = {
 
 export type PaperHeading = {
   level: number; // 1, 2, or 3 — verbatim H1/H2/H3 from MinerU markdown
-  text: string;
+  text: string; // Chinese-translated label (for display)
+  origText?: string; // verbatim original heading (for block matching)
 };
 
 export type Outline = {

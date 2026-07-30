@@ -468,3 +468,65 @@ Files Modified:
 
 Files Restored:
 - src/app/api/upload/route.ts（从 git 60bdfb1 恢复，MinerU 驱动版）
+
+---
+Task ID: v10-four-bugs
+Agent: main (Super Z)
+Task: 修复四个问题：框选区域上传整张图、管理后台崩溃、思维导图框框重叠、原文段落导航用英文
+
+Work Log:
+- 截图诊断：用 z-ai vision 分析 截屏2026-07-30 23.20.39.png，确认了思维导图节点重叠（特别是 SiglecF<sup>hi</sup> 节点）+ HTML 标签未渲染问题
+
+- Bug 1: 框选区域上传整张图 — src/components/pdf-viewer.tsx ImageSelectOverlay
+  - 根因：offscreen canvas 没有调用 `offCtx.setTransform(ratio, 0, 0, ratio, 0, 0)`
+  - PDF 渲染到 logical viewport.width × viewport.height 坐标系，但 canvas 物理尺寸是 viewport.width*ratio × viewport.height*ratio
+  - 没有 transform 时渲染内容只填满左上 1/ratio 区域，crop 用 ratio 缩放后的坐标 sx/sy/sw/sh 时大部分落在空白处
+  - 修复：在 offCtx 上 setTransform(ratio,0,0,ratio,0,0)，在 outCtx 上 setTransform(1,0,0,1,0,0) 重置
+
+- Bug 2: 管理后台崩溃 — src/lib/auth.ts + src/middleware.ts
+  - 根因：next-auth 没有 NEXTAUTH_SECRET，JWT 解密抛 JWEDecryptionFailed，withAuth 把所有 /admin/* 重定向到 /api/auth/error?error=Configuration
+  - 修复 1：auth.ts 加 resolveAuthSecret() 函数，env 缺失时从 DATABASE_URL 派生稳定 secret
+  - 修复 2：middleware.ts 不再用 withAuth，改用纯 cookie 检查（next-auth.session-token 或 __Secure-next-auth.session-token），有 cookie 放行，没有就重定向 /login。真正的 role 检查仍在 API route handler 里 getServerSession 完成
+  - 验证：admin 307 → /login?callbackUrl=%2Fadmin（cookie 缺失时正确重定向，不再去 error 页面）
+
+- Bug 3: 思维导图框框重叠 — src/lib/outline-to-flow.ts + src/components/mindmap-view.tsx
+  - 根因：dagre 用固定 SECTION_SIZE.height=160，但实际 section 节点（标题+2行summary+3个keyPoints）渲染高度经常超过 160px，造成同 rank 兄弟节点视觉重叠
+  - 修复 1：调大 dagre 参数：nodesep 60→80（兄弟间距），ranksep 140→180（层级间距），marginx/y 32→48
+  - 修复 2：调大节点尺寸 hint 让 dagre 知道实际占用空间：
+    - ROOT_SIZE: 220×72 → 220×90
+    - SECTION_SIZE: 280×160 → 300×220
+    - CHILD_SIZE: 220×80 → 240×110
+  - 修复 3：所有节点的 style 加 `minHeight` 防止 dagre hint 与实际渲染脱节
+  - 修复 4：mindmap-view.tsx 的 DimNode 同步更新 width（180→220, 280→300, 220→240）+ minHeight（90/220/110）
+
+- Bug 4: 原文段落导航用英文 — src/app/api/analyze/route.ts + src/components/heading-navigator.tsx + outline-panel.tsx + page.tsx
+  - 根因：extractHeadings 直接从 MinerU markdown 抽取 verbatim H1/H2/H3，英文论文就是英文标题
+  - 修复 1：analyze route 新增 translateHeadings() 函数：
+    - looksEnglish() 启发式判断：清理 <sup>/<sub> 和 unicode 上下标后，若无 CJK 且 ≥2 个 Latin 字母则视为英文
+    - 单次 LLM 调用批量翻译所有英文标题，保留 <sup>/<sub> HTML 标签
+    - 输出每个 heading 含 {level, text (中文), origText (verbatim 英文)}
+    - 翻译失败时回退到原文，origText 始终保留用于 block 匹配
+    - 新增 token usage action: "translate_headings"
+  - 修复 2：PaperHeading 类型在 outline-panel.tsx 和 heading-navigator.tsx 都加 `origText?: string` 字段
+  - 修复 3：page.tsx onHeadingClick 优先用 h.origText 作 quote 调用 scrollToText（block reader 匹配的是论文 verbatim 文本），display text 仍用 h.text（中文）
+  - 注：HTML 标签（<sup>/<sub>）在 HeadingNavigator 渲染时是纯文本，因为 button.textContent 会转义 — 这与思维导图的渲染问题不冲突（思维导图是另一个 bug，本轮未触及）
+
+Stage Summary:
+- ✅ 框选区域：crop 现在用 ratio transform 后的 canvas，只截取选区矩形，不再上传整张图
+- ✅ 管理后台：自定义 middleware 不依赖 NEXTAUTH_SECRET 解密 JWT，admin 路由不再 307 到 error 页面；auth.ts 也加了 secret 兜底
+- ✅ 思维导图：dagre 间距和节点尺寸都按实际渲染高度调大，section 节点不再被相邻 child 覆盖
+- ✅ 原文段落导航：英文论文的 H1/H2/H3 标题自动翻译为中文显示，点击仍能精确跳转到原文 block（用 origText 匹配）
+- tsc --noEmit: 0 errors in src/
+- home 200, admin 307 → /login（cookie 缺失时正确）
+- /api/analyze 测试通过（200，6 维度 sections + 中文标题 headings）
+
+Files Modified:
+- src/components/pdf-viewer.tsx（offCtx.setTransform + outCtx.setTransform）
+- src/lib/auth.ts（resolveAuthSecret + secret 兜底）
+- src/middleware.ts（替换 withAuth 为自定义 cookie 检查）
+- src/lib/outline-to-flow.ts（dagre 间距 + 节点尺寸 + minHeight）
+- src/components/mindmap-view.tsx（DimNode width + minHeight 同步）
+- src/app/api/analyze/route.ts（translateHeadings + looksEnglish）
+- src/components/outline-panel.tsx（PaperHeading.origText）
+- src/components/heading-navigator.tsx（PaperHeading.origText）
+- src/app/page.tsx（onHeadingClick 用 origText 做 block 匹配）
