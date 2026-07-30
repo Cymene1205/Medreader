@@ -56,7 +56,7 @@ export function Hero() {
             {/* CTA */}
             <div className="flex flex-wrap items-center gap-3 mt-10">
               <a
-                href="/app"
+                href="/register"
                 className="group inline-flex items-center gap-2 px-6 py-3.5 bg-[var(--burgundy)] text-[var(--paper)] font-sans-ui text-sm tracking-[0.08em] uppercase rounded-sm hover:bg-[var(--burgundy-deep)] transition-all shadow-md hover:shadow-lg"
               >
                 立即开始阅读

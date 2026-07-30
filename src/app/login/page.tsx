@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/";
+  const callbackUrl = searchParams.get("callbackUrl") || "/app";
 
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");

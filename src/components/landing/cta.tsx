@@ -46,7 +46,7 @@ export function CTA() {
           <div className="col-span-12 lg:col-span-5">
             <div className="space-y-3">
               <a
-                href="/app"
+                href="/register"
                 className="group flex items-center justify-between gap-4 px-6 py-5 bg-[var(--paper)] text-[var(--burgundy-deep)] rounded-sm hover:bg-[var(--gold)] hover:text-[var(--burgundy-deep)] transition-colors shadow-lg"
               >
                 <div className="flex items-center gap-3">

@@ -82,7 +82,7 @@ export default function RegisterPage() {
         router.push("/login");
         return;
       }
-      router.push("/");
+      router.push("/app");
       router.refresh();
     } catch (e) {
       setError("注册失败，请稍后重试");
