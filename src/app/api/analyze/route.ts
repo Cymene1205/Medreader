@@ -132,26 +132,36 @@ function extractHeadings(markdown: string): Array<{ level: number; text: string 
 }
 
 /**
- * Analyse the raw MinerU heading list and produce a clean 2-level paper
- * structure (major sections + their sub-sections), with English headings
- * translated to Chinese.
+ * Analyse the raw MinerU heading list AND a slice of the paper's full text
+ * to produce a clean 2-level paper structure (major sections + their
+ * sub-sections), with English headings translated to Chinese.
  *
- * Why we need this: MinerU extracts H1/H2/H3 from the PDF markdown, but
- * the levels are often misleading. A typical Cell Press paper has
- * "Novelty and Significance" as H1 with "已知 / 本文贡献 / 非标准缩写 /
- * 方法 / 数据可用性 / 结果 / 梗死心脏中... / SiglecF..." all as H2
- * underneath — even though "梗死心脏中..." and "SiglecF..." are actually
- * Results sub-sections that belong to a "结果" H1, not siblings of "已知".
+ * Why we need BOTH headings and full text (per user request "基于原文分析"):
+ * MinerU's H1/H2/H3 levels are often misleading — a Cell Press paper puts
+ * "Novelty and Significance" as H1 with "已知 / 方法 / 结果 / 梗死心脏中... /
+ * SiglecF..." all as H2 underneath. Looking at heading text alone, the LLM
+ * can guess that "梗死心脏中..." is a Results sub-section, but it's much
+ * more reliable when the LLM can also read the surrounding paragraph text
+ * to confirm: "is this heading followed by experimental results, or by
+ * journal boilerplate like author contributions?"
+ *
+ * So we pass BOTH:
+ *   - the verbatim heading list (level + text, capped at 150 entries)
+ *   - the first ~8000 chars of the paper's markdown body (contains every
+ *     heading + the first 1-2 sentences after each, which is enough
+ *     context for the LLM to classify each heading correctly)
  *
  * The LLM is asked to:
- *   1. Identify real major sections (Introduction, Results, Discussion,
- *      Methods, ...) and treat them as top-level nodes.
- *   2. Identify journal boilerplate (Novelty and Significance, Highlights,
- *      Data Availability, Abbreviations, Author Contributions, ...) and
- *      tag them as `kind: "metadata"` so the navigator can hide them.
- *   3. Promote mis-nested sub-sections to their proper parent. If the
+ *   1. Read the heading list AND the body slice to understand the paper's
+ *      true structure.
+ *   2. Identify real major sections (Introduction, Results, Discussion,
+ *      Methods, Conclusion, Figure Legends) → kind="major".
+ *   3. Identify journal boilerplate (Novelty and Significance, Highlights,
+ *      Abstract, Data Availability, Abbreviations, Author Contributions,
+ *      Acknowledgments, ...) → kind="metadata".
+ *   4. Promote mis-nested sub-sections to their proper parent. If the
  *      paper has Results sub-sections but no Results H1, synthesise one.
- *   4. Translate every English heading to concise Chinese, preserving
+ *   5. Translate every English heading to concise Chinese, preserving
  *      any <sup>/<sub> HTML tags verbatim.
  *
  * On any failure we fall back to a flat list (every heading becomes a
@@ -160,21 +170,34 @@ function extractHeadings(markdown: string): Array<{ level: number; text: string 
 async function analyzeHeadings(
   headings: Array<{ level: number; text: string }>,
   paperTitle: string,
+  paperBody: string,
   cfg: ReturnType<typeof resolveLLMConfig>,
   userId: string | null,
   paperId: string | null
 ): Promise<StructuredHeading[]> {
   if (headings.length === 0) return [];
 
+  // Pass up to ~8000 chars of the paper body as context. This is enough
+  // to cover every heading + 1-2 sentences after each, which lets the LLM
+  // classify headings by what follows them (boilerplate paragraphs vs
+  // experimental results) rather than by heading text alone.
+  const bodySlice =
+    paperBody.length > 8000 ? paperBody.slice(0, 8000) + "\n...[truncated]" : paperBody;
+
   const inputJson = JSON.stringify({
     paperTitle,
+    bodySlice,
     headings: headings.map((h) => ({ level: h.level, text: h.text })),
   });
 
   const systemPrompt =
-    "你是一个学术论文结构分析助手。用户会给你一篇论文的原始标题列表（从 PDF 解析的 markdown 提取的 H1/H2/H3），" +
-    "每个标题含 level（1/2/3）和 text（原文标题，可能是英文）。" +
-    "你的任务是分析这组标题，识别论文的真正结构，输出一个清晰的 2 级层级（主要章节 + 子小节），同时把英文标题翻译为中文。\n\n" +
+    "你是一个学术论文结构分析助手。用户会给你一篇论文的：\n" +
+    "(a) 原始标题列表（从 PDF 解析的 markdown 提取的 H1/H2/H3，含 level 和 text）；\n" +
+    "(b) 论文 markdown 正文的前 ~8000 字符（含每个标题及其后的 1-2 句话），作为上下文。\n\n" +
+    "你的任务是结合标题列表和正文上下文，识别论文的真正结构，输出一个清晰的 2 级层级（主要章节 + 子小节），同时把英文标题翻译为中文。\n\n" +
+    "【关键】必须基于正文上下文判断每个标题的真正性质，不要只看标题文本：\n" +
+    "- 一个标题后面如果跟着实验数据/图表描述/具体研究发现，它就是真正的 results 子小节（即使被嵌套在 Novelty and Significance 下）；\n" +
+    "- 一个标题后面如果跟着期刊样板文字（如 \"this study adds...\" / \"data are available...\" / \"authors contributed...\"），它就是 metadata。\n\n" +
     "分析规则：\n" +
     "1. 识别论文的主要章节（kind=\"major\"）。常见主要章节关键词（中英文）：\n" +
     "   引言/Introduction/Background/背景；方法/Methods/STAR Methods/Experimental Procedures；" +
@@ -186,10 +209,10 @@ async function analyzeHeadings(
     "致谢/Acknowledgments；利益冲突/Competing Interests；补充材料/Supplemental Information；" +
     "非标准缩写/Non-standard Abbreviations；已知/What is known；本文贡献的新信息/What this study adds。\n" +
     "   把这些作为顶层 metadata 节点（children 通常为空）。\n\n" +
-    "3. 处理层级错位：\n" +
-    "   - 如果某主要章节（如\"结果\"）在原 markdown 中被错误地嵌套在元数据 H1 下，但你判断它应该是主要章节，请将其提升为 kind=\"major\" 顶层节点。\n" +
-    "   - 如果原文缺少主要章节总标题（例如直接列出了\"梗死心脏中...\"\"SiglecF...\"等结果子小节，但没有\"结果\"总标题），请创建一个 kind=\"major\" 的\"结果\"节点，把那些子项归入其 children。\n" +
-    "   - 如果原 H2/H3 是某个 major 的子小节，请将其放入对应 major 的 children 数组。\n" +
+    "3. 处理层级错位（必须基于正文判断，不要只看 markdown level）：\n" +
+    "   - 如果某标题在原 markdown 中是 H2，但其内容明显是主要章节（如\"结果\"后面跟着多个结果子小节），请将其提升为 kind=\"major\" 顶层节点。\n" +
+    "   - 如果原文缺少主要章节总标题（例如直接列出了\"梗死心脏中...\"\"SiglecF...\"等结果子小节，但没有\"结果\"总标题），请合成一个 kind=\"major\" 的\"结果\"节点，把那些子项归入其 children。\n" +
+    "   - 子小节识别特征：通常带数字编号（如 2.1 / 2.1.1）或描述性短语（如 \"梗死心脏中...\" \"SiglecF...\" \"抗Ly6G...\"），且后面跟着具体实验数据；把它们放入对应 major 的 children 数组。\n" +
     "   - 元数据节点的子项（如\"新颖性与意义\"下的\"已知\"\"本文贡献的新信息\"\"非标准缩写\"等）保留在 metadata 节点的 children 中，不要拆出去。\n\n" +
     "4. 翻译：把每个英文标题翻译为简洁中文学术标题；保留 <sup>...</sup> 和 <sub>...</sub> HTML 标签原样不翻译；已经是中文的标题保持不变。\n\n" +
     "5. 排序：major 节点按论文出现顺序排列在前；metadata 节点排在最后；每个节点的 children 按论文出现顺序排列。\n\n" +
@@ -217,7 +240,7 @@ async function analyzeHeadings(
       {
         json: true,
         temperature: 0.1,
-        maxTokens: 6000,
+        maxTokens: 8000,
         usage: {
           userId,
           action: "analyze_headings",
@@ -375,10 +398,14 @@ export async function POST(req: NextRequest) {
     //
     // The output is a 2-level `structuredHeadings` tree that
     // HeadingNavigator renders directly.
-    const rawHeadings = markdown ? extractHeadings(markdown).slice(0, 80) : [];
+    // Cap at 150 headings — long papers with many sub-sub-sections need
+    // the full list to correctly classify each one. 80 was too aggressive
+    // for systematic reviews / long methods sections.
+    const rawHeadings = markdown ? extractHeadings(markdown).slice(0, 150) : [];
     const structuredHeadings = await analyzeHeadings(
       rawHeadings,
       paperTitle,
+      sourceText,
       cfg,
       userId,
       paperId

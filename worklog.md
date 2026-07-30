@@ -650,3 +650,49 @@ Files Modified:
 - src/app/api/analyze/route.ts（analyzeHeadings 替换 translateHeadings，移除 looksEnglish）
 - src/components/heading-navigator.tsx（重写为渲染 structuredHeadings 2 级树）
 - src/app/page.tsx（交换 tab 顺序 + onHeadingClick 签名更新 + 移除未用 import）
+
+---
+Task ID: v13-heading-analysis-context
+Agent: main (Super Z)
+Task: 继续 v12 任务 — 强化 analyzeHeadings 让 LLM "基于原文分析"文章结构
+
+Work Log:
+- 诊断：v12 已实现 analyzeHeadings() 让 LLM 分析 heading 结构，但用户反馈"基于原文分析"仍未完全实现
+  - 现状：inputJson 只包含 {paperTitle, headings:[{level,text}]}，LLM 只能看 heading 文本
+  - 问题：当 heading 文本歧义（"X" 单独成行 vs 嵌套在 Novelty and Significance 下），LLM 无法判断该 heading 后面跟的是实验数据还是期刊样板
+  - 影响：复杂论文（Cell Press、Nature 系列）的子小节归位准确率不够
+
+- Fix 1: analyzeHeadings 函数签名增加 paperBody 参数 — src/app/api/analyze/route.ts
+  - 新增第三个参数 paperBody: string（论文 markdown 全文）
+  - 调用处传入 sourceText（已是 markdown 优先 plain text 兜底）
+  - 函数内部把 paperBody 切片到前 8000 字符（够覆盖每个 heading + 后续 1-2 句话）
+  - inputJson 结构：{paperTitle, bodySlice, headings:[{level,text}]}
+
+- Fix 2: systemPrompt 重写，强调"基于正文上下文"判断 — src/app/api/analyze/route.ts
+  - 开篇明确输入是 (a) 标题列表 + (b) 正文 8000 字符上下文
+  - 新增【关键】段：必须基于正文上下文判断，不要只看标题文本
+    - 标题后跟实验数据/图表描述 → results 子小节（即使嵌在 metadata 下）
+    - 标题后跟期刊样板（"this study adds..." / "data are available..." / "authors contributed..."） → metadata
+  - 规则 3 改为"必须基于正文判断，不要只看 markdown level"
+  - 新增子小节识别特征：数字编号（2.1/2.1.1）或描述性短语（"梗死心脏中..." / "SiglecF..." / "抗Ly6G..."）+ 后跟具体实验数据
+
+- Fix 3: heading 数量上限 80→150 — src/app/api/analyze/route.ts
+  - 长论文（systematic review / 长 methods 章节）经常超过 80 个 heading
+  - 上限 80 会截断尾部 metadata 节点，导致结构分析不完整
+  - 上限 150 足够覆盖绝大多数生物医学论文
+
+- Fix 4: maxTokens 6000→8000 — src/app/api/analyze/route.ts
+  - 输入更丰富（增加 8000 字符 bodySlice + 150 个 heading）→ 输出可能更长
+  - 8000 tokens 足够容纳 50+ major 章节 + 各自 children
+
+Stage Summary:
+- ✅ LLM 现在能"基于原文"分析文章结构（看到 heading + 正文 8000 字符上下文）
+- ✅ Prompt 明确要求"看标题后面跟什么内容"判断 major vs metadata vs 子小节
+- ✅ 子小节识别规则更明确（数字编号 / 描述性短语 + 实验数据）
+- ✅ 长论文不再因 heading 上限 80 被截断
+- tsc --noEmit: 0 errors in src/
+- ESLint: 0 errors
+- dev server: GET / 200
+
+Files Modified:
+- src/app/api/analyze/route.ts（analyzeHeadings 签名+prompt+上限+maxTokens）
