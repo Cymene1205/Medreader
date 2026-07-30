@@ -1,0 +1,50 @@
+# Build artifacts
+.next
+.next/cache
+dist
+build
+
+# Dependencies (will be installed fresh in the image)
+node_modules
+
+# Runtime data — must come from mounted volumes, not the image
+db
+uploads
+*.db
+*.db-journal
+
+# Dev / IDE / logs
+.git
+.gitignore
+.vscode
+.idea
+.dev.log
+dev.log
+server.log
+*.log
+
+# Tooling artifacts
+agent-ctx
+tool-results
+tests
+skills
+examples
+scripts/medreader-*.log
+
+# Already-built standalone output (will be re-built inside Docker)
+.next/standalone
+
+# Local env files (the container gets env from docker-compose env_file)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Docs / work logs (not needed at runtime)
+worklog.md
+README-DEPLOY.md
+DEPLOY.md

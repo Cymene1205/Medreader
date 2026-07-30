@@ -1,0 +1,68 @@
+# =============================================================================
+# MedReader Agent — Docker Compose production deployment
+# =============================================================================
+# Brings up the Next.js standalone server on port 3000 with two persistent
+# volumes: ./data (SQLite db) and ./uploads (user PDFs + extracted images).
+#
+# Usage (on the server):
+#   1. Put this repo at /opt/medreader (or wherever)
+#   2. cp .env.production.example .env.production  # then edit values
+#   3. docker compose up -d --build
+#   4. Visit http://<server-ip>:3000
+#
+# Re-build after code changes:
+#   docker compose up -d --build
+#
+# View logs:
+#   docker compose logs -f
+#
+# Stop:
+#   docker compose down
+# =============================================================================
+
+services:
+  medreader:
+    # Build from the Dockerfile next to this compose file.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # If you prefer to pull a pre-built image from a registry later,
+    # swap `build:` for `image: your-registry/medreader:latest`.
+    container_name: medreader
+    restart: unless-stopped
+
+    # Map container port 3000 → host port 3000.
+    # To put it behind a reverse proxy on 80/443 later, change to
+    # "127.0.0.1:3000:3000" and proxy from Caddy/Nginx.
+    ports:
+      - "3000:3000"
+
+    # Load secrets + config from .env.production (kept out of the image).
+    env_file:
+      - .env.production
+
+    # Volumes: data that must survive container rebuilds.
+    #   /app/data      ← SQLite database (custom.db)
+    #   /app/uploads   ← user-uploaded PDFs + MinerU-extracted images
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+
+    # Health check — hit the home page; if it returns 200 the server is up.
+    # `start_period: 60s` gives Next.js + Prisma time to boot on first run.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+    # Cap resources so a runaway upload can't OOM the 2 GiB host.
+    # 1.5 GiB is plenty for production Next.js + a single MinerU task.
+    deploy:
+      resources:
+        limits:
+          memory: 1500M
+          cpus: "1.5"
+        reservations:
+          memory: 256M

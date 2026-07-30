@@ -9,9 +9,13 @@ export const runtime = "nodejs";
  *
  * Serves an image extracted by MinerU to disk. The `dir` parameter is
  * the absolute path stored in Paper.imagesDir; we validate it lives
- * under /home/z/my-project/uploads/ to prevent directory traversal.
+ * under the configured uploads root to prevent directory traversal.
+ *
+ * The uploads root is configurable via UPLOADS_DIR env var so this
+ * route works in dev (sandbox /home/z/my-project/uploads) and Docker
+ * (container /app/uploads) alike.
  */
-const ALLOWED_ROOT = "/home/z/my-project/uploads";
+const ALLOWED_ROOT = process.env.UPLOADS_DIR || "/home/z/my-project/uploads";
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);

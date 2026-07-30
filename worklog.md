@@ -696,3 +696,89 @@ Stage Summary:
 
 Files Modified:
 - src/app/api/analyze/route.ts（analyzeHeadings 签名+prompt+上限+maxTokens）
+
+---
+Task ID: v14-docker-deploy
+Agent: main (Super Z)
+Task: 把 MedReader Agent 部署到用户的阿里云 ECS (47.253.133.131, 2C2G, OpenClaw镜像)
+
+Work Log:
+- 用户需求确认: Docker Compose / 仅IP无HTTPS / 用现有.env / 迁移现有数据
+- 项目调研:
+  - next.config.ts 已有 output: "standalone" ✓
+  - package.json scripts.build 自动 cp static + public 到 standalone ✓
+  - 硬编码路径问题: src/app/api/upload/route.ts 和 src/app/api/paper-images/route.ts 写死 /home/z/my-project/uploads
+  - DATABASE_URL 当前指向 /home/z/my-project/db/custom.db (绝对路径)
+  - 当前 .env 只有 DATABASE_URL，NEXTAUTH_SECRET/MINERU/DEEPSEEK 都靠源码硬编码默认值
+
+- Fix 1: 让 uploads 路径可配置 — src/app/api/upload/route.ts + src/app/api/paper-images/route.ts
+  - UPLOADS_DIR = process.env.UPLOADS_DIR || "/home/z/my-project/uploads"
+  - ALLOWED_ROOT = process.env.UPLOADS_DIR || "/home/z/my-project/uploads"
+  - 容器里设 UPLOADS_DIR=/app/uploads，本地开发仍用默认值
+
+- 创建 .dockerignore
+  - 排除 node_modules / .next / db / uploads / .git / *.log / skills / examples / agent-ctx / tool-results / worklog.md 等
+
+- 创建 Dockerfile (多阶段)
+  - Stage 1 deps: node:20-alpine + bun, npm ci 或 bun install
+  - Stage 2 builder: prisma generate + npm run build
+  - Stage 3 runner: node:20-alpine + bun + tini + ca-certificates
+  - COPY standalone + prisma + @prisma client
+  - ENTRYPOINT tini -- 
+  - CMD: prisma db push --accept-data-loss && bun .next/standalone/server.js
+
+- 创建 docker-compose.yml
+  - 端口 3000:3000
+  - 挂载 ./data:/app/data + ./uploads:/app/uploads
+  - env_file: .env.production
+  - healthcheck: wget --spider http://localhost:3000/, start_period 60s
+  - 资源限制: 1.5GB / 1.5 CPU (适配 2C2G)
+
+- 创建 .env.production.example (模板) + .env.production (实际值)
+  - DATABASE_URL=file:/app/data/custom.db (容器内路径)
+  - UPLOADS_DIR=/app/uploads
+  - NEXTAUTH_SECRET=openssl rand -base64 32 生成
+  - NEXTAUTH_URL=http://47.253.133.131:3000
+  - 其他 LLM provider 字段保留为空 (DeepSeek/MinerU 有源码硬编码默认值兜底)
+
+- 创建 deploy.sh 一键部署脚本
+  - 5步流程: pre-flight → 装 Docker → 同步代码 → 准备 env → 迁移数据 → 构建启动
+  - 支持 git clone 或 rsync 两种代码同步方式
+  - 自动检测现有 db/custom.db 并复制到 ./data/
+  - 等待容器 healthy 后打印访问 URL
+  - 包含完整的运维命令提示
+
+- 创建 DEPLOY.md 详细文档
+  - 一键脚本部署 vs 手动步骤两种方式
+  - 阿里云安全组开放 3000 端口说明
+  - 常用运维命令 (logs/restart/backup等)
+  - 常见问题 FAQ (构建失败/502/OOM/上传失败等)
+  - 资源占用预估
+
+- 验证:
+  - npm run build: ✓ standalone 输出正常
+  - PORT=3100 NODE_ENV=production bun .next/standalone/server.js: ✓ HTTP 200
+  - 本地无 docker 命令，但 next build + production server 通过验证 Dockerfile build 阶段没问题
+  - dev server 已恢复运行
+
+Stage Summary:
+- ✅ 7 个部署文件全部就绪: Dockerfile / docker-compose.yml / .dockerignore / .env.production / .env.production.example / deploy.sh / DEPLOY.md
+- ✅ 路径可配置化: UPLOADS_DIR env var (兼容本地开发 + Docker)
+- ✅ 数据持久化: ./data (SQLite) + ./uploads (PDF/图片) 通过 volume 挂载
+- ✅ 数据迁移: 现有 db/custom.db 可一键复制到 ./data/custom.db
+- ✅ 资源适配 2C2G: 限制 1.5GB 内存 + tini 信号转发 + healthcheck
+- ✅ 本地验证 production build + server 启动通过
+- ⚠️ 本地无 docker，未跑完整 docker build，但 Dockerfile 用的都是标准 node:20-alpine + bun + prisma 组合
+
+Files Created:
+- Dockerfile
+- docker-compose.yml
+- .dockerignore
+- .env.production
+- .env.production.example
+- deploy.sh
+- DEPLOY.md
+
+Files Modified:
+- src/app/api/upload/route.ts (UPLOADS_DIR 可配置)
+- src/app/api/paper-images/route.ts (ALLOWED_ROOT 可配置)

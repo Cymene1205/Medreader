@@ -13,7 +13,9 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 // Ensure the uploads directory exists at module load (server warm-up).
-const UPLOADS_DIR = "/home/z/my-project/uploads";
+// Path is configurable via UPLOADS_DIR env var so the same code runs in
+// dev (sandbox) and Docker (container with mounted volume).
+const UPLOADS_DIR = process.env.UPLOADS_DIR || "/home/z/my-project/uploads";
 try {
   mkdirSync(UPLOADS_DIR, { recursive: true });
 } catch {
