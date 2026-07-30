@@ -21,6 +21,7 @@ import LLMSettingsDialog, {
 } from "@/components/llm-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import {
   Upload,
   Loader2,
@@ -79,6 +80,10 @@ export default function Home() {
   // is implicit: opening the settings dialog and saving a new config flips
   // `llmConfigured` true, which makes the banner condition false anyway.
   const [llmBannerDismissed, setLlmBannerDismissed] = useState(false);
+  // Whether the 全文框架 panel is collapsed (only header visible). When
+  // collapsed, the 原文段落导航 panel above automatically expands to fill
+  // the freed vertical space.
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
 
@@ -459,23 +464,34 @@ export default function Home() {
           {/* Left: Heading Navigator (top) + Outline Panel (bottom) */}
           <Panel defaultSize={20} minSize={14} collapsible={false}>
             <div className="h-full border-r bg-card flex flex-col">
-              {/* Heading Navigator at top — verbatim paper section/subsection
-                  titles, used for precise paragraph jumping. */}
-              <div className="flex-shrink-0">
+              {/* HeadingNavigator at top — verbatim paper section/subsection
+                  titles, used for precise paragraph jumping. When 全文框架
+                  is collapsed below, this panel grows to fill the space. */}
+              <div className={cn("min-h-0", outlineCollapsed ? "flex-1" : "flex-shrink-0")}>
                 <HeadingNavigator
                   headings={outline?.headings}
                   activeHeadingText={activeHeadingText}
                   onHeadingClick={onHeadingClick}
+                  fillContainer={outlineCollapsed}
                 />
               </div>
-              {/* Outline (6-dimension LLM-generated analysis) at bottom —
-                  takes the remaining space. */}
-              <div className="flex-1 min-h-0 overflow-hidden border-t">
+              {/* Outline (6-dimension LLM-generated analysis) at bottom.
+                  When `outlineCollapsed` is true, this panel shrinks to
+                  header-only and the parent flex-1 is dropped so the
+                  HeadingNavigator above can grow. */}
+              <div
+                className={cn(
+                  "border-t",
+                  outlineCollapsed ? "flex-shrink-0" : "flex-1 min-h-0 overflow-hidden"
+                )}
+              >
                 <OutlinePanel
                   outline={outline}
                   loading={outlineLoading}
                   onChildClick={onChildClick}
                   activeChildId={activeChildId}
+                  collapsed={outlineCollapsed}
+                  onCollapsedChange={setOutlineCollapsed}
                 />
               </div>
             </div>

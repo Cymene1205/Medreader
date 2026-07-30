@@ -323,3 +323,59 @@ Files Modified:
 - src/components/outline-panel.tsx（quote 按钮 + zoom）
 - src/lib/outline-to-flow.ts（dagre 间距）
 - src/app/page.tsx（banner 关闭 + 上下颠倒）
+
+---
+Task ID: v7-clarify
+Agent: main (Super Z)
+Task: 用户澄清：左边全文框架需要的是「折叠框」而不是「缩放栏」；管理员后台点踩区块加导出；继续上次的任务
+
+Work Log:
+- src/components/outline-panel.tsx — 移除 fontScale 缩放控件，改为 collapse 折叠控件
+  - 删除 ZoomIn/ZoomOut 按钮 + fontScale state + bumpFont + localStorage 持久化
+  - fs() 改为简单返回 `${px}px`（不再 scale）
+  - 新增 Props: collapsed + onCollapsedChange
+  - 头部右侧加 PanelLeftClose / ChevronDown 切换按钮
+  - body (`flex-1 min-h-0 overflow-y-auto`) 包在 `{!collapsed && (...)}` 条件渲染里
+  - Dialog 保留在条件外，避免折叠时撕裂已打开的详情弹窗
+  - 根 div className: collapsed 时 h-auto，否则 h-full
+- src/components/heading-navigator.tsx — 重写为 H1 折叠分组（旧 #9 issue）
+  - 新增 groupHeadings() 函数：把扁平 headings 按 H1 分组，H2/H3 归到最近的 H1 下
+  - 在 H1 之前出现的 H2/H3 归到 `__pre__` 伪分组（在顶部平铺）
+  - 每个 H1 group 头部有 chevron 切换 + 可点击文本（跳转到 H1）
+  - H1 之下的 H2/H3 子项缩进，用左边竖线 `border-l border-border/60` 分组
+  - 没有 H1 的论文（只 H2/H3）走 flat 渲染兜底，不显示分组
+  - 新增 FlatHeadingItem 子组件，统一 H2/H3 排版（避免重复代码）
+  - 移除 H1 在 flat 列表中的渲染（H1 现在永远是 group 头）
+- src/app/page.tsx — 接入 collapse 状态
+  - 新增 outlineCollapsed state（默认 false）
+  - HeadingNavigator wrapper: outlineCollapsed ? "min-h-0 flex-1" : "min-h-0 flex-shrink-0"
+  - HeadingNavigator prop fillContainer={outlineCollapsed}
+  - OutlinePanel wrapper: outlineCollapsed ? "border-t flex-shrink-0" : "border-t flex-1 min-h-0 overflow-hidden"
+  - OutlinePanel props collapsed + onCollapsedChange
+  - 新增 cn 导入 from "@/lib/utils"
+- src/app/admin/page.tsx — 点踩区块新增导出按钮
+  - 引入 Download 图标 from lucide-react
+  - 新增 csvCell() helper：CSV 单元格转义（逗号/换行/引号）
+  - 新增 exportDownCsv()：把 filteredDown 导出为 CSV（含 BOM 头，Excel 友好）
+    - 列：时间 / 用户邮箱 / 原问题 / 原回答(完整) / 点踩原因 / ChatLogID
+    - 文件名 down_feedbacks_YYYYMMDD_HHmm.csv
+  - 新增 exportDownJson()：把 filteredDown 导出为 JSON（含 filters/count/meta）
+    - 文件名 down_feedbacks_YYYYMMDD_HHmm.json
+  - CardTitle 内 ml-auto 处加两个 outline 按钮：「导出 CSV」+「导出 JSON」
+  - filteredDown.length === 0 时按钮 disabled，title 显示「暂无可导出的记录」
+
+Stage Summary:
+- ✅ 全文框架折叠框：用户点击 PanelLeftClose 按钮，整个 OutlinePanel body 隐藏，只留 header；
+  同时 HeadingNavigator 自动 flex-1 撑满剩余空间。点击 ChevronDown 恢复展开。
+- ✅ 原文段落导航 H1 折叠分组：旧 issue #9 完成。每篇论文的 H1（如 Introduction / Methods / 
+  Results / Discussion / Conclusion）成为可折叠卡片，点击 chevron 收起/展开 H2/H3 子标题。
+- ✅ 管理员后台点踩导出：CSV（Excel 友好，含 BOM）+ JSON（含 filters 元数据），文件名带时间戳。
+  按当前 filteredDown（应用了日期+邮箱过滤后的结果）导出，零记录时按钮禁用。
+- tsc --noEmit: 0 errors in src/（仅 skills/stock-analysis-skill 有 pre-existing 错误，非本次引入）
+- dev server: home 200 (51KB), admin → /login 200，编译无错误
+
+Files Modified:
+- src/components/outline-panel.tsx（移除 zoom，加 collapse）
+- src/components/heading-navigator.tsx（H1 分组折叠）
+- src/app/page.tsx（outlineCollapsed state + 接入 fillContainer）
+- src/app/admin/page.tsx（导出 CSV/JSON 按钮）

@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileSearch, ChevronRight, Expand, Quote, ZoomIn, ZoomOut } from "lucide-react";
+import { Loader2, FileSearch, ChevronRight, Expand, Quote, ChevronDown, PanelLeftClose } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +56,10 @@ type Props = {
   loading: boolean;
   onChildClick: (child: OutlineChild, section: OutlineSection) => void;
   activeChildId?: string;
+  /** Controlled collapse state — when true, only the header is shown. */
+  collapsed?: boolean;
+  /** Called when the user clicks the collapse toggle. */
+  onCollapsedChange?: (collapsed: boolean) => void;
 };
 
 // Map section index to dimension color (1-6)
@@ -69,34 +73,17 @@ export default function OutlinePanel({
   loading,
   onChildClick,
   activeChildId,
+  collapsed = false,
+  onCollapsedChange,
 }: Props) {
   const [openItems, setOpenItems] = useState<string[]>([]);
   const [detailSection, setDetailSection] = useState<OutlineSection | null>(null);
-  // Font scale for the outline body — user can zoom in/out via toolbar
-  // buttons. Range: 0.85 (compact) to 1.25 (large). Persisted across reloads.
-  const [fontScale, setFontScale] = useState<number>(() => {
-    if (typeof window === "undefined") return 1;
-    const v = Number(localStorage.getItem("medreader.outline.fontScale"));
-    return Number.isFinite(v) && v >= 0.8 && v <= 1.3 ? v : 1;
-  });
 
-  const bumpFont = (delta: number) => {
-    setFontScale((cur) => {
-      const next = Math.min(1.3, Math.max(0.85, Math.round((cur + delta) * 100) / 100));
-      try {
-        localStorage.setItem("medreader.outline.fontScale", String(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-  };
-
-  // Helper: scale a px size string (e.g. "13px") by the current font scale.
-  const fs = (px: number) => `${(px * fontScale).toFixed(1)}px`;
+  // Helper: fixed px sizes (no zoom — the panel itself collapses instead).
+  const fs = (px: number) => `${px}px`;
 
   return (
-    <div className="flex flex-col h-full bg-card">
+    <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
       <div className="px-3 py-2.5 border-b flex items-center gap-2">
         <FileSearch className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">全文框架</span>
@@ -105,34 +92,30 @@ export default function OutlinePanel({
             {outline.sections.length} 维度
           </Badge>
         ) : null}
-        {/* Spacer pushes zoom controls to the right */}
-        <div className="ml-auto flex items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0"
-            onClick={() => bumpFont(-0.05)}
-            title="缩小字体"
-            disabled={fontScale <= 0.85}
-          >
-            <ZoomOut className="h-3 w-3" />
-          </Button>
-          <span className="text-[10px] text-muted-foreground w-8 text-center tabular-nums">
-            {Math.round(fontScale * 100)}%
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0"
-            onClick={() => bumpFont(0.05)}
-            title="放大字体"
-            disabled={fontScale >= 1.3}
-          >
-            <ZoomIn className="h-3 w-3" />
-          </Button>
-        </div>
+        {/* Collapse toggle — replaces the previous zoom bar. When collapsed,
+            the entire outline body is hidden, freeing vertical space for the
+            原文段落导航 panel above. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-6 w-6 p-0"
+          onClick={() => onCollapsedChange?.(!collapsed)}
+          title={collapsed ? "展开全文框架" : "折叠全文框架"}
+          aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
+        >
+          {collapsed ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          )}
+        </Button>
       </div>
 
+      {/*
+        Body — hidden when collapsed. We keep the Dialog mounted so a
+        previously-opened detail dialog doesn't get torn down mid-collapse.
+      */}
+      {!collapsed && (
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         <div className="p-2">
           {loading && (
@@ -282,6 +265,7 @@ export default function OutlinePanel({
           )}
         </div>
       </div>
+      )}
 
       {/* Detail Dialog (Feature 4) */}
       <Dialog

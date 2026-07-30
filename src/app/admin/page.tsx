@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Download,
   LogIn,
   Shield,
   ThumbsDown,
@@ -250,6 +251,87 @@ export default function AdminPage() {
       return true;
     });
   }, [data, fromDate, toDate, emailFilter]);
+
+  /**
+   * Escape a single CSV cell. Doubles internal double-quotes and wraps the
+   * value in double-quotes if it contains a comma, newline, or quote char.
+   * Empty strings become "" (so blank cells still render as empty in Excel).
+   */
+  function csvCell(s: string | null | undefined): string {
+    const v = s == null ? "" : String(s);
+    if (/["\n\r,]/.test(v)) {
+      return `"${v.replace(/"/g, '""')}"`;
+    }
+    return v;
+  }
+
+  /**
+   * Export the currently-filtered down-feedback rows as a CSV download.
+   * BOM prefix ensures Excel opens UTF-8 correctly. Filename includes the
+   * timestamp so repeated exports don't silently overwrite each other.
+   */
+  function exportDownCsv() {
+    const headers = [
+      "时间",
+      "用户邮箱",
+      "原问题",
+      "原回答(完整)",
+      "点踩原因",
+      "ChatLogID",
+    ];
+    const rows = filteredDown.map((f) =>
+      [
+        f.createdAt || "",
+        f.userEmail || "",
+        f.question || "",
+        f.answerFull || "",
+        f.reason || "",
+        f.chatLogId || "",
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+    const csv = "\uFEFF" + headers.map(csvCell).join(",") + "\n" + rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const ts = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `down_feedbacks_${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Export the currently-filtered down-feedback rows as a JSON download.
+   * Useful when the admin wants to programmatically post-process the data.
+   */
+  function exportDownJson() {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      filters: { fromDate, toDate, emailFilter },
+      count: filteredDown.length,
+      rows: filteredDown,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const ts = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `down_feedbacks_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
 
   // ---------- Error / forbidden states ----------
   if (forbidden) {
@@ -863,12 +945,39 @@ export default function AdminPage() {
         {/* Down feedbacks */}
         <Card className="shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
+            <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
               <ThumbsDown className="h-3.5 w-3.5 text-[var(--dim-6)]" />
               点踩回答收集
               <Badge variant="destructive" className="ml-1">
                 {(data?.feedbackSummary?.down ?? 0)} 条
               </Badge>
+              {/* Export buttons — visible only when there are filtered rows.
+                  CSV is the primary format (Excel-friendly with BOM); JSON
+                  is provided for programmatic post-processing. */}
+              <div className="ml-auto flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-[11px]"
+                  onClick={exportDownCsv}
+                  disabled={filteredDown.length === 0}
+                  title={filteredDown.length === 0 ? "暂无可导出的记录" : `导出 ${filteredDown.length} 条记录为 CSV`}
+                >
+                  <Download className="h-3 w-3" />
+                  导出 CSV
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-[11px]"
+                  onClick={exportDownJson}
+                  disabled={filteredDown.length === 0}
+                  title={filteredDown.length === 0 ? "暂无可导出的记录" : `导出 ${filteredDown.length} 条记录为 JSON`}
+                >
+                  <Download className="h-3 w-3" />
+                  导出 JSON
+                </Button>
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 px-3">
