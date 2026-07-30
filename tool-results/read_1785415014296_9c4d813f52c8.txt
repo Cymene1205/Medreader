@@ -1,0 +1,774 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useMemo, useState } from "react";
+     4→import Link from "next/link";
+     5→import {
+     6→  Activity,
+     7→  ArrowLeft,
+     8→  ChevronDown,
+     9→  ChevronRight,
+    10→  LogIn,
+    11→  Shield,
+    12→  ThumbsDown,
+    13→  Users,
+    14→} from "lucide-react";
+    15→import {
+    16→  Bar,
+    17→  BarChart,
+    18→  CartesianGrid,
+    19→  Cell,
+    20→  Legend,
+    21→  Line,
+    22→  LineChart,
+    23→  Pie,
+    24→  PieChart,
+    25→  ResponsiveContainer,
+    26→  Tooltip,
+    27→  XAxis,
+    28→  YAxis,
+    29→} from "recharts";
+    30→import { Button } from "@/components/ui/button";
+    31→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    32→import { Badge } from "@/components/ui/badge";
+    33→import { Skeleton } from "@/components/ui/skeleton";
+    34→import {
+    35→  Table,
+    36→  TableBody,
+    37→  TableCell,
+    38→  TableHead,
+    39→  TableHeader,
+    40→  TableRow,
+    41→} from "@/components/ui/table";
+    42→import { Input } from "@/components/ui/input";
+    43→
+    44→// ---------- Types ----------
+    45→type DailyActive = { date: string; users: number };
+    46→type DailyAction = {
+    47→  date: string;
+    48→  analyze: number;
+    49→  chat: number;
+    50→  translate: number;
+    51→  vision: number;
+    52→  upload_pdf: number;
+    53→};
+    54→type FeedbackSummary = { up: number; down: number };
+    55→type RecentUser = {
+    56→  id: string;
+    57→  email: string;
+    58→  name: string | null;
+    59→  createdAt: string | null;
+    60→  lastActiveAt: string | null;
+    61→  chatCount: number;
+    62→};
+    63→type RecentChat = {
+    64→  id: string;
+    65→  user_email: string | null;
+    66→  question: string;
+    67→  paperTitle: string | null;
+    68→  createdAt: string | null;
+    69→};
+    70→type DownFeedback = {
+    71→  id: string;
+    72→  userEmail: string | null;
+    73→  question: string;
+    74→  answer: string;
+    75→  answerFull: string;
+    76→  reason: string | null;
+    77→  createdAt: string | null;
+    78→  chatLogId: string | null;
+    79→};
+    80→type Stats = {
+    81→  dailyActive: DailyActive[];
+    82→  dailyActions: DailyAction[];
+    83→  feedbackSummary: FeedbackSummary;
+    84→  recentUsers: RecentUser[];
+    85→  recentChats: RecentChat[];
+    86→  downFeedbacks: DownFeedback[];
+    87→  totalUsers: number;
+    88→  totalChats: number;
+    89→};
+    90→
+    91→// Chart colors mapped to the dim-N CSS variables so they follow the theme.
+    92→const DIM_COLORS = [
+    93→  "var(--dim-1)",
+    94→  "var(--dim-2)",
+    95→  "var(--dim-3)",
+    96→  "var(--dim-4)",
+    97→  "var(--dim-5)",
+    98→];
+    99→const ACTION_KEYS: Array<{ key: keyof Omit<DailyAction, "date">; label: string }> = [
+   100→  { key: "analyze", label: "分析" },
+   101→  { key: "chat", label: "对话" },
+   102→  { key: "translate", label: "翻译" },
+   103→  { key: "vision", label: "视觉" },
+   104→  { key: "upload_pdf", label: "上传PDF" },
+   105→];
+   106→
+   107→// ---------- Helpers ----------
+   108→function formatDateShort(iso: string | null): string {
+   109→  if (!iso) return "—";
+   110→  const d = new Date(iso);
+   111→  if (Number.isNaN(d.getTime())) return "—";
+   112→  return `${d.getMonth() + 1}/${d.getDate()}`;
+   113→}
+   114→
+   115→function formatDateTime(iso: string | null): string {
+   116→  if (!iso) return "—";
+   117→  const d = new Date(iso);
+   118→  if (Number.isNaN(d.getTime())) return "—";
+   119→  const y = d.getFullYear();
+   120→  const m = String(d.getMonth() + 1).padStart(2, "0");
+   121→  const day = String(d.getDate()).padStart(2, "0");
+   122→  const hh = String(d.getHours()).padStart(2, "0");
+   123→  const mm = String(d.getMinutes()).padStart(2, "0");
+   124→  return `${y}-${m}-${day} ${hh}:${mm}`;
+   125→}
+   126→
+   127→function datePart(iso: string | null): string {
+   128→  if (!iso) return "";
+   129→  // ISO strings start with YYYY-MM-DD regardless of T or space separator.
+   130→  return iso.slice(0, 10);
+   131→}
+   132→
+   133→// ---------- Page ----------
+   134→export default function AdminPage() {
+   135→  const [data, setData] = useState<Stats | null>(null);
+   136→  const [loading, setLoading] = useState(true);
+   137→  const [forbidden, setForbidden] = useState(false);
+   138→  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+   139→
+   140→  // Down-feedback filters
+   141→  const [fromDate, setFromDate] = useState("");
+   142→  const [toDate, setToDate] = useState("");
+   143→  const [emailFilter, setEmailFilter] = useState("");
+   144→  const [expandedId, setExpandedId] = useState<string | null>(null);
+   145→
+   146→  useEffect(() => {
+   147→    let cancelled = false;
+   148→    (async () => {
+   149→      setLoading(true);
+   150→      setForbidden(false);
+   151→      setErrorMsg(null);
+   152→      try {
+   153→        const res = await fetch("/api/admin/stats", { cache: "no-store" });
+   154→        if (cancelled) return;
+   155→        if (res.status === 403) {
+   156→          setForbidden(true);
+   157→          return;
+   158→        }
+   159→        if (!res.ok) {
+   160→          const j = await res.json().catch(() => ({}));
+   161→          setErrorMsg(j?.detail || j?.error || `HTTP ${res.status}`);
+   162→          return;
+   163→        }
+   164→        const json = (await res.json()) as Stats;
+   165→        setData(json);
+   166→      } catch (e) {
+   167→        if (!cancelled) {
+   168→          setErrorMsg(e instanceof Error ? e.message : String(e));
+   169→        }
+   170→      } finally {
+   171→        if (!cancelled) setLoading(false);
+   172→      }
+   173→    })();
+   174→    return () => {
+   175→      cancelled = true;
+   176→    };
+   177→  }, []);
+   178→
+   179→  const filteredDown = useMemo(() => {
+   180→    if (!data?.downFeedbacks) return [];
+   181→    const email = emailFilter.trim().toLowerCase();
+   182→    return data.downFeedbacks.filter((f) => {
+   183→      const d = datePart(f.createdAt);
+   184→      if (fromDate && d < fromDate) return false;
+   185→      if (toDate && d > toDate) return false;
+   186→      if (email && !(f.userEmail || "").toLowerCase().includes(email)) return false;
+   187→      return true;
+   188→    });
+   189→  }, [data, fromDate, toDate, emailFilter]);
+   190→
+   191→  // ---------- Error / forbidden states ----------
+   192→  if (forbidden) {
+   193→    return (
+   194→      <div className="min-h-screen flex flex-col bg-background">
+   195→        <Header />
+   196→        <main className="flex-1 flex items-center justify-center px-6 py-16">
+   197→          <Card className="max-w-md w-full">
+   198→            <CardHeader>
+   199→              <CardTitle className="flex items-center gap-2 text-base">
+   200→                <Shield className="h-4 w-4 text-destructive" />
+   201→                需要管理员权限
+   202→              </CardTitle>
+   203→            </CardHeader>
+   204→            <CardContent className="space-y-3">
+   205→              <p className="text-sm text-muted-foreground">
+   206→                当前账号无权访问该页面。请使用管理员账号登录后再访问。
+   207→              </p>
+   208→              <div className="flex gap-2">
+   209→                <Link href="/login">
+   210→                  <Button size="sm" className="gap-1.5">
+   211→                    <LogIn className="h-3.5 w-3.5" />
+   212→                    前往登录
+   213→                  </Button>
+   214→                </Link>
+   215→                <Link href="/">
+   216→                  <Button size="sm" variant="outline" className="gap-1.5">
+   217→                    <ArrowLeft className="h-3.5 w-3.5" />
+   218→                    返回首页
+   219→                  </Button>
+   220→                </Link>
+   221→              </div>
+   222→            </CardContent>
+   223→          </Card>
+   224→        </main>
+   225→      </div>
+   226→    );
+   227→  }
+   228→
+   229→  if (errorMsg && !loading) {
+   230→    return (
+   231→      <div className="min-h-screen flex flex-col bg-background">
+   232→        <Header />
+   233→        <main className="flex-1 flex items-center justify-center px-6 py-16">
+   234→          <Card className="max-w-md w-full">
+   235→            <CardHeader>
+   236→              <CardTitle className="text-base text-destructive">加载失败</CardTitle>
+   237→            </CardHeader>
+   238→            <CardContent className="space-y-3">
+   239→              <p className="text-sm text-muted-foreground break-all">{errorMsg}</p>
+   240→              <Link href="/">
+   241→                <Button size="sm" variant="outline" className="gap-1.5">
+   242→                  <ArrowLeft className="h-3.5 w-3.5" />
+   243→                  返回首页
+   244→                </Button>
+   245→              </Link>
+   246→            </CardContent>
+   247→          </Card>
+   248→        </main>
+   249→      </div>
+   250→    );
+   251→  }
+   252→
+   253→  // ---------- Main render ----------
+   254→  return (
+   255→    <div className="min-h-screen flex flex-col bg-background">
+   256→      <Header />
+   257→
+   258→      <main className="flex-1 w-full max-w-[1400px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+   259→        {/* Top stat cards */}
+   260→        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   261→          <StatCard
+   262→            label="总用户数"
+   263→            value={data?.totalUsers}
+   264→            loading={loading}
+   265→            icon={<Users className="h-4 w-4" />}
+   266→            colorClass="text-[var(--dim-1)]"
+   267→          />
+   268→          <StatCard
+   269→            label="总对话数"
+   270→            value={data?.totalChats}
+   271→            loading={loading}
+   272→            icon={<Activity className="h-4 w-4" />}
+   273→            colorClass="text-[var(--dim-2)]"
+   274→          />
+   275→          <StatCard
+   276→            label="总点踩数"
+   277→            value={data?.feedbackSummary?.down}
+   278→            loading={loading}
+   279→            icon={<ThumbsDown className="h-4 w-4" />}
+   280→            colorClass="text-[var(--dim-6)]"
+   281→          />
+   282→        </section>
+   283→
+   284→        {/* Charts row */}
+   285→        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+   286→          <Card className="shadow-sm">
+   287→            <CardHeader className="pb-2">
+   288→              <CardTitle className="text-sm">近30天每日活跃用户数</CardTitle>
+   289→            </CardHeader>
+   290→            <CardContent>
+   291→              {loading ? (
+   292→                <Skeleton className="h-[300px] w-full" />
+   293→              ) : (
+   294→                <div style={{ width: "100%", height: 300 }}>
+   295→                  <ResponsiveContainer width="100%" height="100%">
+   296→                    <LineChart
+   297→                      data={data?.dailyActive ?? []}
+   298→                      margin={{ top: 8, right: 12, bottom: 4, left: -12 }}
+   299→                    >
+   300→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+   301→                      <XAxis
+   302→                        dataKey="date"
+   303→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   304→                        tickFormatter={(v: string) => formatDateShort(v)}
+   305→                        stroke="var(--border)"
+   306→                      />
+   307→                      <YAxis
+   308→                        allowDecimals={false}
+   309→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   310→                        stroke="var(--border)"
+   311→                      />
+   312→                      <Tooltip
+   313→                        contentStyle={{
+   314→                          background: "var(--card)",
+   315→                          border: "1px solid var(--border)",
+   316→                          borderRadius: 6,
+   317→                          fontSize: 12,
+   318→                          color: "var(--foreground)",
+   319→                        }}
+   320→                        labelFormatter={(v: string) => `日期: ${v}`}
+   321→                        formatter={(v: number) => [v, "活跃用户"]}
+   322→                      />
+   323→                      <Line
+   324→                        type="monotone"
+   325→                        dataKey="users"
+   326→                        stroke="var(--primary)"
+   327→                        strokeWidth={2}
+   328→                        dot={{ r: 2, fill: "var(--primary)" }}
+   329→                        activeDot={{ r: 4 }}
+   330→                      />
+   331→                    </LineChart>
+   332→                  </ResponsiveContainer>
+   333→                </div>
+   334→              )}
+   335→            </CardContent>
+   336→          </Card>
+   337→
+   338→          <Card className="shadow-sm">
+   339→            <CardHeader className="pb-2">
+   340→              <CardTitle className="text-sm">近30天每日各操作次数</CardTitle>
+   341→            </CardHeader>
+   342→            <CardContent>
+   343→              {loading ? (
+   344→                <Skeleton className="h-[300px] w-full" />
+   345→              ) : (
+   346→                <div style={{ width: "100%", height: 300 }}>
+   347→                  <ResponsiveContainer width="100%" height="100%">
+   348→                    <BarChart
+   349→                      data={data?.dailyActions ?? []}
+   350→                      margin={{ top: 8, right: 12, bottom: 4, left: -12 }}
+   351→                    >
+   352→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+   353→                      <XAxis
+   354→                        dataKey="date"
+   355→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   356→                        tickFormatter={(v: string) => formatDateShort(v)}
+   357→                        stroke="var(--border)"
+   358→                      />
+   359→                      <YAxis
+   360→                        allowDecimals={false}
+   361→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   362→                        stroke="var(--border)"
+   363→                      />
+   364→                      <Tooltip
+   365→                        contentStyle={{
+   366→                          background: "var(--card)",
+   367→                          border: "1px solid var(--border)",
+   368→                          borderRadius: 6,
+   369→                          fontSize: 12,
+   370→                          color: "var(--foreground)",
+   371→                        }}
+   372→                      />
+   373→                      <Legend
+   374→                        wrapperStyle={{ fontSize: 11 }}
+   375→                        iconType="circle"
+   376→                        iconSize={8}
+   377→                      />
+   378→                      {ACTION_KEYS.map((a, i) => (
+   379→                        <Bar
+   380→                          key={a.key}
+   381→                          dataKey={a.key}
+   382→                          name={a.label}
+   383→                          stackId="a"
+   384→                          fill={DIM_COLORS[i % DIM_COLORS.length]}
+   385→                          radius={i === ACTION_KEYS.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+   386→                        />
+   387→                      ))}
+   388→                    </BarChart>
+   389→                  </ResponsiveContainer>
+   390→                </div>
+   391→              )}
+   392→            </CardContent>
+   393→          </Card>
+   394→
+   395→          <Card className="shadow-sm">
+   396→            <CardHeader className="pb-2">
+   397→              <CardTitle className="text-sm">点赞 / 点踩比例</CardTitle>
+   398→            </CardHeader>
+   399→            <CardContent>
+   400→              {loading ? (
+   401→                <Skeleton className="h-[300px] w-full" />
+   402→              ) : (
+   403→                <div style={{ width: "100%", height: 300 }}>
+   404→                  <ResponsiveContainer width="100%" height="100%">
+   405→                    <PieChart>
+   406→                      <Pie
+   407→                        data={[
+   408→                          { name: "点赞", value: data?.feedbackSummary?.up ?? 0, key: "up" },
+   409→                          { name: "点踩", value: data?.feedbackSummary?.down ?? 0, key: "down" },
+   410→                        ]}
+   411→                        dataKey="value"
+   412→                        nameKey="name"
+   413→                        cx="50%"
+   414→                        cy="50%"
+   415→                        innerRadius={55}
+   416→                        outerRadius={90}
+   417→                        paddingAngle={2}
+   418→                        stroke="var(--card)"
+   419→                        strokeWidth={2}
+   420→                        label={(entry: { name?: string; value?: number }) =>
+   421→                          `${entry.name}: ${entry.value ?? 0}`
+   422→                        }
+   423→                        labelLine={false}
+   424→                      >
+   425→                        <Cell fill="var(--success)" />
+   426→                        <Cell fill="var(--destructive)" />
+   427→                      </Pie>
+   428→                      <Tooltip
+   429→                        contentStyle={{
+   430→                          background: "var(--card)",
+   431→                          border: "1px solid var(--border)",
+   432→                          borderRadius: 6,
+   433→                          fontSize: 12,
+   434→                          color: "var(--foreground)",
+   435→                        }}
+   436→                      />
+   437→                      <Legend
+   438→                        wrapperStyle={{ fontSize: 11 }}
+   439→                        iconType="circle"
+   440→                        iconSize={8}
+   441→                      />
+   442→                    </PieChart>
+   443→                  </ResponsiveContainer>
+   444→                </div>
+   445→              )}
+   446→            </CardContent>
+   447→          </Card>
+   448→        </section>
+   449→
+   450→        {/* Two-column tables */}
+   451→        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   452→          <Card className="shadow-sm">
+   453→            <CardHeader className="pb-2">
+   454→              <CardTitle className="text-sm flex items-center gap-2">
+   455→                <Users className="h-3.5 w-3.5" />
+   456→                最近用户
+   457→              </CardTitle>
+   458→            </CardHeader>
+   459→            <CardContent className="px-3">
+   460→              {loading ? (
+   461→                <Skeleton className="h-[260px] w-full" />
+   462→              ) : (
+   463→                <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
+   464→                  <Table>
+   465→                    <TableHeader>
+   466→                      <TableRow>
+   467→                        <TableHead className="text-xs">邮箱</TableHead>
+   468→                        <TableHead className="text-xs">注册时间</TableHead>
+   469→                        <TableHead className="text-xs">最近活跃</TableHead>
+   470→                        <TableHead className="text-xs text-right">对话数</TableHead>
+   471→                      </TableRow>
+   472→                    </TableHeader>
+   473→                    <TableBody>
+   474→                      {(data?.recentUsers ?? []).length === 0 ? (
+   475→                        <TableRow>
+   476→                          <TableCell colSpan={4} className="text-xs text-muted-foreground text-center py-6">
+   477→                            暂无用户
+   478→                          </TableCell>
+   479→                        </TableRow>
+   480→                      ) : (
+   481→                        (data?.recentUsers ?? []).map((u) => (
+   482→                          <TableRow key={u.id}>
+   483→                            <TableCell className="text-xs font-medium truncate max-w-[160px]">
+   484→                              {u.email}
+   485→                            </TableCell>
+   486→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   487→                              {formatDateTime(u.createdAt)}
+   488→                            </TableCell>
+   489→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   490→                              {formatDateTime(u.lastActiveAt)}
+   491→                            </TableCell>
+   492→                            <TableCell className="text-xs text-right">
+   493→                              <Badge variant="secondary" className="font-mono">
+   494→                                {u.chatCount}
+   495→                              </Badge>
+   496→                            </TableCell>
+   497→                          </TableRow>
+   498→                        ))
+   499→                      )}
+   500→                    </TableBody>
+   501→                  </Table>
+   502→                </div>
+   503→              )}
+   504→            </CardContent>
+   505→          </Card>
+   506→
+   507→          <Card className="shadow-sm">
+   508→            <CardHeader className="pb-2">
+   509→              <CardTitle className="text-sm flex items-center gap-2">
+   510→                <Activity className="h-3.5 w-3.5" />
+   511→                最近对话
+   512→              </CardTitle>
+   513→            </CardHeader>
+   514→            <CardContent className="px-3">
+   515→              {loading ? (
+   516→                <Skeleton className="h-[260px] w-full" />
+   517→              ) : (
+   518→                <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
+   519→                  <Table>
+   520→                    <TableHeader>
+   521→                      <TableRow>
+   522→                        <TableHead className="text-xs">用户</TableHead>
+   523→                        <TableHead className="text-xs">问题摘要</TableHead>
+   524→                        <TableHead className="text-xs">时间</TableHead>
+   525→                      </TableRow>
+   526→                    </TableHeader>
+   527→                    <TableBody>
+   528→                      {(data?.recentChats ?? []).length === 0 ? (
+   529→                        <TableRow>
+   530→                          <TableCell colSpan={3} className="text-xs text-muted-foreground text-center py-6">
+   531→                            暂无对话
+   532→                          </TableCell>
+   533→                        </TableRow>
+   534→                      ) : (
+   535→                        (data?.recentChats ?? []).map((c) => (
+   536→                          <TableRow key={c.id}>
+   537→                            <TableCell className="text-xs text-muted-foreground truncate max-w-[120px]">
+   538→                              {c.user_email || "—"}
+   539→                            </TableCell>
+   540→                            <TableCell className="text-xs">
+   541→                              <div className="truncate max-w-[280px]" title={c.question}>
+   542→                                {c.question || "—"}
+   543→                              </div>
+   544→                              {c.paperTitle && (
+   545→                                <div className="text-[10px] text-muted-foreground truncate max-w-[280px]">
+   546→                                  {c.paperTitle}
+   547→                                </div>
+   548→                              )}
+   549→                            </TableCell>
+   550→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   551→                              {formatDateTime(c.createdAt)}
+   552→                            </TableCell>
+   553→                          </TableRow>
+   554→                        ))
+   555→                      )}
+   556→                    </TableBody>
+   557→                  </Table>
+   558→                </div>
+   559→              )}
+   560→            </CardContent>
+   561→          </Card>
+   562→        </section>
+   563→
+   564→        {/* Down feedbacks */}
+   565→        <Card className="shadow-sm">
+   566→          <CardHeader className="pb-2">
+   567→            <CardTitle className="text-sm flex items-center gap-2">
+   568→              <ThumbsDown className="h-3.5 w-3.5 text-[var(--dim-6)]" />
+   569→              点踩回答收集
+   570→              <Badge variant="destructive" className="ml-1">
+   571→                {(data?.feedbackSummary?.down ?? 0)} 条
+   572→              </Badge>
+   573→            </CardTitle>
+   574→          </CardHeader>
+   575→          <CardContent className="space-y-3 px-3">
+   576→            {/* Filters */}
+   577→            <div className="flex flex-wrap items-end gap-3 px-2 pt-1">
+   578→              <div className="flex flex-col gap-1">
+   579→                <label className="text-[10px] uppercase text-muted-foreground">开始日期</label>
+   580→                <Input
+   581→                  type="date"
+   582→                  value={fromDate}
+   583→                  onChange={(e) => setFromDate(e.target.value)}
+   584→                  className="h-8 w-[150px] text-xs"
+   585→                />
+   586→              </div>
+   587→              <div className="flex flex-col gap-1">
+   588→                <label className="text-[10px] uppercase text-muted-foreground">结束日期</label>
+   589→                <Input
+   590→                  type="date"
+   591→                  value={toDate}
+   592→                  onChange={(e) => setToDate(e.target.value)}
+   593→                  className="h-8 w-[150px] text-xs"
+   594→                />
+   595→              </div>
+   596→              <div className="flex flex-col gap-1 flex-1 min-w-[180px]">
+   597→                <label className="text-[10px] uppercase text-muted-foreground">用户邮箱过滤</label>
+   598→                <Input
+   599→                  type="text"
+   600→                  placeholder="输入邮箱关键字…"
+   601→                  value={emailFilter}
+   602→                  onChange={(e) => setEmailFilter(e.target.value)}
+   603→                  className="h-8 text-xs"
+   604→                />
+   605→              </div>
+   606→              {(fromDate || toDate || emailFilter) && (
+   607→                <Button
+   608→                  variant="ghost"
+   609→                  size="sm"
+   610→                  className="h-8 text-xs"
+   611→                  onClick={() => {
+   612→                    setFromDate("");
+   613→                    setToDate("");
+   614→                    setEmailFilter("");
+   615→                  }}
+   616→                >
+   617→                  清除
+   618→                </Button>
+   619→              )}
+   620→              <div className="ml-auto text-[11px] text-muted-foreground self-center">
+   621→                显示 {filteredDown.length} / {data?.downFeedbacks?.length ?? 0} 条
+   622→              </div>
+   623→            </div>
+   624→
+   625→            {loading ? (
+   626→              <Skeleton className="h-[300px] w-full" />
+   627→            ) : (
+   628→              <div className="max-h-[520px] overflow-y-auto scrollbar-thin border-t">
+   629→                <Table>
+   630→                  <TableHeader className="sticky top-0 bg-card z-10">
+   631→                    <TableRow>
+   632→                      <TableHead className="text-xs w-[140px]">时间</TableHead>
+   633→                      <TableHead className="text-xs w-[180px]">用户邮箱</TableHead>
+   634→                      <TableHead className="text-xs w-[260px]">原问题</TableHead>
+   635→                      <TableHead className="text-xs">原回答</TableHead>
+   636→                      <TableHead className="text-xs w-[200px]">点踩原因</TableHead>
+   637→                    </TableRow>
+   638→                  </TableHeader>
+   639→                  <TableBody>
+   640→                    {filteredDown.length === 0 ? (
+   641→                      <TableRow>
+   642→                        <TableCell colSpan={5} className="text-xs text-muted-foreground text-center py-8">
+   643→                          暂无符合条件的点踩记录
+   644→                        </TableCell>
+   645→                      </TableRow>
+   646→                    ) : (
+   647→                      filteredDown.map((f) => {
+   648→                        const expanded = expandedId === f.id;
+   649→                        const hasFull = f.answerFull.length > f.answer.length;
+   650→                        return (
+   651→                          <TableRow
+   652→                            key={f.id}
+   653→                            className="cursor-pointer"
+   654→                            onClick={() => setExpandedId(expanded ? null : f.id)}
+   655→                          >
+   656→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap align-top pt-2">
+   657→                              {formatDateTime(f.createdAt)}
+   658→                            </TableCell>
+   659→                            <TableCell className="text-xs text-muted-foreground truncate max-w-[180px] align-top pt-2">
+   660→                              {f.userEmail || "—"}
+   661→                            </TableCell>
+   662→                            <TableCell className="text-xs align-top pt-2">
+   663→                              <div className="line-clamp-2 max-w-[260px]">{f.question || "—"}</div>
+   664→                            </TableCell>
+   665→                            <TableCell className="text-xs align-top pt-2">
+   666→                              <div className="flex items-start gap-1">
+   667→                                <span className="text-muted-foreground mt-[1px]">
+   668→                                  {expanded ? (
+   669→                                    <ChevronDown className="h-3 w-3" />
+   670→                                  ) : (
+   671→                                    <ChevronRight className="h-3 w-3" />
+   672→                                  )}
+   673→                                </span>
+   674→                                <div
+   675→                                  className={
+   676→                                    expanded
+   677→                                      ? "whitespace-pre-wrap break-words max-w-[440px]"
+   678→                                      : "line-clamp-2 max-w-[440px]"
+   679→                                  }
+   680→                                >
+   681→                                  {expanded ? f.answerFull || "（空）" : f.answer || "（空）"}
+   682→                                  {!expanded && hasFull && (
+   683→                                    <span className="text-muted-foreground ml-1">…</span>
+   684→                                  )}
+   685→                                </div>
+   686→                              </div>
+   687→                            </TableCell>
+   688→                            <TableCell className="text-xs text-muted-foreground align-top pt-2">
+   689→                              <div className="max-w-[200px] line-clamp-3" title={f.reason || ""}>
+   690→                                {f.reason || "—"}
+   691→                              </div>
+   692→                            </TableCell>
+   693→                          </TableRow>
+   694→                        );
+   695→                      })
+   696→                    )}
+   697→                  </TableBody>
+   698→                </Table>
+   699→              </div>
+   700→            )}
+   701→          </CardContent>
+   702→        </Card>
+   703→      </main>
+   704→
+   705→      <footer className="mt-auto border-t border-border bg-muted/30">
+   706→        <div className="max-w-[1400px] mx-auto px-6 py-3 text-[11px] text-muted-foreground flex items-center justify-between">
+   707→          <span>MedReader Agent · 管理员后台</span>
+   708→          <Link href="/" className="hover:text-foreground transition-colors">
+   709→            ← 返回首页
+   710→          </Link>
+   711→        </div>
+   712→      </footer>
+   713→    </div>
+   714→  );
+   715→}
+   716→
+   717→// ---------- Subcomponents ----------
+   718→function Header() {
+   719→  return (
+   720→    <header className="glass-header h-12 flex-shrink-0 flex items-center px-4 gap-3 border-b border-border/30 sticky top-0 z-20">
+   721→      <div className="flex items-center gap-2">
+   722→        <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center shadow-sm">
+   723→          <Shield className="h-4 w-4 text-primary-foreground" />
+   724→        </div>
+   725→        <span className="font-semibold text-sm text-background">管理员后台</span>
+   726→        <span className="text-[10px] opacity-70 hidden sm:inline">MedReader Admin</span>
+   727→      </div>
+   728→      <div className="flex-1" />
+   729→      <Link href="/">
+   730→        <Button
+   731→          variant="ghost"
+   732→          size="sm"
+   733→          className="h-8 gap-1.5 text-background hover:bg-background/10"
+   734→        >
+   735→          <ArrowLeft className="h-3.5 w-3.5" />
+   736→          返回首页
+   737→        </Button>
+   738→      </Link>
+   739→    </header>
+   740→  );
+   741→}
+   742→
+   743→function StatCard({
+   744→  label,
+   745→  value,
+   746→  loading,
+   747→  icon,
+   748→  colorClass,
+   749→}: {
+   750→  label: string;
+   751→  value: number | undefined;
+   752→  loading: boolean;
+   753→  icon: React.ReactNode;
+   754→  colorClass: string;
+   755→}) {
+   756→  return (
+   757→    <Card className="shadow-sm">
+   758→      <CardContent className="pt-5">
+   759→        <div className="flex items-start justify-between">
+   760→          <div>
+   761→            <p className="text-xs text-muted-foreground">{label}</p>
+   762→            {loading ? (
+   763→              <Skeleton className="h-8 w-20 mt-2" />
+   764→            ) : (
+   765→              <p className="text-3xl font-semibold tabular-nums mt-1">{value ?? 0}</p>
+   766→            )}
+   767→          </div>
+   768→          <div className={`p-2 rounded-md bg-muted/60 ${colorClass}`}>{icon}</div>
+   769→        </div>
+   770→      </CardContent>
+   771→    </Card>
+   772→  );
+   773→}
+   774→

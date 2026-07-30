@@ -13,15 +13,28 @@ import {
   Image as ImageIcon,
   X,
   Sparkles,
+  ThumbsUp,
+  ThumbsDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ChatMessage = {
+  id: string;
   role: "user" | "assistant";
   content: string;
   image?: string; // base64 data URL
   ts: number;
   error?: boolean;
+  // Feature 6: feedback + follow-ups
+  chatLogId?: string;
+  feedback?: "up" | "down" | null;
+  followUps?: string[];
+  followUpsLoading?: boolean;
+  // dislike reason expansion
+  showReason?: boolean;
+  reasonText?: string;
+  reasonSubmitting?: boolean;
 };
 
 type Props = {
@@ -32,13 +45,19 @@ type Props = {
   selectedText: string;
   /** full paper text extracted from the PDF — always passed as base context */
   paperText?: string;
+  /** current paper id (for ChatLog bookkeeping) */
+  paperId?: string | null;
 };
+
+const genId = () =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 export default function ChatPanel({
   attachedImage,
   onClearAttachedImage,
   selectedText,
   paperText,
+  paperId,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -56,11 +75,105 @@ export default function ChatPanel({
   // Pre-fill prompt placeholder with image
   const hasImage = !!attachedImage;
 
-  const send = async () => {
-    const text = input.trim();
+  const updateMessage = (id: string, patch: Partial<ChatMessage>) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...patch } : m))
+    );
+  };
+
+  /** Fetch 3 follow-up questions for a finalized assistant message. */
+  const fetchFollowUps = async (
+    msgId: string,
+    question: string,
+    answer: string
+  ) => {
+    try {
+      const res = await fetch("/api/followups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, answer, paperText }),
+      });
+      const data = await res.json();
+      if (data && Array.isArray(data.followUps)) {
+        updateMessage(msgId, {
+          followUps: data.followUps,
+          followUpsLoading: false,
+        });
+      } else {
+        updateMessage(msgId, { followUpsLoading: false });
+      }
+    } catch {
+      updateMessage(msgId, { followUpsLoading: false });
+    }
+  };
+
+  /** Like (positive feedback) — optimistic. */
+  const handleLike = async (msgId: string, chatLogId: string) => {
+    updateMessage(msgId, {
+      feedback: "up",
+      showReason: false,
+    });
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatLogId, type: "up" }),
+      });
+    } catch {
+      // revert on failure
+      updateMessage(msgId, { feedback: null });
+    }
+  };
+
+  /** Dislike — record immediately + expand reason textarea. */
+  const handleDislike = async (msgId: string, chatLogId: string) => {
+    updateMessage(msgId, {
+      feedback: "down",
+      showReason: true,
+    });
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatLogId, type: "down" }),
+      });
+    } catch {
+      // ignore — UI state already reflects the user's intent
+    }
+  };
+
+  /** Submit optional reason for a dislike. */
+  const submitReason = async (msgId: string, chatLogId: string) => {
+    const msg = messages.find((m) => m.id === msgId);
+    const reason = msg?.reasonText || "";
+    updateMessage(msgId, { reasonSubmitting: true });
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatLogId, type: "down", reason }),
+      });
+      updateMessage(msgId, {
+        reasonSubmitting: false,
+        showReason: false,
+      });
+    } catch {
+      updateMessage(msgId, { reasonSubmitting: false });
+    }
+  };
+
+  /** Click a follow-up card → fill input & send immediately. */
+  const handleFollowUpClick = (q: string) => {
+    setInput("");
+    void send(q);
+  };
+
+  const send = async (overrideQuestion?: string) => {
+    const text = (overrideQuestion ?? input).trim();
     if ((!text && !hasImage) || loading) return;
 
     const userMsg: ChatMessage = {
+      id: genId(),
       role: "user",
       content: text || (hasImage ? "请分析这张图片。" : ""),
       image: attachedImage || undefined,
@@ -93,7 +206,12 @@ export default function ChatPanel({
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: data.answer, ts: Date.now() },
+          {
+            id: genId(),
+            role: "assistant",
+            content: data.answer,
+            ts: Date.now(),
+          },
         ]);
         onClearAttachedImage();
       } else {
@@ -113,6 +231,7 @@ export default function ChatPanel({
             messages: history,
             question: userMsg.content,
             context,
+            paperId: paperId || undefined,
           }),
         });
         if (!res.ok || !res.body) {
@@ -123,6 +242,7 @@ export default function ChatPanel({
         const decoder = new TextDecoder();
         let buffer = "";
         let acc = "";
+        let chatLogId: string | null = null;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -137,25 +257,45 @@ export default function ChatPanel({
             try {
               const json = JSON.parse(payload);
               if (json.error) throw new Error(json.error);
+              if (json.__meta__?.chatLogId) {
+                chatLogId = json.__meta__.chatLogId as string;
+                continue;
+              }
               if (json.delta) {
                 acc += json.delta;
                 setStreaming(acc);
               }
             } catch {
-              // ignore
+              // ignore parse errors on keepalives / partials
             }
           }
         }
+
+        const assistantId = genId();
+        const hasChatLog = !!chatLogId;
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: acc, ts: Date.now() },
+          {
+            id: assistantId,
+            role: "assistant",
+            content: acc,
+            ts: Date.now(),
+            chatLogId: chatLogId || undefined,
+            followUpsLoading: hasChatLog,
+          },
         ]);
         setStreaming("");
+
+        // Trigger follow-up question fetch in the background
+        if (hasChatLog) {
+          void fetchFollowUps(assistantId, userMsg.content, acc);
+        }
       }
     } catch (e) {
       setMessages((prev) => [
         ...prev,
         {
+          id: genId(),
           role: "assistant",
           content: `出错：${e instanceof Error ? e.message : String(e)}`,
           ts: Date.now(),
@@ -171,7 +311,7 @@ export default function ChatPanel({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      void send();
     }
   };
 
@@ -202,9 +342,9 @@ export default function ChatPanel({
           </div>
         )}
 
-        {messages.map((m, i) => (
+        {messages.map((m) => (
           <div
-            key={i}
+            key={m.id}
             className={cn(
               "flex gap-2",
               m.role === "user" ? "justify-end" : "justify-start"
@@ -238,6 +378,115 @@ export default function ChatPanel({
                 </div>
               ) : (
                 <div className="whitespace-pre-wrap break-words">{m.content}</div>
+              )}
+
+              {/* Feature 6: follow-ups + feedback row (only for assistant
+                  messages that have been persisted to the DB) */}
+              {m.role === "assistant" && m.chatLogId && !m.error && (
+                <div className="mt-2.5 pt-2 border-t border-border/40 space-y-2">
+                  {/* Follow-up cards */}
+                  {m.followUpsLoading && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      生成延伸追问…
+                    </div>
+                  )}
+                  {!m.followUpsLoading &&
+                    m.followUps &&
+                    m.followUps.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1">
+                          <Sparkles className="h-3 w-3" />
+                          延伸追问（点击直接发送）
+                        </div>
+                        {m.followUps.map((q, qi) => (
+                          <button
+                            key={qi}
+                            type="button"
+                            onClick={() => handleFollowUpClick(q)}
+                            className="group w-full flex items-center gap-1.5 text-left text-[12px] px-2.5 py-1.5 rounded-md border border-border/60 hover:border-primary/50 hover:bg-primary/5 transition-colors disabled:opacity-50"
+                            disabled={loading}
+                          >
+                            <Sparkles className="h-3 w-3 text-primary/70 group-hover:text-primary flex-shrink-0" />
+                            <span className="flex-1 leading-snug">{q}</span>
+                            <ChevronRight className="h-3 w-3 text-muted-foreground/60 group-hover:text-primary flex-shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                  {/* Like / dislike row */}
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-7 px-2 text-[11px] gap-1",
+                        m.feedback === "up" &&
+                          "text-green-600 bg-green-50 hover:bg-green-100 dark:bg-green-950/30 dark:text-green-400"
+                      )}
+                      onClick={() => handleLike(m.id, m.chatLogId!)}
+                      disabled={loading}
+                    >
+                      <ThumbsUp className="h-3 w-3" />
+                      有帮助
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-7 px-2 text-[11px] gap-1",
+                        m.feedback === "down" &&
+                          "text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400"
+                      )}
+                      onClick={() => handleDislike(m.id, m.chatLogId!)}
+                      disabled={loading}
+                    >
+                      <ThumbsDown className="h-3 w-3" />
+                      需改进
+                    </Button>
+                  </div>
+
+                  {/* Inline reason textarea for dislike */}
+                  {m.showReason && (
+                    <div className="space-y-1.5">
+                      <Textarea
+                        value={m.reasonText || ""}
+                        onChange={(e) =>
+                          updateMessage(m.id, { reasonText: e.target.value })
+                        }
+                        placeholder="告诉 Agent 哪里需要改进（可选）…"
+                        className="min-h-[60px] max-h-[120px] resize-none text-[12px] scrollbar-thin"
+                        rows={2}
+                      />
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[11px]"
+                          onClick={() =>
+                            updateMessage(m.id, { showReason: false })
+                          }
+                          disabled={m.reasonSubmitting}
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-7 text-[11px]"
+                          onClick={() => submitReason(m.id, m.chatLogId!)}
+                          disabled={m.reasonSubmitting}
+                        >
+                          {m.reasonSubmitting ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            "提交"
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             {m.role === "user" && (
@@ -319,7 +568,7 @@ export default function ChatPanel({
           rows={1}
         />
         <Button
-          onClick={send}
+          onClick={() => void send()}
           disabled={loading || (!input.trim() && !hasImage)}
           size="sm"
           className="h-9 px-3"
