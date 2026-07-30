@@ -68,7 +68,7 @@ export function SiteFooter() {
                 { label: "技术架构", href: "#stack" },
                 { label: "应用场景", href: "#usecases" },
                 { label: "作者", href: "#author" },
-                { label: "立即开始", href: "#cta" },
+                { label: "立即开始", href: "/app" },
               ].map((it) => (
                 <li key={it.href}>
                   <a

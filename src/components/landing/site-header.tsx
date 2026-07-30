@@ -76,7 +76,7 @@ export function SiteHeader() {
               GitHub
             </a>
             <a
-              href="#cta"
+              href="/app"
               className="inline-flex items-center gap-1.5 px-4 py-2 font-sans-ui text-[11px] tracking-[0.1em] uppercase bg-[var(--burgundy)] text-[var(--paper)] rounded-sm hover:bg-[var(--burgundy-deep)] transition-colors shadow-sm"
             >
               开始体验
