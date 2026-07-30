@@ -413,3 +413,58 @@ Files Verified (no changes needed):
 - src/app/page.tsx
 - src/components/pdf-viewer.tsx
 - src/lib/llm.ts
+
+---
+Task ID: v9-upload-fix-and-collapse-unify
+Agent: main (Super Z)
+Task: 用户反馈：上传文献 404；全文框架折叠框和原文段落导航一样；产生结果后先上下折叠
+
+Work Log:
+- 排查 404 根因：src/app/api/upload/route.ts 在最近提交中被误删（git log 显示 dd9b5c0 已无此文件）
+- 从 git 历史 60bdfb1 恢复 src/app/api/upload/route.ts（MinerU 驱动版，含 quota 检查 + 后台解析 + pdfjs 兜底）
+- 验证恢复：POST /api/upload 返回 200 + paperId，配额检查正常
+- src/components/outline-panel.tsx — 折叠按钮统一为 HeadingNavigator 风格
+  - 删除 PanelLeftClose / ChevronDown 双图标切换
+  - header 改为 full-width button（与 HeadingNavigator 一致）
+  - 用 ChevronRight + `!collapsed && "rotate-90"` 图标（与 HeadingNavigator 完全一致）
+  - 头部图标尺寸从 h-4 → h-3.5、字号从 text-sm → text-[12px]，对齐 HeadingNavigator
+  - 头部边框：collapsed 时不显示（与 HeadingNavigator 一致），展开时单独 border-b
+- src/components/heading-navigator.tsx — 加 controlled collapse 支持
+  - Props 新增 collapsed? 和 onCollapsedChange?
+  - 内部仍保留 internalCollapsed state 作为非 controlled 模式兜底
+  - toggleCollapsed() 同时支持 controlled 和 uncontrolled 两种调用方式
+  - header button 的 onClick 改用 toggleCollapsed
+- src/app/page.tsx — 接入双 controlled collapse + 结果到达后自动折叠
+  - 新增 headingCollapsed state（与 outlineCollapsed 并列）
+  - onFile 开始时：setOutlineCollapsed(false) + setHeadingCollapsed(false)（上传时显示进度）
+  - setOutline(data.outline) 之后：setOutlineCollapsed(true) + setHeadingCollapsed(true)
+    （用户要求"产生结果之后先上下折叠"，让中央阅读区获得最大空间）
+  - 左侧 Panel 容器逻辑精细化：
+    - outlineCollapsed && !headingCollapsed → HeadingNavigator flex-1 撑满
+    - outlineCollapsed && headingCollapsed → OutlinePanel wrapper flex-1 吸收空白
+    - !outlineCollapsed → OutlinePanel flex-1 撑满（原行为）
+  - HeadingNavigator 新增 collapsed + onCollapsedChange props
+  - fillContainer 改为 `outlineCollapsed && !headingCollapsed`（更精确）
+
+Stage Summary:
+- ✅ 上传 404 修复：从 git 历史恢复 src/app/api/upload/route.ts，POST /api/upload 返回 200
+- ✅ 全文框架折叠框与原文段落导航风格统一：
+  - 都用 ChevronRight + rotate-90 chevron 图标
+  - 都把整个 header 做成 full-width toggle button
+  - 头部尺寸、字号、边框规则完全一致
+- ✅ 产生结果后先上下折叠：
+  - 上传时两个 panel 都展开（显示"分析中…"进度）
+  - setOutline 完成后两个 panel 同时自动折叠
+  - 中央 block reader 获得最大空间
+  - 用户点 header 任意位置即可展开对应 panel
+- tsc --noEmit: 0 errors in src/
+- lint: 修改的三个文件无新警告
+- 端到端：home 200 OK，POST /api/upload 200 OK + paperId + quota
+
+Files Modified:
+- src/components/outline-panel.tsx（header 改 full-width button + ChevronRight）
+- src/components/heading-navigator.tsx（新增 controlled collapse props）
+- src/app/page.tsx（headingCollapsed state + 自动折叠逻辑 + 容器布局精细化）
+
+Files Restored:
+- src/app/api/upload/route.ts（从 git 60bdfb1 恢复，MinerU 驱动版）

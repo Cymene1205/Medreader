@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, FileSearch, ChevronRight, Expand, Quote, ChevronDown, PanelLeftClose } from "lucide-react";
+import { Loader2, FileSearch, ChevronRight, Expand, Quote } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 
@@ -84,32 +84,32 @@ export default function OutlinePanel({
 
   return (
     <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
-      <div className="px-3 py-2.5 border-b flex items-center gap-2">
-        <FileSearch className="h-4 w-4 text-primary" />
-        <span className="text-sm font-semibold">全文框架</span>
+      {/* Header — matches HeadingNavigator's pattern: a full-width button
+          row that toggles collapse. Uses ChevronRight with rotate-90 when
+          expanded, identical to the 原文段落导航 panel above. */}
+      <button
+        type="button"
+        onClick={() => onCollapsedChange?.(!collapsed)}
+        className="w-full px-3 py-2.5 flex items-center gap-2 text-left hover:bg-muted/40 transition-colors flex-shrink-0"
+        title={collapsed ? "展开全文框架" : "折叠全文框架"}
+        aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
+        aria-expanded={!collapsed}
+      >
+        <FileSearch className="h-3.5 w-3.5 text-primary flex-shrink-0" />
+        <span className="text-[12px] font-semibold flex-1">全文框架</span>
         {outline?.sections?.length ? (
           <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
             {outline.sections.length} 维度
           </Badge>
         ) : null}
-        {/* Collapse toggle — replaces the previous zoom bar. When collapsed,
-            the entire outline body is hidden, freeing vertical space for the
-            原文段落导航 panel above. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-6 w-6 p-0"
-          onClick={() => onCollapsedChange?.(!collapsed)}
-          title={collapsed ? "展开全文框架" : "折叠全文框架"}
-          aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
-        >
-          {collapsed ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <PanelLeftClose className="h-3.5 w-3.5" />
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 text-muted-foreground transition-transform flex-shrink-0",
+            !collapsed && "rotate-90"
           )}
-        </Button>
-      </div>
+        />
+      </button>
+      {!collapsed && <div className="border-b" />}
 
       {/*
         Body — hidden when collapsed. We keep the Dialog mounted so a

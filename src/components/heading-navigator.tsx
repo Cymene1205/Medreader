@@ -23,6 +23,13 @@ type Props = {
    * rest of the vertical space.
    */
   fillContainer?: boolean;
+  /**
+   * Controlled collapse state. When provided, the parent owns the state
+   * (used to auto-collapse both panels when results arrive). When omitted,
+   * the component manages its own state internally for backward compat.
+   */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 };
 
 /**
@@ -90,8 +97,19 @@ export default function HeadingNavigator({
   activeHeadingText,
   onHeadingClick,
   fillContainer = false,
+  collapsed: collapsedProp,
+  onCollapsedChange,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Backwards-compat: if the parent doesn't control collapse state, manage
+  // it locally. When controlled, mirror the prop into local state for the
+  // existing internal toggle button to keep working.
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const collapsed =
+    collapsedProp !== undefined ? collapsedProp : internalCollapsed;
+  const toggleCollapsed = () => {
+    if (onCollapsedChange) onCollapsedChange(!collapsed);
+    else setInternalCollapsed((v) => !v);
+  };
   // Set of group keys whose H2/H3 children are hidden. Empty by default —
   // all groups start expanded so the user sees the full TOC.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -121,7 +139,7 @@ export default function HeadingNavigator({
       )}
     >
       <button
-        onClick={() => setCollapsed((v) => !v)}
+        onClick={toggleCollapsed}
         className="w-full px-3 py-2 flex items-center gap-2 text-left hover:bg-muted/40 transition-colors flex-shrink-0"
       >
         <ListTree className="h-3.5 w-3.5 text-primary" />

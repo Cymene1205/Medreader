@@ -84,6 +84,11 @@ export default function Home() {
   // collapsed, the 原文段落导航 panel above automatically expands to fill
   // the freed vertical space.
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  // Mirror state for 原文段落导航. Both panels start collapsed when a new
+  // analysis result arrives (user request: "在产生结果之后先上下折叠"),
+  // so the user sees the document content first and can expand either panel
+  // by clicking its header.
+  const [headingCollapsed, setHeadingCollapsed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
 
@@ -140,6 +145,11 @@ export default function Home() {
       setPaperMarkdown(null);
       setPaperBlocks(null);
       setPaperImagesDir(null);
+      // Reset both left-panel collapse states at the start of a new upload
+      // so the panels are visible while loading (showing "analyzing…"), then
+      // auto-collapse once results arrive (see the setOutline call below).
+      setOutlineCollapsed(false);
+      setHeadingCollapsed(false);
       setUploadStage("uploading");
       setMineruStatus("上传中…");
 
@@ -246,6 +256,12 @@ export default function Home() {
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         setOutline(data.outline);
         setUploadStage("done");
+        // User request: "在产生结果之后先上下折叠" — after analysis results
+        // are produced, both left panels (原文段落导航 + 全文框架) start
+        // collapsed so the center reader gets maximum screen real estate.
+        // The user can click either header to expand.
+        setOutlineCollapsed(true);
+        setHeadingCollapsed(true);
       } catch (e) {
         setOutlineError(e instanceof Error ? e.message : String(e));
         setUploadStage("idle");
@@ -466,23 +482,44 @@ export default function Home() {
             <div className="h-full border-r bg-card flex flex-col">
               {/* HeadingNavigator at top — verbatim paper section/subsection
                   titles, used for precise paragraph jumping. When 全文框架
-                  is collapsed below, this panel grows to fill the space. */}
-              <div className={cn("min-h-0", outlineCollapsed ? "flex-1" : "flex-shrink-0")}>
+                  is collapsed below (and this panel is expanded), this panel
+                  grows to fill the space. Both panels share the same
+                  controlled collapse pattern (chevron-right header button)
+                  and both auto-collapse when new analysis results arrive. */}
+              <div
+                className={cn(
+                  "min-h-0",
+                  // HeadingNavigator expands only when 全文框架 below is
+                  // collapsed AND this panel itself is expanded.
+                  outlineCollapsed && !headingCollapsed ? "flex-1" : "flex-shrink-0"
+                )}
+              >
                 <HeadingNavigator
                   headings={outline?.headings}
                   activeHeadingText={activeHeadingText}
                   onHeadingClick={onHeadingClick}
-                  fillContainer={outlineCollapsed}
+                  fillContainer={outlineCollapsed && !headingCollapsed}
+                  collapsed={headingCollapsed}
+                  onCollapsedChange={setHeadingCollapsed}
                 />
               </div>
               {/* Outline (6-dimension LLM-generated analysis) at bottom.
                   When `outlineCollapsed` is true, this panel shrinks to
                   header-only and the parent flex-1 is dropped so the
-                  HeadingNavigator above can grow. */}
+                  HeadingNavigator above can grow.
+                  If BOTH panels are collapsed, we add flex-1 to the
+                  OutlinePanel wrapper so it pushes the HeadingNavigator
+                  header to the top and absorbs the leftover space — that
+                  way the empty area is part of the OutlinePanel header's
+                  background, not a weird gap. */}
               <div
                 className={cn(
                   "border-t",
-                  outlineCollapsed ? "flex-shrink-0" : "flex-1 min-h-0 overflow-hidden"
+                  outlineCollapsed
+                    ? headingCollapsed
+                      ? "flex-1 min-h-0" // both collapsed: absorb space
+                      : "flex-shrink-0"    // only outline collapsed: header-only
+                    : "flex-1 min-h-0 overflow-hidden" // neither collapsed
                 )}
               >
                 <OutlinePanel
