@@ -49,6 +49,8 @@ type Props = {
   paperText?: string;
   /** current paper id (for ChatLog bookkeeping) */
   paperId?: string | null;
+  /** LLM headers from LLMSettingsDialog — attached to all API calls */
+  llmHeaders?: Record<string, string>;
 };
 
 const genId = () =>
@@ -61,12 +63,15 @@ export default function ChatPanel({
   paperMarkdown,
   paperText,
   paperId,
+  llmHeaders = {},
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headersRef = useRef(llmHeaders);
+  headersRef.current = llmHeaders;
 
   // Auto-scroll
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function ChatPanel({
     try {
       const res = await fetch("/api/followups", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...headersRef.current },
         body: JSON.stringify({ question, answer, paperText }),
       });
       const data = await res.json();
@@ -197,7 +202,7 @@ export default function ChatPanel({
         // connect the figure with the paper's narrative.
         const res = await fetch("/api/vision", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...headersRef.current },
           body: JSON.stringify({
             prompt: userMsg.content,
             image: attachedImage,
@@ -231,7 +236,7 @@ export default function ChatPanel({
         }
         const res = await fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...headersRef.current },
           body: JSON.stringify({
             messages: history,
             question: userMsg.content,

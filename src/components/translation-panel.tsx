@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Languages, Trash2, Quote } from "lucide-react";
+import { Loader2, Languages, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type TranslateEntry = {
   id: number;
-  source: string;
+  source: string; // kept for traceability, but not displayed
   target: string;
   ts: number;
   loading: boolean;
@@ -20,12 +20,21 @@ type Props = {
   selectedBlockIdx?: number | null;
   // bump nonce when a new selection happens (even if same string)
   selectionNonce: number;
+  /** LLM headers from LLMSettingsDialog — attached to translate API call */
+  llmHeaders?: Record<string, string>;
 };
 
-export default function TranslationPanel({ selectedText, selectedBlockIdx, selectionNonce }: Props) {
+export default function TranslationPanel({
+  selectedText,
+  selectedBlockIdx,
+  selectionNonce,
+  llmHeaders = {},
+}: Props) {
   const [entries, setEntries] = useState<TranslateEntry[]>([]);
   const idRef = useRef(0);
   const lastNonceRef = useRef(0);
+  const headersRef = useRef(llmHeaders);
+  headersRef.current = llmHeaders;
 
   useEffect(() => {
     if (!selectedText || selectionNonce === lastNonceRef.current) return;
@@ -49,7 +58,7 @@ export default function TranslationPanel({ selectedText, selectedBlockIdx, selec
       try {
         const res = await fetch("/api/translate", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...headersRef.current },
           body: JSON.stringify({ text: selectedText, target: "中文" }),
         });
         if (!res.ok) {
@@ -58,18 +67,12 @@ export default function TranslationPanel({ selectedText, selectedBlockIdx, selec
         }
         const data = await res.json();
         setEntries((prev) =>
-          prev.map((e) =>
-            e.id === id
-              ? { ...e, target: data.translation, loading: false }
-              : e
-          )
+          prev.map((e) => (e.id === id ? { ...e, target: data.translation, loading: false } : e))
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setEntries((prev) =>
-          prev.map((e) =>
-            e.id === id ? { ...e, loading: false, error: msg } : e
-          )
+          prev.map((e) => (e.id === id ? { ...e, loading: false, error: msg } : e))
         );
       }
     })();
@@ -97,7 +100,7 @@ export default function TranslationPanel({ selectedText, selectedBlockIdx, selec
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-        <div className="p-3 space-y-3">
+        <div className="p-3 space-y-2.5">
           {!entries.length && (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/70 gap-2 text-center px-4">
               <Languages className="h-6 w-6 opacity-30" />
@@ -108,38 +111,30 @@ export default function TranslationPanel({ selectedText, selectedBlockIdx, selec
               </p>
             </div>
           )}
-          {entries.map((e) => (
-            <div key={e.id} className="rounded-md border p-2.5 space-y-2 bg-card">
-              <div>
-                <div className="text-[10px] uppercase text-muted-foreground tracking-wide mb-1 flex items-center gap-1">
-                  <Quote className="h-3 w-3" />
-                  原文
-                  {selectedBlockIdx != null && (
-                    <span className="ml-auto text-[9px] opacity-70">
-                      Block #{selectedBlockIdx}
-                    </span>
-                  )}
-                </div>
-                <div className="text-[12px] text-foreground/80 leading-relaxed max-h-32 overflow-y-auto scrollbar-thin whitespace-pre-wrap">
-                  {e.source}
-                </div>
+          {entries.map((e, idx) => (
+            <div
+              key={e.id}
+              className="rounded-md border p-3 bg-card relative"
+            >
+              {/* Counter badge (newest = 1) */}
+              <div className="absolute top-2 right-2 text-[9px] text-muted-foreground/50">
+                #{entries.length - idx}
               </div>
-              <div className="h-px bg-border/60" />
-              <div>
-                <div className="text-[10px] uppercase text-primary tracking-wide mb-1">
-                  译文
+
+              {e.loading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  翻译中…
                 </div>
-                {e.loading ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                    翻译中…
-                  </div>
-                ) : e.error ? (
-                  <div className="text-xs text-red-500">翻译失败：{e.error}</div>
-                ) : (
-                  <div className="text-[13px] leading-relaxed">{e.target}</div>
-                )}
-              </div>
+              ) : e.error ? (
+                <div className="text-xs text-red-500 leading-relaxed">
+                  翻译失败：{e.error}
+                </div>
+              ) : (
+                <div className="text-[13.5px] leading-[1.8] text-foreground/90">
+                  {e.target}
+                </div>
+              )}
             </div>
           ))}
         </div>

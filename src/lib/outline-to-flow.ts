@@ -13,6 +13,9 @@ export type FlowNode = {
   data: {
     label: string;
     summary?: string;
+    detail?: string;
+    keyPoints?: string[];
+    quote?: string;
     dimColor?: string;
     isSection?: boolean;
     isRoot?: boolean;
@@ -50,9 +53,9 @@ const ROOT_COLOR = "#475569";
 const MINIMAP_FALLBACK = "#94A3B8";
 
 // Node sizing used both for rendering hints and dagre layout
-const ROOT_SIZE = { width: 200, height: 64 };
-const SECTION_SIZE = { width: 240, height: 92 };
-const CHILD_SIZE = { width: 200, height: 60 };
+const ROOT_SIZE = { width: 220, height: 72 };
+const SECTION_SIZE = { width: 280, height: 140 };
+const CHILD_SIZE = { width: 220, height: 72 };
 
 // Dagre layout configuration
 const DAGRE_CONFIG = {
@@ -136,6 +139,9 @@ export function outlineToFlow(
       data: {
         label: section.title,
         summary: section.summary,
+        detail: section.detail,
+        keyPoints: section.keyPoints,
+        quote: section.quote,
         dimColor,
         isSection: true,
         index: idx,

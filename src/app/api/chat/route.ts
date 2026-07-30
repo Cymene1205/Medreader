@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { streamDeepSeek, type ChatMessage } from "@/lib/deepseek";
+import { resolveLLMConfig, streamLLM, type ChatMessage } from "@/lib/llm";
 import { db } from "@/lib/db";
 import { trackEvent } from "@/lib/track";
 import { checkAndIncrement } from "@/lib/quota";
@@ -11,6 +11,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
+    const cfg = resolveLLMConfig(req);
     const { messages, question, context, markdown, paperId } = await req.json();
 
     // messages: prior chat history [{role, content}]
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         let acc = "";
         try {
-          for await (const delta of streamDeepSeek(fullMessages, {
+          for await (const delta of streamLLM(cfg, fullMessages, {
             temperature: 0.4,
             maxTokens: 2500,
           })) {

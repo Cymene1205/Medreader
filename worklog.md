@@ -134,3 +134,92 @@ Stage Summary:
 - 段落单击触发整段翻译（替换之前的选词翻译）
 - 每日额度：匿名用户 10 PDF/天、50 提问/天、100 翻译/天、20 图片提问/天
 - 渐进式加载：MinerU 解析期间显示快速文本预览，完成后切换到结构化分块视图
+
+---
+Task ID: v5-polish
+Agent: main (Super Z)
+Task: 根据用户反馈修复 10 个问题：导图太简单、LLM 模型可换、点击翻译没生效、markdown 渲染、跳转乱跳、翻译不显示原文、PDF 跳转崩溃、论证思路单独提问、Result 大标题缩略框、中间查找框
+
+Work Log:
+- 新建 src/lib/llm.ts：LLM 服务商抽象层，支持 deepseek/openai/zhipu/moonshot/anthropic/custom 6 种 OpenAI 兼容 provider
+  - resolveLLMConfig(req) 从请求头 X-LLM-Provider/X-LLM-Base-Url/X-LLM-Api-Key/X-LLM-Model 读取用户配置，缺失时回退 env 默认
+  - callLLM / streamLLM 走标准 OpenAI 兼容 /chat/completions 端点
+  - callVisionLLM 在非 deepseek provider 下走标准多模态消息；deepseek 仍走 z-ai-web-dev-sdk
+  - parseJsonLoose 容错 JSON 解析（剥 markdown 代码块、找首尾 {}）
+- 改写 src/lib/deepseek.ts：变成 src/lib/llm.ts 的兼容 shim，保留 callDeepSeek/streamDeepSeek/callVision 旧 API，内部转调 getDefaultLLMConfig() + callLLM/streamLLM
+- 改写 5 个 API route 全部接入新抽象：
+  - /api/analyze：6 个维度并行调用（Promise.all），每个维度独立 system+user prompt，输出 300-600 字 detail + 3-5 keyPoints + 2-5 children + 原文 quote
+  - /api/chat：streamLLM 替换 streamDeepSeek
+  - /api/translate /api/vision /api/followups：callLLM 替换 callDeepSeek
+- /api/analyze 同时从 MinerU markdown 抽取 H2/H3 标题（extractHeadings），作为 outline.headings 返回，作为精确锚点
+- 新建 /api/llm-test：用配置发一条 1+1= 测试消息，验证连通性
+- 新建 src/components/llm-settings-dialog.tsx：
+  - 6 个 provider preset（DeepSeek/OpenAI/智谱/Moonshot/Anthropic/自定义）
+  - 表单：provider / baseUrl / apiKey (含眼睛切换显示) / model
+  - "测试连接" 按钮 → /api/llm-test 返回 ok/失败信息
+  - localStorage 持久化（key: medreader.llm.settings.v1）
+  - 导出 useLLMHeaders / refreshLLMHeaders / hasUserLLMConfig 三个工具
+- 改写 src/components/block-reader.tsx：
+  - 段落文本走 ReactMarkdown 渲染（disallowedElements: p/h1-6/br/hr/img/ul/ol/li/blockquote/code/pre，unwrapDisallowed），inline **bold**/*italic*/sup/sub 正确显示
+  - cleanMinerUText 清理 MinerU 过度转义（\* → *、\_ → _、中段 \# → #）
+  - findBlockIndex 重写为打分式：exact quote +1000、quote head +800、关键词按长度加权 +25~300、token overlap +200 比例分；score=0 时不跳转（修复"乱跳"问题）
+  - 新增查找框（Ctrl+F 唤起 / Esc 关闭）：高亮所有命中块（amber 色左边条）、显示 N/M 计数、上下翻动跳转
+  - 表格 caption/footnote 类型守卫（typeof string）避免渲染数组
+  - 每个 block 加 scroll-mt-4 让 scrollIntoView 不被顶栏遮挡
+- 改写 src/components/translation-panel.tsx：
+  - 删除"原文"块，只显示"译文"（用户要求）
+  - 保留历史栈（最新置顶），右下角 #N 计数
+  - 接收 llmHeaders prop 透传到 /api/translate
+- 改写 src/components/heading-navigator.tsx：左下角新增"原文段落导航"折叠面板，列出 outline.headings 全部 H2/H3 标题，点击 → setHighlightToken({quote: h.text}) 跳转到 block reader 对应标题块
+- 改写 src/components/outline-panel.tsx：Outline 类型加 headings?: PaperHeading[]
+- 改写 src/lib/outline-to-flow.ts：FlowNode.data 加 detail/keyPoints/quote 字段；SECTION_SIZE 增大到 280×140；CHILD_SIZE 增大到 220×72
+- 改写 src/components/mindmap-view.tsx：section 节点显示 title + summary（2行） + 最多 3 个 keyPoints（bullet list）；child 节点显示 title + summary（2行）
+- 改写 src/app/page.tsx：
+  - 顶栏新增"模型设置"按钮（未配置时显示 amber 警告图标 + 顶部黄底提示条）
+  - onChildClick/onHeadingClick 不再强制 setActiveView("blocks")，只有 mindmap 视图时才切回 blocks（修复"PDF 跳转就消失"）
+  - 左侧 Panel 内分两部分：上方 OutlinePanel（flex-1），下方 HeadingNavigator（flex-shrink-0）
+  - llmHeaders state + 透传给 ChatPanel / TranslationPanel
+  - onHeadingClick 用 heading.text 作为 quote（精确锚点），keywords=[]，findBlockIndex 会因为 quote head 完全匹配得 +800 分
+- 改写 src/components/chat-panel.tsx：新增 llmHeaders prop，所有 fetch 调用（/api/chat、/api/vision、/api/followups）的 headers 合并 headersRef.current
+- 端到端验证：
+  - /api/llm-test 用 deepseek 配置调用返回 "2"（1+1=2）
+  - /api/analyze 用真实论文 markdown 调用，12.9s 返回 6 个 section（detail 778-1256 字、keyPoints 4-5 个、children 3-5 个）+ 10 个 H2/H3 headings（含 "RESULTS"、"Time-Dependent Transcriptional Heterogeneity..."）
+  - tsc --noEmit 通过（src/ 0 errors，skills/ 1 个无关错误）
+  - dev server 编译 / 200 OK
+
+Stage Summary:
+- 大纲"太简单"问题解决：6 个维度现在并行调用 DeepSeek，每个维度独立 system prompt + 全文输入，输出 300-600 字 detail + 3-5 keyPoints + 2-5 children（之前单次调用全 6 维度，输出被压缩）
+- "预留 LLM API 接口"完成：右上角"模型设置"对话框可选 6 种 provider，apiKey/baseUrl/model 三栏可自定义，"测试连接"按钮实时验证，配置存 localStorage 通过 HTTP header 传给服务端，所有 5 个 LLM API 路由统一从 header 读
+- "结构化点击翻译没做出来"解决：BlockReader 段落文本现在走 ReactMarkdown，inline 加粗/斜体正确显示；点击触发 onParagraphClick 翻译整段
+- "markdown 看着像 html"解决：MinerU 过度转义的 \* \_ \# 被清理；表格 table_body 仍走 ReactMarkdown+rehypeRaw（本就是 HTML）；段落文本 disallowed block-level 元素，只渲染 inline markdown
+- "点击跳转乱跳转"解决：findBlockIndex 改为打分制，score=0 时返回 -1 不跳转；quote 完全匹配 +1000、quote 头部 +800、关键词按长度加权；heading 用 verbatim 论文标题作 quote 必中
+- "翻译那里不用显示原文"完成：TranslationPanel 删除"原文"块，只显示译文
+- "原文 PDF 跳转就报错消失"解决：onChildClick 不再强制 setActiveView("blocks")，PDF tab 不会被切走；只有 mindmap tab 下点击会切回 blocks（mindmap 本身无法显示跳转）
+- "论证思路应该单独提问一次"完成：6 个维度各自独立调用 DeepSeek，输出详细程度显著提升（论证思路 section 885 字 detail + 5 个 children）
+- "Result 部分大标题单独放出来"完成：/api/analyze 从 MinerU markdown 抽取所有 H2/H3 headings，返回 outline.headings；左下角 HeadingNavigator 折叠面板列出，点击即跳转到对应标题块（用 verbatim 标题文本作 quote，必中精确锚点）
+- "中间缺少查找框"完成：BlockReader 顶栏新增"查找"按钮 + Ctrl+F 快捷键；查找框支持上下翻动、命中块用 amber 左边条标记、显示 N/M 计数
+- 思维导图变丰富：section 节点显示 title + 2 行 summary + 3 个 keyPoints bullet；child 节点显示 title + 2 行 summary；尺寸从 240×92/200×60 增大到 280×140/220×72
+
+Files Created:
+- src/lib/llm.ts
+- src/components/llm-settings-dialog.tsx
+- src/components/heading-navigator.tsx
+- src/app/api/llm-test/route.ts
+- scripts/check-db.js (debugging only)
+- scripts/test-analyze.js (debugging only)
+
+Files Modified:
+- src/lib/deepseek.ts (rewritten as shim)
+- src/lib/outline-to-flow.ts
+- src/components/block-reader.tsx (rewritten)
+- src/components/translation-panel.tsx (rewritten)
+- src/components/outline-panel.tsx (added PaperHeading/Outline.headings type)
+- src/components/mindmap-view.tsx (enriched node renderers)
+- src/components/chat-panel.tsx (added llmHeaders prop)
+- src/app/page.tsx (rewritten — LLM UI, no force-switch, heading navigator)
+- src/app/api/analyze/route.ts (rewritten — 6 parallel calls + headings extraction)
+- src/app/api/chat/route.ts
+- src/app/api/translate/route.ts
+- src/app/api/vision/route.ts
+- src/app/api/followups/route.ts
+

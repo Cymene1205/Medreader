@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { callDeepSeek } from "@/lib/deepseek";
+import { resolveLLMConfig, callLLM } from "@/lib/llm";
 import { trackEvent } from "@/lib/track";
 
 export const runtime = "nodejs";
@@ -69,6 +69,7 @@ function extractFollowUps(raw: string): string[] {
  */
 export async function POST(req: NextRequest) {
   try {
+    const cfg = resolveLLMConfig(req);
     const body = await req.json();
     const { question, answer, paperText } = body || {};
 
@@ -92,7 +93,8 @@ export async function POST(req: NextRequest) {
         ? `论文片段（供参考）：\n${paperText.slice(0, 5000)}`
         : "（未提供论文片段，请基于问题与回答生成延伸追问）");
 
-    const raw = await callDeepSeek(
+    const raw = await callLLM(
+      cfg,
       [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userPrompt },

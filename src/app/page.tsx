@@ -8,11 +8,17 @@ import OutlinePanel, {
   type Outline,
   type OutlineChild,
   type OutlineSection,
+  type PaperHeading,
 } from "@/components/outline-panel";
 import TranslationPanel from "@/components/translation-panel";
 import ChatPanel from "@/components/chat-panel";
 import MindmapView from "@/components/mindmap-view";
 import BlockReader, { type MinerUBlock, type BlockReaderHandle } from "@/components/block-reader";
+import HeadingNavigator from "@/components/heading-navigator";
+import LLMSettingsDialog, {
+  refreshLLMHeaders,
+  hasUserLLMConfig,
+} from "@/components/llm-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -26,6 +32,8 @@ import {
   FileText,
   Network,
   LayoutGrid,
+  Settings2,
+  AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -61,139 +69,163 @@ export default function Home() {
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
+  const [activeHeadingText, setActiveHeadingText] = useState<string | undefined>();
   const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("blocks");
+  const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
+  const [llmConfigured, setLlmConfigured] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
 
-  const onFile = useCallback(async (file: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      alert("目前仅支持 PDF 格式");
-      return;
-    }
-    const buf = await file.arrayBuffer();
-    const bufForText = buf.slice(0);
-    setFileData(buf);
-    setFileName(file.name);
-    setOutline(null);
-    setOutlineError(null);
-    setSelectedText("");
-    setSelectedBlockIdx(null);
-    setAttachedImage(null);
-    setPaperMarkdown(null);
-    setPaperBlocks(null);
-    setPaperImagesDir(null);
-    setUploadStage("uploading");
-    setMineruStatus("上传中…");
+  // Re-check LLM config status whenever the dialog closes
+  useEffect(() => {
+    setLlmConfigured(hasUserLLMConfig());
+  }, [llmSettingsOpen]);
 
-    // Upload to server — quota is checked server-side.
-    let serverPaperId: string | null = null;
-    let serverParsedText: string | null = null;
-    let serverMarkdown: string | null = null;
-    let serverBlocks: MinerUBlock[] | null = null;
-    let serverImagesDir: string | null = null;
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const upRes = await fetch("/api/upload", { method: "POST", body: fd });
-      if (upRes.status === 429) {
-        const j = await upRes.json().catch(() => ({}));
-        throw new Error(j.error || "今日解析额度已用尽");
-      }
-      if (!upRes.ok) {
-        const j = await upRes.json().catch(() => ({}));
-        throw new Error(j.error || `Upload failed HTTP ${upRes.status}`);
-      }
-      const upData = await upRes.json();
-      serverPaperId = upData.paperId;
-      setPaperId(upData.paperId);
-      setUploadStage("parsing");
-      setMineruStatus("MinerU 解析中（30-90 秒）…");
+  // Build a headers snapshot for outgoing fetches; refresh when dialog closes.
+  // We expose this via a ref-like state so child ChatPanel/TranslationPanel can
+  // pick it up. For simplicity we put headers into window-level var (the chat
+  // panel reads LLM headers from the latest snapshot via a custom hook).
+  const [llmHeaders, setLlmHeaders] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setLlmHeaders(refreshLLMHeaders());
+  }, [llmSettingsOpen]);
 
-      // Poll for parse status
-      for (let i = 0; i < 120; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const sRes = await fetch(`/api/paper/${upData.paperId}`);
-        if (sRes.ok) {
-          const sData = await sRes.json();
-          if (sData.parseStatus === "done") {
-            serverParsedText = sData.parsedText;
-            serverMarkdown = sData.markdown;
-            serverBlocks = sData.blocks;
-            serverImagesDir = sData.imagesDir;
-            break;
-          }
-          if (sData.parseStatus === "error") {
-            throw new Error("MinerU 解析失败，已尝试 pdfjs 兜底");
-          }
-          // Still pending/running — update status message
-          if (i % 5 === 0) {
-            setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
-          }
-        }
+  const onFile = useCallback(
+    async (file: File) => {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".pdf")) {
+        alert("目前仅支持 PDF 格式");
+        return;
       }
-    } catch (e) {
-      setOutlineError(e instanceof Error ? e.message : String(e));
-      setUploadStage("idle");
-      setMineruStatus("");
-      return;
-    }
+      const buf = await file.arrayBuffer();
+      const bufForText = buf.slice(0);
+      setFileData(buf);
+      setFileName(file.name);
+      setOutline(null);
+      setOutlineError(null);
+      setSelectedText("");
+      setSelectedBlockIdx(null);
+      setAttachedImage(null);
+      setActiveHeadingText(undefined);
+      setActiveChildId(undefined);
+      setPaperMarkdown(null);
+      setPaperBlocks(null);
+      setPaperImagesDir(null);
+      setUploadStage("uploading");
+      setMineruStatus("上传中…");
 
-    // Use server-parsed content if available; otherwise client extraction
-    let full = "";
-    if (serverParsedText) {
-      full = serverParsedText;
-    } else {
+      // Upload to server — quota is checked server-side.
+      let serverPaperId: string | null = null;
+      let serverParsedText: string | null = null;
+      let serverMarkdown: string | null = null;
+      let serverBlocks: MinerUBlock[] | null = null;
+      let serverImagesDir: string | null = null;
       try {
-        const lib = await import("pdfjs-dist");
-        lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
-        const doc = await lib.getDocument({ data: new Uint8Array(bufForText) }).promise;
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i);
-          const tc = await page.getTextContent();
-          const pageText = tc.items
-            .map((it: any) => (typeof it.str === "string" ? it.str : ""))
-            .join(" ");
-          full += `\n[Page ${i}]\n${pageText}\n`;
-          page.cleanup();
+        const fd = new FormData();
+        fd.append("file", file);
+        const upRes = await fetch("/api/upload", { method: "POST", body: fd });
+        if (upRes.status === 429) {
+          const j = await upRes.json().catch(() => ({}));
+          throw new Error(j.error || "今日解析额度已用尽");
+        }
+        if (!upRes.ok) {
+          const j = await upRes.json().catch(() => ({}));
+          throw new Error(j.error || `Upload failed HTTP ${upRes.status}`);
+        }
+        const upData = await upRes.json();
+        serverPaperId = upData.paperId;
+        setPaperId(upData.paperId);
+        setUploadStage("parsing");
+        setMineruStatus("MinerU 解析中（30-90 秒）…");
+
+        // Poll for parse status
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const sRes = await fetch(`/api/paper/${upData.paperId}`);
+          if (sRes.ok) {
+            const sData = await sRes.json();
+            if (sData.parseStatus === "done") {
+              serverParsedText = sData.parsedText;
+              serverMarkdown = sData.markdown;
+              serverBlocks = sData.blocks;
+              serverImagesDir = sData.imagesDir;
+              break;
+            }
+            if (sData.parseStatus === "error") {
+              throw new Error("MinerU 解析失败，已尝试 pdfjs 兜底");
+            }
+            if (i % 5 === 0) {
+              setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
+            }
+          }
         }
       } catch (e) {
-        // ignore; we'll still try analyze with empty text
+        setOutlineError(e instanceof Error ? e.message : String(e));
+        setUploadStage("idle");
+        setMineruStatus("");
+        return;
       }
-    }
 
-    // Progressive: set plain text + markdown/blocks as soon as they're available.
-    setPaperText(full);
-    setPaperMarkdown(serverMarkdown);
-    setPaperBlocks(serverBlocks);
-    setPaperImagesDir(serverImagesDir);
-    setMineruStatus("");
+      // Use server-parsed content if available; otherwise client extraction
+      let full = "";
+      if (serverParsedText) {
+        full = serverParsedText;
+      } else {
+        try {
+          const lib = await import("pdfjs-dist");
+          lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+          const doc = await lib.getDocument({ data: new Uint8Array(bufForText) }).promise;
+          for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const tc = await page.getTextContent();
+            const pageText = tc.items
+              .map((it: any) => (typeof it.str === "string" ? it.str : ""))
+              .join(" ");
+            full += `\n[Page ${i}]\n${pageText}\n`;
+            page.cleanup();
+          }
+        } catch (e) {
+          // ignore; we'll still try analyze with empty text
+        }
+      }
 
-    // Trigger analysis using markdown (preferred) or plain text
-    setUploadStage("analyzing");
-    setOutlineLoading(true);
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: full,
-          markdown: serverMarkdown || undefined,
-          title: file.name,
-          paperId: serverPaperId,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setOutline(data.outline);
-      setUploadStage("done");
-    } catch (e) {
-      setOutlineError(e instanceof Error ? e.message : String(e));
-      setUploadStage("idle");
-    } finally {
-      setOutlineLoading(false);
-    }
-  }, []);
+      // Progressive: set plain text + markdown/blocks as soon as they're available.
+      setPaperText(full);
+      setPaperMarkdown(serverMarkdown);
+      setPaperBlocks(serverBlocks);
+      setPaperImagesDir(serverImagesDir);
+      setMineruStatus("");
+
+      // Trigger analysis using markdown (preferred) or plain text
+      setUploadStage("analyzing");
+      setOutlineLoading(true);
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...refreshLLMHeaders(),
+          },
+          body: JSON.stringify({
+            text: full,
+            markdown: serverMarkdown || undefined,
+            title: file.name,
+            paperId: serverPaperId,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setOutline(data.outline);
+        setUploadStage("done");
+      } catch (e) {
+        setOutlineError(e instanceof Error ? e.message : String(e));
+        setUploadStage("idle");
+      } finally {
+        setOutlineLoading(false);
+      }
+    },
+    []
+  );
 
   const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -219,22 +251,54 @@ export default function Home() {
     setAttachedImage(b64);
   }, []);
 
+  /**
+   * Outline-child click — jump to the related paragraph.
+   * Does NOT force-switch the tab. If we're in mindmap view, switch to blocks
+   * (because the mindmap can't show a jump). Otherwise stay in current view.
+   */
   const onChildClick = useCallback(
     (child: OutlineChild, _section: OutlineSection) => {
       setActiveChildId(child.id);
+      setActiveHeadingText(undefined);
       setHighlightToken({
         quote: child.quote || "",
         keywords: child.keywords || [],
         nonce: Date.now(),
       });
-      // Auto-switch to block reader so the highlight is visible
-      setActiveView("blocks");
-      // Also tell BlockReader imperatively (in case it's already mounted)
+      // Only auto-switch out of mindmap view (which can't display jumps)
+      if (activeView === "mindmap") {
+        setActiveView("blocks");
+      }
+      // Tell BlockReader imperatively too (in case it's already mounted)
       setTimeout(() => {
         blockReaderRef.current?.scrollToText(child.quote || "", child.keywords || []);
       }, 50);
     },
-    []
+    [activeView]
+  );
+
+  /**
+   * Heading-navigator click — verbatim paper H2/H3 heading.
+   * Use the heading text itself as the quote (so the fuzzy matcher will find
+   * the exact heading block in the block reader). Don't force-switch tabs.
+   */
+  const onHeadingClick = useCallback(
+    (h: PaperHeading) => {
+      setActiveHeadingText(h.text);
+      setActiveChildId(undefined);
+      setHighlightToken({
+        quote: h.text,
+        keywords: [],
+        nonce: Date.now(),
+      });
+      if (activeView === "mindmap") {
+        setActiveView("blocks");
+      }
+      setTimeout(() => {
+        blockReaderRef.current?.scrollToText(h.text, []);
+      }, 50);
+    },
+    [activeView]
   );
 
   const stageLabel: Record<UploadStage, string> = {
@@ -270,6 +334,24 @@ export default function Home() {
             {stageLabel[uploadStage]}
           </span>
         )}
+
+        {/* LLM settings button + warning if not configured */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className={
+            "h-8 gap-1.5 text-background hover:bg-background/10 " +
+            (!llmConfigured ? "ring-1 ring-amber-300/60" : "")
+          }
+          onClick={() => setLlmSettingsOpen(true)}
+          title="LLM 模型设置"
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+          <span className="text-xs hidden sm:inline">模型设置</span>
+          {!llmConfigured && (
+            <AlertTriangle className="h-3 w-3 text-amber-300" />
+          )}
+        </Button>
 
         <input
           ref={fileInputRef}
@@ -329,26 +411,51 @@ export default function Home() {
         )}
       </header>
 
+      {/* LLM not-configured banner */}
+      {!llmConfigured && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-[11px] px-4 py-1.5 flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+          <span>
+            当前使用服务端默认 DeepSeek 配置。如需更换 LLM（OpenAI / 智谱 / Moonshot / 自定义 OpenAI 兼容端点），
+            请点击右上角「模型设置」。
+          </span>
+        </div>
+      )}
+
       {/* 5-panel resizable layout */}
       <div className="flex-1 min-h-0 hidden md:block">
         <PanelGroup direction="horizontal" autoSaveId="medreader-h">
-          {/* Left: Outline */}
-          <Panel defaultSize={18} minSize={14} collapsible={false}>
-            <div className="h-full border-r bg-card">
-              <OutlinePanel
-                outline={outline}
-                loading={outlineLoading}
-                onChildClick={onChildClick}
-                activeChildId={activeChildId}
-              />
+          {/* Left: Outline + Heading Navigator */}
+          <Panel defaultSize={20} minSize={14} collapsible={false}>
+            <div className="h-full border-r bg-card flex flex-col">
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <OutlinePanel
+                  outline={outline}
+                  loading={outlineLoading}
+                  onChildClick={onChildClick}
+                  activeChildId={activeChildId}
+                />
+              </div>
+              {/* Heading Navigator at bottom of left panel */}
+              <div className="flex-shrink-0">
+                <HeadingNavigator
+                  headings={outline?.headings}
+                  activeHeadingText={activeHeadingText}
+                  onHeadingClick={onHeadingClick}
+                />
+              </div>
             </div>
           </Panel>
           <PanelResizeHandle className="resize-handle-h" />
 
           {/* Center: Blocks / PDF / Mindmap tabs */}
-          <Panel defaultSize={52} minSize={30}>
+          <Panel defaultSize={50} minSize={30}>
             <div className="h-full flex flex-col bg-muted/30">
-              <Tabs value={activeView} onValueChange={(v) => setActiveView(v as "blocks" | "pdf" | "mindmap")} className="flex-1 flex flex-col min-h-0">
+              <Tabs
+                value={activeView}
+                onValueChange={(v) => setActiveView(v as "blocks" | "pdf" | "mindmap")}
+                className="flex-1 flex flex-col min-h-0"
+              >
                 <div className="border-b bg-background/80 backdrop-blur-sm px-3 py-1.5 flex items-center gap-2">
                   <TabsList className="h-8">
                     <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
@@ -371,7 +478,10 @@ export default function Home() {
                   )}
                 </div>
 
-                <TabsContent value="blocks" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
+                <TabsContent
+                  value="blocks"
+                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+                >
                   <BlockReader
                     ref={blockReaderRef}
                     fallbackText={paperText}
@@ -385,7 +495,10 @@ export default function Home() {
                   />
                 </TabsContent>
 
-                <TabsContent value="pdf" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
+                <TabsContent
+                  value="pdf"
+                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+                >
                   <PdfViewer
                     fileData={fileData}
                     fileName={fileName}
@@ -395,7 +508,10 @@ export default function Home() {
                   />
                 </TabsContent>
 
-                <TabsContent value="mindmap" className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden">
+                <TabsContent
+                  value="mindmap"
+                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+                >
                   <MindmapView outline={outline} onChildClick={onChildClick} />
                 </TabsContent>
               </Tabs>
@@ -412,6 +528,7 @@ export default function Home() {
                     selectedText={selectedText}
                     selectedBlockIdx={selectedBlockIdx}
                     selectionNonce={selectionNonce}
+                    llmHeaders={llmHeaders}
                   />
                 </div>
               </Panel>
@@ -425,6 +542,7 @@ export default function Home() {
                     paperMarkdown={paperMarkdown || undefined}
                     paperText={paperText || undefined}
                     paperId={paperId}
+                    llmHeaders={llmHeaders}
                   />
                 </div>
               </Panel>
@@ -448,6 +566,16 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* LLM settings dialog */}
+      <LLMSettingsDialog
+        open={llmSettingsOpen}
+        onOpenChange={setLlmSettingsOpen}
+        onSaved={() => {
+          setLlmHeaders(refreshLLMHeaders());
+          setLlmConfigured(hasUserLLMConfig());
+        }}
+      />
 
       {/* Mobile / small screen warning */}
       <div className="md:hidden fixed inset-0 bg-background z-50 flex items-center justify-center p-6 text-center">

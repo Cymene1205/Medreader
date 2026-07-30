@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { callDeepSeek } from "@/lib/deepseek";
+import { resolveLLMConfig, callLLM } from "@/lib/llm";
 import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
@@ -9,6 +9,7 @@ export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
+    const cfg = resolveLLMConfig(req);
     const { text, target = "中文" } = await req.json();
     if (!text || typeof text !== "string") {
       return NextResponse.json({ error: "text is required" }, { status: 400 });
@@ -29,7 +30,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await callDeepSeek(
+    const result = await callLLM(
+      cfg,
       [
         {
           role: "system",

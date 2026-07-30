@@ -63,7 +63,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
     );
   }
 
-  // Section node — dim badge + title + 1-line summary ------------------
+  // Section node — dim badge + title + summary + key points ----------------
   if (d.isSection) {
     const color = d.dimColor || "#2C5F8D";
     return (
@@ -72,7 +72,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
         style={{
           border: `1px solid ${color}`,
           borderLeft: `4px solid ${color}`,
-          width: 220,
+          width: 280,
           boxShadow: selected ? `0 0 0 2px ${color}44` : undefined,
         }}
       >
@@ -91,9 +91,23 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
                 {d.label}
               </div>
               {d.summary && (
-                <div className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+                <div className="text-[10.5px] text-muted-foreground mt-0.5 line-clamp-2 leading-snug">
                   {d.summary}
                 </div>
+              )}
+              {d.keyPoints && d.keyPoints.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {d.keyPoints.slice(0, 3).map((kp, i) => (
+                    <li
+                      key={i}
+                      className="text-[9.5px] leading-snug flex items-start gap-1"
+                      style={{ color: color }}
+                    >
+                      <span className="opacity-60 flex-shrink-0">•</span>
+                      <span className="text-foreground/75 line-clamp-1">{kp}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           </div>
@@ -103,7 +117,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
     );
   }
 
-  // Child node — title with lighter background -------------------------
+  // Child node — title + summary with lighter background --------------
   const bg = d.dimColor || "#F1F5F9";
   return (
     <div
@@ -111,7 +125,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
       style={{
         background: bg,
         border: `1px solid ${bg}`,
-        width: 180,
+        width: 220,
         boxShadow: selected ? "0 0 0 2px #94A3B855" : undefined,
       }}
     >
@@ -119,6 +133,11 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
       <div className="text-[12px] font-medium leading-snug text-foreground/90 line-clamp-2">
         {d.label}
       </div>
+      {d.summary && (
+        <div className="text-[10px] text-muted-foreground/80 mt-0.5 line-clamp-2 leading-snug">
+          {d.summary}
+        </div>
+      )}
       <Handle type="source" position={Position.Right} style={hiddenHandle} />
     </div>
   );

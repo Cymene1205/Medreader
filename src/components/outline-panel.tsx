@@ -39,9 +39,16 @@ export type OutlineSection = {
   children: OutlineChild[];
 };
 
+export type PaperHeading = {
+  level: number; // 2 or 3 — verbatim H2/H3 from MinerU markdown
+  text: string;
+};
+
 export type Outline = {
   title?: string;
   sections: OutlineSection[];
+  /** Verbatim H2/H3 headings extracted from MinerU markdown — used by HeadingNavigator. */
+  headings?: PaperHeading[];
 };
 
 type Props = {
