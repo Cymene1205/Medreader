@@ -130,14 +130,15 @@ export function outlineToFlow(
       dimColor: ROOT_COLOR,
       isRoot: true,
     },
+    // IMPORTANT: only sizing goes here. The visual styling (border,
+    // background, padding, typography) is rendered by the DimNode component
+    // inside MindmapView. If we also set border/background here, ReactFlow's
+    // node wrapper gets its OWN box, which then offsets from the inner
+    // DimNode box (because of the padding below) and creates the
+    // "two stacked offset rectangles" visual bug the user reported.
+    // Keeping just width/minHeight makes the wrapper transparent and lets
+    // DimNode be the single visible layer.
     style: {
-      border: `1px solid ${ROOT_COLOR}`,
-      background: ROOT_COLOR,
-      color: "#FFFFFF",
-      padding: "10px 14px",
-      fontSize: "14px",
-      fontWeight: 600,
-      borderRadius: "8px",
       width: `${ROOT_SIZE.width}px`,
       minHeight: `${ROOT_SIZE.height}px`,
     },
@@ -165,13 +166,6 @@ export function outlineToFlow(
         section,
       },
       style: {
-        border: `1px solid ${dimColor}`,
-        borderLeft: `4px solid ${dimColor}`,
-        background: "#FFFFFF",
-        padding: "10px 12px 10px 14px",
-        fontSize: "13px",
-        fontWeight: 500,
-        borderRadius: "8px",
         width: `${SECTION_SIZE.width}px`,
         minHeight: `${SECTION_SIZE.height}px`,
       },
@@ -203,12 +197,6 @@ export function outlineToFlow(
           section,
         },
         style: {
-          border: `1px solid ${childBorder}`,
-          background: childBg,
-          padding: "8px 12px",
-          fontSize: "12px",
-          fontWeight: 500,
-          borderRadius: "8px",
           width: `${CHILD_SIZE.width}px`,
           minHeight: `${CHILD_SIZE.height}px`,
         },

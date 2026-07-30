@@ -530,3 +530,59 @@ Files Modified:
 - src/components/outline-panel.tsx（PaperHeading.origText）
 - src/components/heading-navigator.tsx（PaperHeading.origText）
 - src/app/page.tsx（onHeadingClick 用 origText 做 block 匹配）
+
+---
+Task ID: v11-four-fixes
+Agent: main (Super Z)
+Task: 修复用户反馈的4个问题：H1/H2标题层级区分+折叠、思维导图框框重叠、"分块阅读"改名、先显示PDF等解析
+
+Work Log:
+- 截图诊断：用 z-ai vision 分析 截屏2026-07-30 23.31.07.png（HeadingNavigator 面板）和 23.36.24.png（思维导图）
+  - 23.31.07：左侧原文段落导航显示 H1 "新颖性与意义" 下展开 6-7 个 H2 子项（已知信息/方法/结果等），缺乏视觉层级区分
+  - 23.36.24：思维导图每个节点都呈现"双层错位叠加"效果（深色外框+白色内框偏移）— 不是设计风格，是 bug
+
+- Fix 1: HeadingNavigator 视觉层级 + 默认折叠 — src/components/heading-navigator.tsx（整体重写）
+  - 根因：H1/H2/H3 字号差异太小（12.5/12/11px），没有视觉锚点；H1 组默认全展开，6-7 个 H1 时列表过长
+  - 修复 1：H1 改为卡片式设计 — 浅色背景 + 左侧 4px 彩色竖条 + 13px font-bold + 独立 chevron 按钮
+  - 修复 2：H2 (12px font-medium, pl-3) 和 H3 (11px font-normal text-muted, pl-6) 之间用字号+缩进+颜色三重区分
+  - 修复 3：H1 组默认全部折叠（collapsedGroups 初始为所有 H1 key 的 Set），用户点 chevron 才展开子项
+  - 修复 4：新增 renderHeadingText() 函数，把 <sup>...</sup>/<sub>...</sub> HTML 标签解析为真正的 React 元素（之前显示为纯文本）
+  - 修复 5：groups 变化时（新上传）重置 collapsedGroups 为全折叠状态
+  - VLM 验证：H1 卡片 vs H2/H3 列表 vs H3 深缩进，三重层级清晰
+
+- Fix 2: 思维导图框框重叠 — src/lib/outline-to-flow.ts
+  - 根因：ReactFlow 节点 wrapper 和 DimNode 内部 div 都有自己的 border+background+padding，wrapper 的 padding 把内部 div 偏移，造成"两个错位的矩形框"视觉效果
+  - 修复：从 outline-to-flow.ts 的所有节点 style 中移除 border/borderLeft/background/padding/fontSize/fontWeight/borderRadius — 只保留 width 和 minHeight（dagre 布局需要）
+  - DimNode 组件内部仍然是完整的视觉样式（border+background+padding+borderRadius），所以每个节点只渲染一个矩形
+  - VLM 验证：每个节点单一清晰边框，无重叠，整体扁平干净
+
+- Fix 3: 重命名"分块阅读"→"智能解析" — src/app/page.tsx
+  - 标签页名称：分块阅读 → 智能解析
+  - 顶部 header 副标题：MinerU 驱动 · 分块阅读 → MinerU 驱动 · 智能解析
+
+- Fix 4: 默认显示 PDF + 解析完成后自动切换 — src/app/page.tsx
+  - 根因：默认 activeView = "blocks"，上传后用户看到 30-90s 的空白"解析中…"占位
+  - 修复 1：activeView 初始值改为 "pdf"，上传时也强制 setActiveView("pdf")
+  - 修复 2：新增 userTouchedTabRef（useRef，不用 state 因为 onFile 是 useCallback 空依赖，state 会闭包失效）
+  - 修复 3：Tabs onValueChange 调用 markTabTouched() 设 ref=true
+  - 修复 4：上传开始时 reset ref=false
+  - 修复 5：MinerU 解析完成（serverBlocks || serverMarkdown 有值）时，if (!userTouchedTabRef.current) → setActiveView("blocks") 自动切换到智能解析
+  - 行为：用户上传→看PDF→解析完自动跳到智能解析；如果用户在等待中手动点了别的 tab，则不自动切换
+
+Stage Summary:
+- ✅ 标题层级：H1 卡片+彩条+加粗 vs H2/H3 列表+缩进，三重区分；H1 组默认折叠
+- ✅ 思维导图：移除 ReactFlow wrapper 的视觉样式，每个节点单一矩形，无错位叠加
+- ✅ 重命名：分块阅读 → 智能解析（tab + 副标题）
+- ✅ PDF 优先：默认显示 PDF 等解析，完成后自动切到智能解析（用户手动选过 tab 则尊重选择）
+- tsc --noEmit: 0 errors in src/
+- 端到端验证：
+  - 上传 sample-paper.pdf → 默认 PDF tab → 30s 后自动切到智能解析 tab
+  - 原文段落导航展开 → 1 个 H1 卡片"哺乳和产次通过CD8+..."（中文翻译）+ 展开子标题按钮
+  - 展开后看到 H2 (1.引言/2.结果/3.讨论/4.方法) 和 H3 (2.1/2.2/2.3) 三级清晰
+  - 思维导图：每个节点单一清晰边框，无重叠
+  - VLM 双重验证两个截图均通过
+
+Files Modified:
+- src/components/heading-navigator.tsx（重写：H1 卡片+折叠默认+renderHeadingText 解析 sup/sub）
+- src/lib/outline-to-flow.ts（移除节点视觉样式，只保留 sizing）
+- src/app/page.tsx（重命名+PDF 默认+auto-switch 逻辑+userTouchedTabRef）

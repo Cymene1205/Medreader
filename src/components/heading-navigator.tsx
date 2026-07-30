@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ListTree, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -72,6 +72,34 @@ function groupHeadings(headings: PaperHeading[]): HeadingGroup[] {
 }
 
 /**
+ * Render heading text containing inline HTML tags (<sup>...</sup> or
+ * <sub>...</sub>) as proper React elements.
+ *
+ * The heading translation LLM is told to preserve these tags verbatim
+ * (e.g. "SiglecF<sup>hi</sup>"), but React escapes raw text by default —
+ * so without this helper, the user sees the literal string "<sup>hi</sup>"
+ * instead of a superscript. We split on the two allowed tag patterns and
+ * render the wrapped text as <sup>/<sub> React elements.
+ *
+ * We deliberately only allow these two tags (no attributes, no nesting)
+ * to keep the surface area small — the content comes from an LLM, but
+ * the LLM was instructed to only emit <sup>/<sub>.
+ */
+function renderHeadingText(text: string): ReactNode {
+  if (!text) return null;
+  // Capture <sup>...</sup> and <sub>...</sub> (non-greedy, no nested tags)
+  const parts = text.split(/(<sup>[^<]*<\/sup>|<sub>[^<]*<\/sub>)/g);
+  return parts.map((part, i) => {
+    if (!part) return null;
+    const supMatch = part.match(/^<sup>([^<]*)<\/sup>$/);
+    if (supMatch) return <sup key={i}>{supMatch[1]}</sup>;
+    const subMatch = part.match(/^<sub>([^<]*)<\/sub>$/);
+    if (subMatch) return <sub key={i}>{subMatch[1]}</sub>;
+    return <span key={i}>{part}</span>;
+  });
+}
+
+/**
  * Left-side "原文段落导航" panel.
  *
  * Lists all verbatim H1/H2/H3 headings extracted from the MinerU markdown so the
@@ -85,13 +113,21 @@ function groupHeadings(headings: PaperHeading[]): HeadingGroup[] {
  * 放在折叠框里以便精确锁定位置"). Clicking the H1 text jumps to it; clicking
  * the small chevron on the right collapses/expands its H2/H3 children.
  *
- * Visual differentiation by level:
- *   - H1 (group header): bold + slightly larger text + accent color
- *   - H2: medium weight + normal color (default look)
- *   - H3: smaller + muted color + deeper indentation
+ * Visual differentiation by level (strengthened per user feedback
+ * "method/result/introduction/conclusion 这样的肯定是高一级的标题...
+ *  需要区分开"):
+ *   - H1 (group header): card-style with colored left bar, larger bold text,
+ *     tinted background — clearly the "high-level" section title
+ *   - H2: medium weight, normal color, indented — clearly a sub-section
+ *   - H3: smaller + muted color + deeper indentation — clearly a sub-sub
  *
- * No "#" prefix is rendered — the level is conveyed by typography & indentation
- * alone, which matches the user's request.
+ * All H1 groups start COLLAPSED by default (user feedback "结果有六七个,
+ * 可以搞个折叠这样的") — when a paper has 6+ H1 sections, showing every
+ * H2/H3 inline makes the navigator overwhelming. The user clicks a chevron
+ * to expand only the H1 group they care about.
+ *
+ * No "#" prefix is rendered — the level is conveyed by typography,
+ * indentation, and the colored left bar alone.
  */
 export default function HeadingNavigator({
   headings,
@@ -111,9 +147,6 @@ export default function HeadingNavigator({
     if (onCollapsedChange) onCollapsedChange(!collapsed);
     else setInternalCollapsed((v) => !v);
   };
-  // Set of group keys whose H2/H3 children are hidden. Empty by default —
-  // all groups start expanded so the user sees the full TOC.
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => {
     if (!headings || headings.length === 0) return [];
@@ -122,6 +155,22 @@ export default function HeadingNavigator({
 
   // Has at least one real H1 group? If not, fall back to flat rendering.
   const hasH1Groups = groups.some((g) => g.h1 !== null);
+
+  // All H1 groups start COLLAPSED. The user clicks a chevron to expand
+  // only the group they want. We initialise the set lazily from the group
+  // keys so it stays in sync if headings change (new upload).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(groups.filter((g) => g.h1).map((g) => g.key))
+  );
+  // Re-initialise when groups change (new upload). Using useEffect would
+  // cause a flicker; useMemo + useState comparison is cleaner — but the
+  // simplest correct approach is to track the previous headings array ref
+  // and reset when it changes.
+  const [prevHeadingsRef, setPrevHeadingsRef] = useState(headings);
+  if (headings !== prevHeadingsRef) {
+    setPrevHeadingsRef(headings);
+    setCollapsedGroups(new Set(groups.filter((g) => g.h1).map((g) => g.key)));
+  }
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -171,48 +220,63 @@ export default function HeadingNavigator({
 
           {/* Grouped rendering — H1 becomes a collapsible card with H2/H3 children. */}
           {headings && headings.length > 0 && hasH1Groups && (
-            <ul className="px-1.5 space-y-1">
+            <ul className="px-1.5 py-1 space-y-1.5">
               {groups.map((g) => {
                 const isGroupCollapsed = collapsedGroups.has(g.key);
                 const h1Active =
                   g.h1 && activeHeadingText === g.h1.text;
                 return (
-                  <li key={g.key} className="rounded">
-                    {/* H1 group header — chevron + clickable text */}
+                  <li
+                    key={g.key}
+                    className={cn(
+                      "rounded-md border overflow-hidden",
+                      h1Active
+                        ? "border-primary/40 bg-primary/5"
+                        : "border-border/60 bg-background"
+                    )}
+                  >
+                    {/* H1 group header — colored left bar + bold title + chevron */}
                     {g.h1 && (
                       <div
                         className={cn(
-                          "flex items-center gap-1 px-1.5 py-1 rounded transition-colors group",
-                          h1Active
-                            ? "bg-primary/10 ring-1 ring-primary/20"
-                            : "hover:bg-muted/60"
+                          "flex items-center gap-1.5 pr-1.5 transition-colors",
+                          h1Active ? "bg-primary/10" : "hover:bg-muted/50"
                         )}
                       >
+                        {/* Colored left bar — clearly marks this as a "high-level" heading */}
+                        <div
+                          className={cn(
+                            "w-1 self-stretch flex-shrink-0",
+                            h1Active ? "bg-primary" : "bg-primary/50"
+                          )}
+                        />
+                        <button
+                          onClick={() => onHeadingClick(g.h1!)}
+                          title={g.h1.text}
+                          className="flex-1 min-w-0 text-left py-1.5 pl-1"
+                        >
+                          <span className="block text-[13px] font-bold text-foreground leading-snug line-clamp-2">
+                            {renderHeadingText(g.h1.text)}
+                          </span>
+                        </button>
                         <button
                           onClick={() => toggleGroup(g.key)}
-                          className="flex-shrink-0 p-0.5 rounded hover:bg-muted"
+                          className="flex-shrink-0 p-1 rounded hover:bg-muted self-stretch flex items-center"
                           title={isGroupCollapsed ? "展开子标题" : "折叠子标题"}
                           aria-label={isGroupCollapsed ? "展开子标题" : "折叠子标题"}
                         >
                           {isGroupCollapsed ? (
-                            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                           ) : (
-                            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                           )}
-                        </button>
-                        <button
-                          onClick={() => onHeadingClick(g.h1!)}
-                          title={g.h1.text}
-                          className="flex-1 min-w-0 text-left text-[12.5px] font-bold text-foreground leading-snug line-clamp-2"
-                        >
-                          {g.h1.text}
                         </button>
                       </div>
                     )}
 
                     {/* Ungrouped (no H1 above) — render children flat at top level */}
                     {!g.h1 && g.children.length > 0 && (
-                      <ul className="space-y-0.5 mt-0.5">
+                      <ul className="space-y-0.5 p-1">
                         {g.children.map((h, i) => (
                           <FlatHeadingItem
                             key={`pre-${i}-${h.text.slice(0, 20)}`}
@@ -226,7 +290,7 @@ export default function HeadingNavigator({
 
                     {/* H2/H3 children — hidden when the group is collapsed */}
                     {g.h1 && !isGroupCollapsed && g.children.length > 0 && (
-                      <ul className="ml-3 pl-2 border-l border-border/60 space-y-0.5 mt-0.5">
+                      <ul className="px-2 pb-1.5 pt-0.5 space-y-0.5 border-t border-border/40">
                         {g.children.map((h, i) => (
                           <FlatHeadingItem
                             key={`${g.key}-${i}-${h.text.slice(0, 20)}`}
@@ -245,7 +309,7 @@ export default function HeadingNavigator({
 
           {/* Flat rendering — when no H1 exists, just list everything inline. */}
           {headings && headings.length > 0 && !hasH1Groups && (
-            <ul className="px-1.5 space-y-0.5">
+            <ul className="px-1.5 py-1 space-y-0.5">
               {headings.map((h, idx) => (
                 <FlatHeadingItem
                   key={idx}
@@ -265,6 +329,10 @@ export default function HeadingNavigator({
 /**
  * Render a single (non-H1) heading button with consistent typography by level.
  * Used both inside group children lists and in the flat fallback list.
+ *
+ * Visual hierarchy (per user feedback):
+ *   - H2: clearly a sub-section — medium font, normal color, indented 12px
+ *   - H3: clearly a sub-sub — smaller font, muted color, indented 24px
  */
 function FlatHeadingItem({
   h,
@@ -283,19 +351,21 @@ function FlatHeadingItem({
         title={h.text}
         className={cn(
           "w-full text-left px-2 py-1.5 rounded transition-colors",
-          // Typography by level
+          // Typography by level — stronger differentiation than before
           level === 2
             ? "text-[12px] font-medium text-foreground/90"
             : "text-[11px] font-normal text-muted-foreground",
           // Indentation by level
-          level === 2 ? "pl-4" : "pl-7",
+          level === 2 ? "pl-3" : "pl-6",
           // Active / hover state
           isActive
             ? "bg-primary/10 text-primary ring-1 ring-primary/20"
             : "hover:bg-muted"
         )}
       >
-        <span className="block leading-snug line-clamp-2">{h.text}</span>
+        <span className="block leading-snug line-clamp-2">
+          {renderHeadingText(h.text)}
+        </span>
       </button>
     </li>
   );

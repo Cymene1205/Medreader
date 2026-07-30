@@ -72,7 +72,21 @@ export default function Home() {
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
   const [activeHeadingText, setActiveHeadingText] = useState<string | undefined>();
-  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("blocks");
+  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("pdf");
+  // Tracks whether the user has manually clicked a center-tab since the
+  // current upload. We use this to decide whether to auto-switch from the
+  // PDF tab (the default initial view, shown while MinerU is parsing) to
+  // the 智能解析 tab once the parsed markdown/blocks are ready. If the user
+  // has already chosen a tab themselves, we leave them alone.
+  //
+  // Implemented as a ref rather than state because the long-running
+  // `onFile` callback (which has empty deps `[]`) needs to read the CURRENT
+  // value at the moment MinerU finishes — a state value captured in the
+  // closure would be stuck at `false` from the first render.
+  const userTouchedTabRef = useRef(false);
+  const markTabTouched = useCallback(() => {
+    userTouchedTabRef.current = true;
+  }, []);
   const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
   const [llmConfigured, setLlmConfigured] = useState(false);
   // Tracks whether the user has dismissed the "default DeepSeek" warning banner.
@@ -150,6 +164,13 @@ export default function Home() {
       // auto-collapse once results arrive (see the setOutline call below).
       setOutlineCollapsed(false);
       setHeadingCollapsed(false);
+      // Default the center view to PDF while the MinerU parse runs (it takes
+      // 30-90s). The user sees their PDF immediately instead of a blank
+      // "parsing…" placeholder. When the parsed markdown/blocks arrive we
+      // auto-switch to 智能解析 — unless the user has already picked a tab
+      // themselves (in which case we respect their choice).
+      setActiveView("pdf");
+      userTouchedTabRef.current = false;
       setUploadStage("uploading");
       setMineruStatus("上传中…");
 
@@ -234,6 +255,14 @@ export default function Home() {
       setPaperBlocks(serverBlocks);
       setPaperImagesDir(serverImagesDir);
       setMineruStatus("");
+
+      // Auto-switch from the initial PDF view to 智能解析 now that the
+      // parsed content is ready — but only if the user hasn't manually
+      // picked a different tab during the wait. If they did, we leave
+      // them on whatever they chose.
+      if (!userTouchedTabRef.current && (serverBlocks || serverMarkdown)) {
+        setActiveView("blocks");
+      }
 
       // Trigger analysis using markdown (preferred) or plain text
       setUploadStage("analyzing");
@@ -377,7 +406,7 @@ export default function Home() {
           </div>
           <span className="font-semibold text-sm text-background">MedReader Agent</span>
           <span className="text-[10px] opacity-70 hidden sm:inline">
-            MinerU 驱动 · 分块阅读
+            MinerU 驱动 · 智能解析
           </span>
         </div>
 
@@ -551,14 +580,18 @@ export default function Home() {
             <div className="h-full flex flex-col bg-muted/30">
               <Tabs
                 value={activeView}
-                onValueChange={(v) => setActiveView(v as "blocks" | "pdf" | "mindmap")}
+                onValueChange={(v) => {
+                  setActiveView(v as "blocks" | "pdf" | "mindmap");
+                  // User has manually chosen a tab — don't auto-switch later.
+                  markTabTouched();
+                }}
                 className="flex-1 flex flex-col min-h-0"
               >
                 <div className="border-b bg-background/80 backdrop-blur-sm px-3 py-1.5 flex items-center gap-2">
                   <TabsList className="h-8">
                     <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
                       <LayoutGrid className="h-3.5 w-3.5" />
-                      分块阅读
+                      智能解析
                     </TabsTrigger>
                     <TabsTrigger value="pdf" className="text-xs gap-1.5 h-7">
                       <FileText className="h-3.5 w-3.5" />
