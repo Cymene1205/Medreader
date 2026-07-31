@@ -49,10 +49,10 @@ export function Author() {
                   <GraduationCap className="w-4 h-4 text-[var(--burgundy)] mt-0.5 shrink-0" />
                   <div>
                     <div className="font-serif-cn text-sm font-semibold text-[var(--ink)]">
-                      医学研究背景
+                      华中科技大学 · 同济医学院
                     </div>
                     <div className="font-serif-en italic text-xs text-[var(--ink-muted)]">
-                      Medical research background · 工医交叉
+                      Huazhong University of Science and Technology · Tongji Medical College
                     </div>
                   </div>
                 </li>
@@ -104,7 +104,7 @@ export function Author() {
                   </span>
                 </div>
                 <p className="font-serif-cn text-[16px] leading-[1.95] text-[var(--ink-soft)]">
-                  本项目的开发与维护得到<span className="font-semibold text-[var(--ink)]">阿里云开发者计划</span>的算力支持。感谢阿里云为开源教育工具提供的云资源赞助，让一个个人项目能够稳定地服务医学研究者群体。亦感谢所有在公众号「行止集」留言、提建议、报 bug 的读者——是你们让这个项目从一份个人脚本，逐步生长为一个可被同行使用的工具。
+                  本项目的开发与维护，得到<span className="font-semibold text-[var(--ink)]">华中科技大学同济医学院基础医学院</span>的资助与支持。感谢学院为青年研究者提供的开放技术探索空间，让"工医交叉"的小型实验成为可能。亦感谢所有在公众号「行止集」留言、提建议、报 bug 的读者——是你们让这个项目从一份个人脚本，逐步生长为一个可被同行使用的工具。
                 </p>
               </div>
 

@@ -93,8 +93,8 @@ export function SiteFooter() {
                 面向医学研究者的 AI 文献阅读 Agent [EB/OL]. 2026.
               </li>
               <li>
-                <span className="cite-num">[2]</span> 阿里云开发者计划 ·
-                Aliyun Developer Program.
+                <span className="cite-num">[2]</span> Huazhong University of
+                Science and Technology, Tongji Medical College.
               </li>
               <li>
                 <span className="cite-num">[3]</span> 公众号「行止集」 ·
