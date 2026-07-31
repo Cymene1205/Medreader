@@ -438,7 +438,7 @@ export default function OutlinePanel({
 
                 {/* Footer note */}
                 <div className="text-[10px] text-muted-foreground/50 text-center py-2 px-2">
-                  解析均由正文引用句推导 · 点 panel 标签跳转原文验货
+                  AI 概括生成 · 点击图表可跳转原文核验
                 </div>
               </div>
             )}

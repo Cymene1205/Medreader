@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -14,6 +14,7 @@ import {
   type Node,
   type Edge,
   type NodeProps,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Network, Loader2 } from "lucide-react";
@@ -46,17 +47,17 @@ const BRANCH_TITLES: Record<string, string> = {
   limitsOpportunities: "局限与机会",
 };
 
-const ROOT_SIZE = { width: 220, height: 90 };
-const SECTION_SIZE = { width: 280, height: 180 };
-const CHILD_SIZE = { width: 220, height: 100 };
-const FIGURE_SIZE = { width: 200, height: 80 };
+const ROOT_SIZE = { width: 260, height: 110 };
+const SECTION_SIZE = { width: 320, height: 200 };
+const CHILD_SIZE = { width: 260, height: 120 };
+const FIGURE_SIZE = { width: 220, height: 100 };
 
 const DAGRE_CONFIG = {
   rankdir: "LR" as const,
-  nodesep: 60,
-  ranksep: 140,
-  marginx: 48,
-  marginy: 48,
+  nodesep: 70,
+  ranksep: 180,
+  marginx: 60,
+  marginy: 60,
 };
 
 const MINIMAP_DEFAULT_COLOR = "#94A3B8";
@@ -71,6 +72,8 @@ type FlowNodeData = {
   isSection?: boolean;
   isFigure?: boolean;
   isLinchpin?: boolean;
+  isSubtitle?: boolean;
+  isSpineSummary?: boolean;
   index?: number;
   // Legacy — kept so old onChildClick signature still works
   child?: OutlineChild;
@@ -107,18 +110,23 @@ function buildFlow(
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
 
-  // Root — paper title
+  // Root — paper title (always show FULL title, no truncation)
   const rootId = "root";
+  const rootTitle = outline.title || "论文";
+  // Estimate root node height based on title length so long titles get
+  // enough vertical space (rough heuristic: 22 chars per line at width 260).
+  const rootLines = Math.max(2, Math.ceil(rootTitle.length / 22));
+  const rootHeight = Math.max(ROOT_SIZE.height, rootLines * 26 + 24);
   nodes.push({
     id: rootId,
     type: "input",
     position: { x: 0, y: 0 },
     data: {
-      label: outline.title || "论文",
+      label: rootTitle,
       dimColor: ROOT_COLOR,
       isRoot: true,
     },
-    style: { width: `${ROOT_SIZE.width}px`, minHeight: `${ROOT_SIZE.height}px` },
+    style: { width: `${ROOT_SIZE.width}px`, minHeight: `${rootHeight}px` },
   });
 
   const branchKeys = ["questionBackground", "argumentSpine", "novelty", "limitsOpportunities"] as const;
@@ -155,66 +163,115 @@ function buildFlow(
       style: { stroke: color, strokeWidth: 2 },
     });
 
-    // For argumentSpine — add figure child nodes
-    if (key === "argumentSpine" && figures.length > 0) {
-      const sortedFigs = [...figures].sort((a, b) => {
-        if (a.chainIndex == null && b.chainIndex == null) return a.order - b.order;
-        if (a.chainIndex == null) return 1;
-        if (b.chainIndex == null) return -1;
-        return a.chainIndex - b.chainIndex;
-      });
-      sortedFigs.forEach((fig) => {
-        const figNodeId = `fig-${fig.label.replace(/\s+/g, "_")}`;
+    // argumentSpine: ALWAYS show figure nodes AND summary-as-bullet so the
+    // user sees both the chain of figures AND the textual narrative.
+    // (Previously: figures-only → rich detail text was lost.)
+    if (key === "argumentSpine") {
+      // 1) Figure child nodes (sorted by chainIndex then order)
+      if (figures.length > 0) {
+        const sortedFigs = [...figures].sort((a, b) => {
+          if (a.chainIndex == null && b.chainIndex == null) return a.order - b.order;
+          if (a.chainIndex == null) return 1;
+          if (b.chainIndex == null) return -1;
+          return a.chainIndex - b.chainIndex;
+        });
+        sortedFigs.forEach((fig) => {
+          const figNodeId = `fig-${fig.label.replace(/\s+/g, "_")}`;
+          nodes.push({
+            id: figNodeId,
+            type: "default",
+            position: { x: 0, y: 0 },
+            data: {
+              label: `${fig.label}${fig.isLinchpin ? " ⚡" : ""}`,
+              summary: fig.question || (fig.caption || "").slice(0, 100),
+              dimColor: fig.isLinchpin ? "#E11D48" : color,
+              isFigure: true,
+              isLinchpin: fig.isLinchpin,
+              figureLabel: fig.label,
+            },
+            style: {
+              width: `${FIGURE_SIZE.width}px`,
+              minHeight: `${FIGURE_SIZE.height}px`,
+              ...(fig.isLinchpin ? { borderColor: "#E11D48" } : {}),
+            },
+          });
+          edges.push({
+            id: `e-${sectionId}-${figNodeId}`,
+            source: sectionId,
+            target: figNodeId,
+            style: {
+              stroke: fig.isLinchpin ? "#E11D48" : color,
+              strokeWidth: fig.isLinchpin ? 2 : 1,
+            },
+          });
+        });
+      }
+      // 2) Also add summary as a text child node (if present)
+      const spineSummary = part?.summary;
+      if (spineSummary && spineSummary.trim().length > 0) {
+        const sumNodeId = `spine-summary-${key}`;
         nodes.push({
-          id: figNodeId,
+          id: sumNodeId,
           type: "default",
           position: { x: 0, y: 0 },
           data: {
-            label: `${fig.label}${fig.isLinchpin ? " ⚡" : ""}`,
-            summary: fig.question || fig.caption.slice(0, 60),
-            dimColor: fig.isLinchpin ? "#E11D48" : color,
-            isFigure: true,
-            isLinchpin: fig.isLinchpin,
-            figureLabel: fig.label,
+            label: spineSummary.slice(0, 200),
+            dimColor: color,
+            isSpineSummary: true,
           },
-          style: {
-            width: `${FIGURE_SIZE.width}px`,
-            minHeight: `${FIGURE_SIZE.height}px`,
-            ...(fig.isLinchpin ? { borderColor: "#E11D48" } : {}),
-          },
+          style: { width: `${CHILD_SIZE.width}px`, minHeight: `${CHILD_SIZE.height}px` },
         });
         edges.push({
-          id: `e-${sectionId}-${figNodeId}`,
+          id: `e-${sectionId}-${sumNodeId}`,
           source: sectionId,
-          target: figNodeId,
-          style: {
-            stroke: fig.isLinchpin ? "#E11D48" : color,
-            strokeWidth: fig.isLinchpin ? 2 : 1,
-          },
+          target: sumNodeId,
+          style: { stroke: color, strokeWidth: 1.5, strokeDasharray: "4 3" },
         });
-      });
+      }
     } else {
-      // For other branches — split detail Markdown into bullet children
+      // For other branches — split detail Markdown into bullet children.
+      // Recognize `-`, `*`, AND numbered list items (`1.`, `2.`, etc.).
+      // Also pick up `### Subtitle` lines as their own nodes for richer map.
       const detail = part?.detail;
       if (detail) {
-        // Split on markdown bullet items (- or *)
-        const bullets = detail
-          .split(/\n/)
-          .map((l: string) => l.trim())
-          .filter((l: string) => /^[-*]\s+/.test(l))
-          .map((l: string) => l.replace(/^[-*]\s+/, "").replace(/\*\*/g, "").trim())
-          .filter((l: string) => l.length > 5)
-          .slice(0, 4);
-
-        bullets.forEach((b: string, bIdx: number) => {
+        const lines = detail.split(/\n/).map((l: string) => l.trim());
+        const bullets: { text: string; isSubtitle: boolean }[] = [];
+        for (const l of lines) {
+          if (!l) continue;
+          // Markdown subtitle: ### xxx or ## xxx
+          const subMatch = l.match(/^#{2,3}\s+(.+)$/);
+          if (subMatch) {
+            const t = subMatch[1].replace(/\*\*/g, "").trim();
+            if (t.length > 2) bullets.push({ text: t, isSubtitle: true });
+            continue;
+          }
+          // Bullet: - xxx or * xxx
+          const bulMatch = l.match(/^[-*]\s+(.+)$/);
+          if (bulMatch) {
+            const t = bulMatch[1].replace(/\*\*/g, "").trim();
+            if (t.length > 5) bullets.push({ text: t, isSubtitle: false });
+            continue;
+          }
+          // Numbered: 1. xxx
+          const numMatch = l.match(/^\d+\.\s+(.+)$/);
+          if (numMatch) {
+            const t = numMatch[1].replace(/\*\*/g, "").trim();
+            if (t.length > 5) bullets.push({ text: t, isSubtitle: false });
+            continue;
+          }
+        }
+        // Allow up to 6 bullets, and slice text to 120 chars (was 60).
+        const picked = bullets.slice(0, 6);
+        picked.forEach((b, bIdx) => {
           const childId = `child-${key}-${bIdx}`;
           nodes.push({
             id: childId,
             type: "default",
             position: { x: 0, y: 0 },
             data: {
-              label: b.slice(0, 60),
+              label: b.text.slice(0, 120),
               dimColor: color,
+              isSubtitle: b.isSubtitle,
             },
             style: { width: `${CHILD_SIZE.width}px`, minHeight: `${CHILD_SIZE.height}px` },
           });
@@ -271,22 +328,28 @@ const hiddenHandle: React.CSSProperties = {
 const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
   const d = data as unknown as FlowNodeData;
 
-  // Root node
+  // Root node — paper title. Show FULL title (no line-clamp), with a
+  // "论文" badge above so the user immediately knows this is the article.
   if (d.isRoot) {
     const bg = d.dimColor || ROOT_COLOR;
     return (
       <div
-        className="rounded-lg px-3 py-2 text-white text-[13px] font-semibold shadow-sm"
+        className="rounded-lg px-3 py-2.5 text-white shadow-md"
         style={{
-          background: bg,
+          background: `linear-gradient(135deg, ${bg} 0%, ${bg}DD 100%)`,
           border: `1px solid ${bg}`,
-          width: 220,
-          minHeight: 90,
-          boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
+          width: 260,
+          minHeight: 110,
+          boxShadow: selected
+            ? `0 0 0 3px ${bg}55, 0 4px 12px ${bg}33`
+            : `0 2px 8px ${bg}22`,
         }}
       >
         <Handle type="source" position={Position.Right} style={hiddenHandle} />
-        <div className="line-clamp-2 leading-tight">{d.label}</div>
+        <div className="text-[9px] uppercase tracking-wider opacity-70 mb-1 font-medium">
+          Paper Title
+        </div>
+        <div className="text-[13px] font-semibold leading-snug">{d.label}</div>
       </div>
     );
   }
@@ -296,21 +359,21 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
     const color = d.dimColor || "#0D9488";
     return (
       <div
-        className="rounded-lg px-2 py-1.5 shadow-sm"
+        className="rounded-lg px-2.5 py-2 shadow-sm"
         style={{
           background: "#fff",
           border: `2px solid ${color}`,
-          width: 200,
-          minHeight: 80,
-          boxShadow: selected ? `0 0 0 2px ${color}55` : undefined,
+          width: 220,
+          minHeight: 100,
+          boxShadow: selected ? `0 0 0 3px ${color}55` : undefined,
         }}
       >
         <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="text-[11px] font-bold leading-tight" style={{ color }}>
+        <div className="text-[11.5px] font-bold leading-tight" style={{ color }}>
           {d.label}
         </div>
         {d.summary && (
-          <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 leading-snug">
+          <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-3 leading-snug">
             {d.summary}
           </div>
         )}
@@ -327,28 +390,28 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
         className="rounded-lg bg-white shadow-sm flex overflow-hidden"
         style={{
           border: `1px solid ${color}`,
-          borderLeft: `4px solid ${color}`,
-          width: 280,
-          minHeight: 180,
-          boxShadow: selected ? `0 0 0 2px ${color}44` : undefined,
+          borderLeft: `5px solid ${color}`,
+          width: 320,
+          minHeight: 200,
+          boxShadow: selected ? `0 0 0 3px ${color}44` : undefined,
         }}
       >
         <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="px-2.5 py-2 flex-1 min-w-0">
-          <div className="flex items-start gap-1.5">
+        <div className="px-3 py-2.5 flex-1 min-w-0">
+          <div className="flex items-start gap-2">
             <span
-              className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center mt-0.5 text-white"
+              className="flex-shrink-0 w-6 h-6 rounded-md text-[11px] font-bold flex items-center justify-center mt-0.5 text-white shadow-sm"
               style={{ background: color }}
               aria-hidden
             >
               {(d.index ?? 0) + 1}
             </span>
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold leading-snug text-foreground line-clamp-2">
+              <div className="text-[14px] font-semibold leading-snug text-foreground">
                 {d.label}
               </div>
               {d.summary && (
-                <div className="text-[10.5px] text-muted-foreground mt-0.5 line-clamp-3 leading-snug">
+                <div className="text-[11px] text-muted-foreground mt-1 line-clamp-4 leading-relaxed">
                   {d.summary}
                 </div>
               )}
@@ -360,21 +423,52 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
     );
   }
 
+  // Spine summary node (argumentSpine narrative text)
+  if (d.isSpineSummary) {
+    const bg = d.dimColor || "#0D9488";
+    return (
+      <div
+        className="rounded-lg px-2.5 py-2 shadow-sm"
+        style={{
+          background: `${bg}10`,
+          border: `1px dashed ${bg}`,
+          width: 260,
+          minHeight: 120,
+          boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
+        }}
+      >
+        <Handle type="target" position={Position.Left} style={hiddenHandle} />
+        <div className="text-[9px] uppercase tracking-wider opacity-60 mb-1 font-medium" style={{ color: bg }}>
+          论证主线
+        </div>
+        <div className="text-[11px] font-medium leading-relaxed text-foreground/90">
+          {d.label}
+        </div>
+        <Handle type="source" position={Position.Right} style={hiddenHandle} />
+      </div>
+    );
+  }
+
   // Child node
   const bg = d.dimColor || "#F1F5F9";
   return (
     <div
-      className="rounded-lg px-2.5 py-1.5 shadow-sm"
+      className="rounded-lg px-2.5 py-2 shadow-sm"
       style={{
-        background: `${bg}15`,
-        border: `1px solid ${bg}40`,
-        width: 220,
-        minHeight: 100,
-        boxShadow: selected ? "0 0 0 2px #94A3B855" : undefined,
+        background: d.isSubtitle ? `${bg}25` : `${bg}12`,
+        border: d.isSubtitle ? `1.5px solid ${bg}80` : `1px solid ${bg}40`,
+        width: 260,
+        minHeight: 120,
+        boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
       }}
     >
       <Handle type="target" position={Position.Left} style={hiddenHandle} />
-      <div className="text-[11.5px] font-medium leading-snug text-foreground/90 line-clamp-3">
+      {d.isSubtitle && (
+        <div className="text-[9px] uppercase tracking-wider opacity-60 mb-0.5 font-medium" style={{ color: bg }}>
+          小标题
+        </div>
+      )}
+      <div className="text-[11.5px] font-medium leading-snug text-foreground/90 line-clamp-4">
         {d.label}
       </div>
       <Handle type="source" position={Position.Right} style={hiddenHandle} />
@@ -406,11 +500,31 @@ export default function MindmapView({
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges as Edge[]);
+  const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
+
+  // Track previous node count — re-fit view when structure changes significantly
+  // (e.g., figures loaded late, outline sections populated).
+  const prevNodeCountRef = useRef(0);
 
   useEffect(() => {
     setNodes(layoutedNodes as Node[]);
     setEdges(layoutedEdges as Edge[]);
   }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
+
+  // Re-fit view when node count changes (figures arrived, etc.)
+  useEffect(() => {
+    const curCount = (layoutedNodes as Node[]).length;
+    if (
+      curCount !== prevNodeCountRef.current &&
+      curCount > 0 &&
+      rfInstance
+    ) {
+      prevNodeCountRef.current = curCount;
+      // Defer fitView to next tick so the new nodes have been laid out.
+      const t = setTimeout(() => rfInstance.fitView({ padding: 0.18, duration: 300 }), 60);
+      return () => clearTimeout(t);
+    }
+  }, [layoutedNodes, rfInstance]);
 
   const handleNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
@@ -486,6 +600,7 @@ export default function MindmapView({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onInit={setRfInstance}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.18 }}

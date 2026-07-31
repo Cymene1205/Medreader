@@ -279,17 +279,51 @@ export function extractFiguresFromBlocks(
       curRun.push(b);
       curRunPage = page;
     } else {
-      // Non-image block — flush the current run.
-      // Exception: a text block immediately between two image blocks on the
-      // same page MIGHT be a panel label (very short) — but to keep this
-      // simple and avoid wrongly merging separate figures, we flush on ANY
-      // text block. Caption-attached-to-text-block is handled by Strategy B
-      // (separate scan below).
-      flushRun();
+      // Non-image block — by default flush the current run.
+      // BUT: if this text block is a short panel label like "(A) ...",
+      // "(B) ...", "a,", "b,", or a single letter/digit, AND the next
+      // non-text block is also an image/chart on the same page, we treat
+      // it as an intra-figure label and DO NOT flush. This is critical
+      // for multi-panel figures where MinerU emits panel labels as
+      // separate text blocks BETWEEN image blocks (which would otherwise
+      // split one Figure into N candidates → N duplicate half-figures).
+      const rawText = (typeof b.text === "string" ? b.text : "").trim();
+      const isPanelLabel =
+        rawText.length > 0 &&
+        rawText.length < 80 && // short
+        // matches "(A)", "(B)", "（A）", "A.", "a)", "A:", "(a,b)", "(A–C)", etc.
+        /^\s*[\(（]?[A-Za-z](?:\s*[,，\-–]\s*[A-Za-z])*\s*[\)）]?\s*[:：.\-、]?/.test(rawText) &&
+        // exclude real captions ("Figure 1 ...", "Fig. 2 ...")
+        !/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(rawText);
+
+      if (isPanelLabel && curRunPage === page) {
+        // Peek ahead: is the next non-text block an image on the same page?
+        let nextImgIdx = -1;
+        for (let j = i + 1; j < Math.min(blocks.length, i + 4); j++) {
+          const nb = blocks[j];
+          if (nb.type === "image" || nb.type === "chart") {
+            nextImgIdx = j;
+            break;
+          }
+          // If we hit another non-image block that's NOT a panel label, stop.
+          const nbText = (typeof nb.text === "string" ? nb.text : "").trim();
+          const nbIsPanel =
+            nbText.length > 0 &&
+            nbText.length < 80 &&
+            /^\s*[\(（]?[A-Za-z](?:\s*[,，\-–]\s*[A-Za-z])*\s*[\)）]?\s*[:：.\-、]?/.test(nbText) &&
+            !/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(nbText);
+          if (!nbIsPanel) break;
+        }
+        if (nextImgIdx !== -1 && (blocks[nextImgIdx].page_idx ?? 0) === page) {
+          // Skip this panel label — don't flush. Continue the run.
+          continue;
+        }
+      }
 
       // Special case: if this text block is a "Figure N" caption (Shape 3),
-      // we DON'T want to merge it with the next image run. The flush above
+      // we DON'T want to merge it with the next image run. The flush below
       // already handles that correctly.
+      flushRun();
     }
   }
   flushRun();
@@ -297,7 +331,39 @@ export function extractFiguresFromBlocks(
   // ────────────────────────────────────────────────────────────────────────
   // Phase 2: for each candidate, find the best caption + representative
   // image block. Emit one ExtractedFigure per candidate.
+  //
+  // IMPORTANT: when a candidate has multiple image blocks (multi-panel
+  // figure that MinerU split into pieces), we pick the LARGEST image block
+  // by bbox area — this is almost always the "full figure" view (the first
+  // panel typically contains the composite image). Picking the block that
+  // holds the caption (usually the LAST block) would show only the last
+  // panel, which is exactly the "拆分小图" problem the user reported.
   // ────────────────────────────────────────────────────────────────────────
+
+  // Helper: estimate image block area from bbox (returns 0 if no bbox).
+  const blockArea = (b: MinerUBlock): number => {
+    if (!b.bbox || b.bbox.length !== 4) return 0;
+    const [x1, y1, x2, y2] = b.bbox;
+    return Math.abs((x2 - x1) * (y2 - y1));
+  };
+
+  // Helper: pick the "best" image block from a candidate — prefer the
+  // largest by bbox area; fall back to the first block if areas are 0.
+  const pickBestImageBlock = (cand: { blocks: MinerUBlock[] }): MinerUBlock | null => {
+    if (cand.blocks.length === 0) return null;
+    let best = cand.blocks[0];
+    let bestArea = blockArea(best);
+    for (let i = 1; i < cand.blocks.length; i++) {
+      const a = blockArea(cand.blocks[i]);
+      // Strictly greater — ties keep the earlier (top-most) block.
+      if (a > bestArea) {
+        best = cand.blocks[i];
+        bestArea = a;
+      }
+    }
+    return best;
+  };
+
   for (const cand of candidates) {
     // 2a: try caption from the LAST block (most common — caption attaches
     // to the last panel of a multi-panel figure).
@@ -315,14 +381,17 @@ export function extractFiguresFromBlocks(
 
     if (bestMatch) {
       const label = normaliseFigureLabel(bestMatch.caption)!;
-      upsert(label, bestMatch.caption, bestMatch.block, cand.pageIndex);
+      // Use the LARGEST image block (full figure), not the caption-bearing
+      // block (which might be just one panel).
+      const displayBlock = pickBestImageBlock(cand) || bestMatch.block;
+      upsert(label, bestMatch.caption, displayBlock, cand.pageIndex);
       continue; // candidate handled
     }
 
     // 2b: Strategy B fallback — look at the next 1-2 blocks AFTER this
     // candidate. If a text block starts with "Figure N", use it as the
-    // caption and pair with the LAST image block of this candidate.
-    const lastBlock = cand.blocks[cand.blocks.length - 1];
+    // caption and pair with the LARGEST image block of this candidate.
+    const largestBlock = pickBestImageBlock(cand) || cand.blocks[cand.blocks.length - 1];
     for (let j = cand.endIdx + 1; j <= Math.min(blocks.length - 1, cand.endIdx + 2); j++) {
       const nb = blocks[j];
       if (nb.type !== "text") continue;
@@ -331,7 +400,7 @@ export function extractFiguresFromBlocks(
       if (/https?:\/\//i.test(rawCap)) continue;
       const label = normaliseFigureLabel(rawCap);
       if (label) {
-        upsert(label, rawCap, lastBlock, cand.pageIndex);
+        upsert(label, rawCap, largestBlock, cand.pageIndex);
         break;
       }
     }

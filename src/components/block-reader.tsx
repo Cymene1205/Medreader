@@ -611,9 +611,11 @@ function BlockView({
         )}
       >
         {block.table_caption && typeof block.table_caption === "string" && (
-          <div className="px-3 py-1.5 text-[11px] text-muted-foreground bg-muted/40 border-b">
+          <div className="px-3 py-1.5 text-[11px] text-muted-foreground bg-muted/40 border-b prose-inline-sm">
             <TableIcon className="inline h-3 w-3 mr-1" />
-            {block.table_caption}
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ p: ({ children }) => <span>{children}</span> }}>
+              {block.table_caption}
+            </ReactMarkdown>
           </div>
         )}
         {block.table_body && (
@@ -632,8 +634,10 @@ function BlockView({
           </div>
         )}
         {block.table_footnote && typeof block.table_footnote === "string" && (
-          <div className="px-3 py-1 text-[10px] text-muted-foreground/80 border-t bg-muted/20">
-            {block.table_footnote}
+          <div className="px-3 py-1 text-[10px] text-muted-foreground/80 border-t bg-muted/20 prose-inline-sm">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ p: ({ children }) => <span>{children}</span> }}>
+              {block.table_footnote}
+            </ReactMarkdown>
           </div>
         )}
       </div>
@@ -732,11 +736,15 @@ function BlockView({
           <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-amber-500 rounded-r" />
         )}
         {/* Render inline markdown (bold/italic/sup/sub) so MinerU's **emphasis**
-            and math symbols display correctly. */}
+            and math symbols display correctly.
+            ⚠️ rehypeRaw is REQUIRED here — MinerU emits raw HTML like
+            `SiglecF<sup>hi</sup>`, `CD8<sup>+</sup>`, `IL-1β` etc. Without
+            rehypeRaw these tags show as literal text. */}
         <div className="text-[14px] leading-[1.85] text-foreground/90 prose-inline-sm">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            disallowedElements={["p", "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr", "img", "ul", "ol", "li", "blockquote", "code", "pre"]}
+            rehypePlugins={[rehypeRaw]}
+            disallowedElements={["p", "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr", "img", "ul", "ol", "li", "blockquote", "pre"]}
             unwrapDisallowed
           >
             {text}

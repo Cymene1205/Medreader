@@ -1010,3 +1010,35 @@ Files Created:
 - scripts/test-extract3.mjs（测试新合并逻辑）
 - scripts/reextract-v2.mjs（用新算法重提取 + 清 spine）
 - scripts/list-papers.mjs（看 DB 里重复论文）
+
+---
+
+Task ID: polish-2026-07-31
+Agent: main
+Task: 修复智能解析界面 4 个体验问题：HTML 标签残留、图拆分小图、思维导图不美观、问题与背景带原文引用
+
+Work Log:
+- 调研 5 个核心文件 (block-reader.tsx / extract-figures.ts / mindmap-view.tsx / outline-panel.tsx / analyze/route.ts) 找到根因
+- 修复 HTML 标签残留：block-reader.tsx 段落渲染 (行 737-744) 加 rehypePlugins={[rehypeRaw]}，让 MinerU 输出的 <sup>hi</sup> / <sub>+</sub> / <i>...</i> 等 HTML 标签正确渲染为上标/下标/斜体；同时修复 table_caption 和 table_footnote 渲染（之前直接 {block.table_caption} 文本输出，现在也用 ReactMarkdown + rehypeRaw）
+- 修复图拆分：extract-figures.ts 多面板图之间的 panel label (如 "(A) ...", "(B) ...", "a,", "b,") 不再断开 image run（之前任何 text block 都 flush）；新增 pickBestImageBlock() 函数 — 多个 image block 合并后选 bbox 面积最大的（即整张 figure 而非单 panel）作为展示图
+- 修复思维导图 mindmap-view.tsx：
+  · Root 节点（论文标题）：去掉 line-clamp-2，显示完整标题；加渐变背景 + "Paper Title" 小标签；节点高度按标题长度自适应
+  · Section 节点：宽度 280→320，summary line-clamp-3→4，字号 13→14px
+  · Child bullet：放宽 60 字→120 字，4 条→6 条；支持 - / * / 1. / ### subtitle 四种格式
+  · argumentSpine 分支：之前只挂 figures 不挂 detail，现在同时挂 figures + summary 文本节点（dashed border 区分）
+  · Figure 节点：宽度 200→220，summary 60→100 字，line-clamp-2→3
+  · 节点间距：nodesep 60→70，ranksep 140→180，marginx/y 48→60
+  · fitView 在节点数变化时自动重新触发（onInit 捕获 rfInstance + useEffect 监听 layoutedNodes.length）
+- 优化提示词 analyze/route.ts：
+  · PROMPT_QUESTION_BACKGROUND：去掉"引用原文关键句"，改为"用自己的话解释其来龙去脉，不要直接引用英文原文"，新增⚠️重要要求段（用中文、不要复制粘贴、关键术语可括号附英文）
+  · PROMPT_NOVELTY / PROMPT_LIMITS_OPPORTUNITIES：同步加⚠️重要要求段
+  · System prompt：去掉"所有引用必须是论文原文的逐字片段"，改为"你必须用自己的话概括与解释论文内容，不要直接复制粘贴论文原文的整句或整段"
+- outline-panel.tsx footer：从"解析均由正文引用句推导 · 点 panel 标签跳转原文验货"改为"AI 概括生成 · 点击图表可跳转原文核验"
+- TypeScript 编译检查：我修改的 4 个文件 0 错误
+- npm run build 成功
+- 重启 production server (pid 12174)，HTTP 307/200 正常
+
+Stage Summary:
+- 已完成 4 项体验修复并部署到 production server
+- 用户需要刷新页面查看效果；对于"问题与背景"等已有 LLM 分析的论文，需要点"重试"按钮重新生成才能应用新的提示词
+- 对于已提取的 figures，旧的拆分小图需要重新提取才能合并为完整图（可调用 reextract-and-enrich.mjs 脚本）

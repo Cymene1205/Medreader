@@ -1,0 +1,879 @@
+     1→"use client";
+     2→
+     3→import {
+     4→  useEffect,
+     5→  useMemo,
+     6→  useRef,
+     7→  useState,
+     8→  forwardRef,
+     9→  useImperativeHandle,
+    10→  useCallback,
+    11→} from "react";
+    12→import ReactMarkdown from "react-markdown";
+    13→import remarkGfm from "remark-gfm";
+    14→import rehypeRaw from "rehype-raw";
+    15→import {
+    16→  Loader2,
+    17→  FileText,
+    18→  Image as ImageIcon,
+    19→  Table as TableIcon,
+    20→  Hash,
+    21→  Search,
+    22→  X,
+    23→  ChevronUp,
+    24→  ChevronDown,
+    25→  Type,
+    26→  ListTree,
+    27→} from "lucide-react";
+    28→import { cn } from "@/lib/utils";
+    29→import { Button } from "@/components/ui/button";
+    30→import { Input } from "@/components/ui/input";
+    31→import {
+    32→  Sheet,
+    33→  SheetContent,
+    34→  SheetHeader,
+    35→  SheetTitle,
+    36→} from "@/components/ui/sheet";
+    37→
+    38→export type MinerUBlock = {
+    39→  type: string;
+    40→  text?: string;
+    41→  text_level?: number;
+    42→  text_format?: any;
+    43→  content?: any;
+    44→  img_path?: string;
+    45→  bbox?: [number, number, number, number];
+    46→  page_idx?: number;
+    47→  table_body?: string;
+    48→  table_caption?: string;
+    49→  table_footnote?: string;
+    50→  // ⚠️ MinerU emits chart_caption / image_caption as ARRAYS of strings.
+    51→  // See src/lib/mineru.ts for the rationale.
+    52→  chart_caption?: string[];
+    53→  chart_footnote?: string[];
+    54→  image_caption?: string[];
+    55→  image_footnote?: string[];
+    56→};
+    57→
+    58→export type BlockReaderHandle = {
+    59→  scrollToText: (quote: string, keywords: string[]) => void;
+    60→};
+    61→
+    62→type Props = {
+    63→  fallbackText: string | null;
+    64→  markdown: string | null;
+    65→  blocks: MinerUBlock[] | null;
+    66→  imagesDir: string | null;
+    67→  loading: boolean;
+    68→  statusMessage?: string;
+    69→  onParagraphClick?: (text: string, blockIdx: number) => void;
+    70→  highlightToken?: { quote: string; keywords: string[]; nonce: number } | null;
+    71→};
+    72→
+    73→/**
+    74→ * Strip MinerU's over-escaped markdown punctuation.
+    75→ * MinerU outputs things like "Ehsan Vafadarnejad,\* Giuseppe Rizzo,\* ..."
+    76→ * The backslash before * is wrong — these are author name separators, not
+    77→ * emphasis markers. Strip them so the text renders cleanly.
+    78→ */
+    79→function cleanMinerUText(s: string): string {
+    80→  if (!s) return "";
+    81→  return s
+    82→    // \*  → * (MinerU over-escapes asterisks used as author separators)
+    83→    .replace(/\\\*/g, "*")
+    84→    // \_  → _
+    85→    .replace(/\\_/g, "_")
+    86→    // \# at start of line — keep as heading marker if intended; but if escaped,
+    87→    // MinerU sometimes escapes inappropriately. Only unescape mid-line.
+    88→    .replace(/(?!^)\\#/g, "#");
+    89→}
+    90→
+    91→/**
+    92→ * Block-level reader — renders MinerU's content_list.json as a stream of
+    93→ * discrete blocks (headings, paragraphs, tables, figures, equations).
+    94→ *
+    95→ * - Single-click a paragraph → triggers onParagraphClick for translation.
+    96→ * - Outline clicks → highlightToken → scroll to best-matching block + flash.
+    97→ * - In-reader search bar (Ctrl+F-like) — highlights & navigates matches.
+    98→ */
+    99→const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
+   100→  { fallbackText, markdown, blocks, imagesDir, loading, statusMessage, onParagraphClick, highlightToken },
+   101→  ref
+   102→) {
+   103→  const containerRef = useRef<HTMLDivElement>(null);
+   104→  const blockRefs = useRef<(HTMLDivElement | null)[]>([]);
+   105→  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+   106→
+   107→  // In-reader search state
+   108→  const [searchOpen, setSearchOpen] = useState(false);
+   109→  const [searchQuery, setSearchQuery] = useState("");
+   110→  const [searchMatches, setSearchMatches] = useState<number[]>([]);
+   111→  const [searchCursor, setSearchCursor] = useState(0);
+   112→
+   113→  // Heading navigator side-drawer state
+   114→  const [headingsOpen, setHeadingsOpen] = useState(false);
+   115→  const [activeHeadingIdx, setActiveHeadingIdx] = useState<number | null>(null);
+   116→
+   117→  const hasBlocks = blocks && blocks.length > 0;
+   118→
+   119→  // Extract heading blocks (type === "text" with text_level >= 1) — used by
+   120→  // the side drawer. No LLM involved, just MinerU's structural metadata.
+   121→  // Each entry carries the original block index so clicking it can scroll
+   122→  // the reader to that exact block via blockRefs.
+   123→  //
+   124→  // ⚠️ Re-levelling: MinerU's text_level is unreliable for scientific PDFs
+   125→  //    (e.g. it often marks every Results subheading as level 1, making the
+   126→  //    navigator look like a flat list). We re-derive a 2-level hierarchy:
+   127→  //      - H1 = top-level structural sections (Introduction / Results /
+   128→  //        Discussion / Methods / References / Acknowledgements / ...)
+   129→  //      - H2 = sub-headings under an H1
+   130→  //    level >= 3 is collapsed into H2 (kept so the user can still click
+   131→  //    deep subsections, but rendered identically to H2 to avoid the
+   132→  //    "everything is one level" flat look).
+   133→  const headings = useMemo(() => {
+   134→    if (!blocks) return [];
+   135→    const raw = blocks
+   136→      .map((b, i) => ({ block: b, idx: i }))
+   137→      .filter(({ block }) => {
+   138→        const t = (block.type || "").toLowerCase();
+   139→        return t === "text" && typeof block.text_level === "number" && block.text_level >= 1;
+   140→      })
+   141→      .map(({ block, idx }) => ({
+   142→        idx,
+   143→        origLevel: block.text_level || 1,
+   144→        level: 1, // placeholder — re-derived below
+   145→        text: (block.text || "").trim(),
+   146→      }))
+   147→      .filter((h) => h.text.length > 0);
+   148→
+   149→    if (raw.length === 0) return [];
+   150→
+   151→    // Re-derive H1/H2 based on the MINIMUM level seen in the document.
+   152→    // Whatever the lowest level MinerU emitted is, treat it as H1.
+   153→    // Everything strictly greater becomes H2.
+   154→    const minLevel = raw.reduce((m, h) => Math.min(m, h.origLevel), raw[0].origLevel);
+   155→    for (const h of raw) {
+   156→      h.level = h.origLevel === minLevel ? 1 : 2;
+   157→    }
+   158→
+   159→    // Heuristic: if the document has TOO FEW H1s (≤ 1), demote some H2s
+   160→    // to H1 by treating the second-lowest level as H1 too. This handles
+   161→    // papers where MinerU put the article title at level 1 and everything
+   162→    // else at level 2 — we want at least 3-4 H1 sections to navigate.
+   163→    const h1Count = raw.filter((h) => h.level === 1).length;
+   164→    if (h1Count <= 1 && raw.some((h) => h.level === 2)) {
+   165→      const h2Levels = raw
+   166→        .filter((h) => h.level === 2)
+   167→        .map((h) => h.origLevel)
+   168→        .sort((a, b) => a - b);
+   169→      const secondMin = h2Levels[0];
+   170→      for (const h of raw) {
+   171→        if (h.origLevel <= secondMin) h.level = 1;
+   172→        else h.level = 2;
+   173→      }
+   174→    }
+   175→
+   176→    return raw;
+   177→  }, [blocks]);
+   178→
+   179→  // Filter blocks to only render the readable content (skip page_number, footer noise).
+   180→  const renderBlocks = useMemo(() => {
+   181→    if (!blocks) return [];
+   182→    return blocks
+   183→      .map((b, i) => ({ ...b, _idx: i }))
+   184→      .filter((b) => {
+   185→        const t = (b.type || "").toLowerCase();
+   186→        return t !== "page_number" && t !== "header" && t !== "footer" && t !== "aside_text";
+   187→      });
+   188→  }, [blocks]);
+   189→
+   190→  // Image URL helper: maps MinerU's images/xxx.jpg to /api/paper-images?...
+   191→  const imageUrl = useCallback(
+   192→    (imgPath?: string): string | null => {
+   193→      if (!imgPath || !imagesDir) return null;
+   194→      const name = imgPath.split("/").pop() || "";
+   195→      return `/api/paper-images?dir=${encodeURIComponent(imagesDir)}&name=${encodeURIComponent(name)}`;
+   196→    },
+   197→    [imagesDir]
+   198→  );
+   199→
+   200→  // Imperative handle for outline clicks.
+   201→  useImperativeHandle(
+   202→    ref,
+   203→    () => ({
+   204→      scrollToText: (quote: string, keywords: string[]) => {
+   205→        if (!blocks || blocks.length === 0) return;
+   206→        const idx = findBlockIndex(blocks, quote, keywords);
+   207→        if (idx < 0) return;
+   208→        const el = blockRefs.current[idx];
+   209→        if (el) {
+   210→          el.scrollIntoView({ behavior: "smooth", block: "center" });
+   211→          el.classList.add("block-flash");
+   212→          setTimeout(() => el.classList.remove("block-flash"), 2200);
+   213→          setActiveIdx(idx);
+   214→        }
+   215→      },
+   216→    }),
+   217→    [blocks]
+   218→  );
+   219→
+   220→  // Jump to a heading by block index — used by the side drawer.
+   221→  const jumpToHeading = useCallback((idx: number) => {
+   222→    const el = blockRefs.current[idx];
+   223→    if (el) {
+   224→      el.scrollIntoView({ behavior: "smooth", block: "start" });
+   225→      el.classList.add("block-flash");
+   226→      setTimeout(() => el.classList.remove("block-flash"), 2200);
+   227→      setActiveIdx(idx);
+   228→      setActiveHeadingIdx(idx);
+   229→    }
+   230→  }, []);
+   231→
+   232→  // React to highlightToken (from outline click) — scroll & flash.
+   233→  useEffect(() => {
+   234→    if (!highlightToken || !blocks || blocks.length === 0) return;
+   235→    const { quote, keywords } = highlightToken;
+   236→    const idx = findBlockIndex(blocks, quote, keywords);
+   237→    if (idx < 0) return;
+   238→    const el = blockRefs.current[idx];
+   239→    if (el) {
+   240→      el.scrollIntoView({ behavior: "smooth", block: "center" });
+   241→      el.classList.add("block-flash");
+   242→      setTimeout(() => el.classList.remove("block-flash"), 2200);
+   243→      setActiveIdx(idx);
+   244→    }
+   245→  }, [highlightToken, blocks]);
+   246→
+   247→  // Compute search matches whenever query or blocks change
+   248→  useEffect(() => {
+   249→    if (!searchQuery.trim() || !blocks) {
+   250→      setSearchMatches([]);
+   251→      setSearchCursor(0);
+   252→      return;
+   253→    }
+   254→    const q = searchQuery.toLowerCase();
+   255→    const idxs: number[] = [];
+   256→    for (let i = 0; i < blocks.length; i++) {
+   257→      const t = (
+   258→        blocks[i].text ||
+   259→        blocks[i].table_caption ||
+   260→        (Array.isArray(blocks[i].chart_caption) ? blocks[i].chart_caption.join(" ") : "") ||
+   261→        (Array.isArray(blocks[i].image_caption) ? blocks[i].image_caption.join(" ") : "") ||
+   262→        ""
+   263→      ).toLowerCase();
+   264→      if (t.includes(q)) idxs.push(i);
+   265→    }
+   266→    setSearchMatches(idxs);
+   267→    setSearchCursor(0);
+   268→    if (idxs.length > 0) {
+   269→      const el = blockRefs.current[idxs[0]];
+   270→      if (el) {
+   271→        el.scrollIntoView({ behavior: "smooth", block: "center" });
+   272→        el.classList.add("block-flash");
+   273→        setTimeout(() => el.classList.remove("block-flash"), 1500);
+   274→        setActiveIdx(idxs[0]);
+   275→      }
+   276→    }
+   277→  }, [searchQuery, blocks]);
+   278→
+   279→  const gotoMatch = (delta: number) => {
+   280→    if (searchMatches.length === 0) return;
+   281→    const next = (searchCursor + delta + searchMatches.length) % searchMatches.length;
+   282→    setSearchCursor(next);
+   283→    const idx = searchMatches[next];
+   284→    const el = blockRefs.current[idx];
+   285→    if (el) {
+   286→      el.scrollIntoView({ behavior: "smooth", block: "center" });
+   287→      el.classList.add("block-flash");
+   288→      setTimeout(() => el.classList.remove("block-flash"), 1500);
+   289→      setActiveIdx(idx);
+   290→    }
+   291→  };
+   292→
+   293→  // Keyboard shortcut: Ctrl+F / Cmd+F to open search, Esc to close
+   294→  useEffect(() => {
+   295→    const handler = (e: KeyboardEvent) => {
+   296→      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+   297→        e.preventDefault();
+   298→        setSearchOpen(true);
+   299→      } else if (e.key === "Escape") {
+   300→        setSearchOpen(false);
+   301→        setSearchQuery("");
+   302→      }
+   303→    };
+   304→    window.addEventListener("keydown", handler);
+   305→    return () => window.removeEventListener("keydown", handler);
+   306→  }, []);
+   307→
+   308→  return (
+   309→    <div className="flex flex-col h-full bg-muted/20">
+   310→      {/* Status bar */}
+   311→      {loading && (
+   312→        <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 text-xs text-blue-700 dark:bg-blue-950/30 dark:text-blue-300 flex items-center gap-2">
+   313→          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   314→          {statusMessage || "MinerU 解析中（30-90 秒）…"}
+   315→        </div>
+   316→      )}
+   317→
+   318→      {/* In-reader search bar */}
+   319→      {searchOpen && (
+   320→        <div className="px-3 py-2 bg-background border-b flex items-center gap-2">
+   321→          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+   322→          <Input
+   323→            value={searchQuery}
+   324→            onChange={(e) => setSearchQuery(e.target.value)}
+   325→            placeholder="查找段落…"
+   326→            className="h-7 text-xs flex-1"
+   327→            autoFocus
+   328→          />
+   329→          <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+   330→            {searchMatches.length > 0
+   331→              ? `${searchCursor + 1}/${searchMatches.length}`
+   332→              : searchQuery
+   333→              ? "无匹配"
+   334→              : "—"}
+   335→          </span>
+   336→          <Button
+   337→            variant="ghost"
+   338→            size="sm"
+   339→            className="h-7 w-7 p-0"
+   340→            onClick={() => gotoMatch(-1)}
+   341→            disabled={searchMatches.length === 0}
+   342→            title="上一个"
+   343→          >
+   344→            <ChevronUp className="h-3.5 w-3.5" />
+   345→          </Button>
+   346→          <Button
+   347→            variant="ghost"
+   348→            size="sm"
+   349→            className="h-7 w-7 p-0"
+   350→            onClick={() => gotoMatch(1)}
+   351→            disabled={searchMatches.length === 0}
+   352→            title="下一个"
+   353→          >
+   354→            <ChevronDown className="h-3.5 w-3.5" />
+   355→          </Button>
+   356→          <Button
+   357→            variant="ghost"
+   358→            size="sm"
+   359→            className="h-7 w-7 p-0"
+   360→            onClick={() => {
+   361→              setSearchOpen(false);
+   362→              setSearchQuery("");
+   363→            }}
+   364→            title="关闭 (Esc)"
+   365→          >
+   366→            <X className="h-3.5 w-3.5" />
+   367→          </Button>
+   368→        </div>
+   369→      )}
+   370→
+   371→      {/* Toolbar with search toggle + headings drawer toggle */}
+   372→      {!searchOpen && (
+   373→        <div className="px-3 py-1 bg-background/60 border-b flex items-center justify-end gap-1">
+   374→          <Button
+   375→            variant="ghost"
+   376→            size="sm"
+   377→            className="h-7 gap-1 text-[11px] text-muted-foreground"
+   378→            onClick={() => setHeadingsOpen(true)}
+   379→            disabled={!hasBlocks || headings.length === 0}
+   380→            title="段落导航"
+   381→          >
+   382→            <ListTree className="h-3 w-3" />
+   383→            段落导航
+   384→            {headings.length > 0 && (
+   385→              <span className="ml-0.5 text-[9.5px] text-muted-foreground/70">
+   386→                ({headings.length})
+   387→              </span>
+   388→            )}
+   389→          </Button>
+   390→          <Button
+   391→            variant="ghost"
+   392→            size="sm"
+   393→            className="h-7 gap-1 text-[11px] text-muted-foreground"
+   394→            onClick={() => setSearchOpen(true)}
+   395→            title="查找 (Ctrl+F)"
+   396→          >
+   397→            <Search className="h-3 w-3" />
+   398→            查找
+   399→          </Button>
+   400→        </div>
+   401→      )}
+   402→
+   403→      {/* Heading navigator side drawer */}
+   404→      <Sheet open={headingsOpen} onOpenChange={setHeadingsOpen}>
+   405→        <SheetContent side="right" className="w-[360px] sm:w-[400px] p-0 flex flex-col">
+   406→          <SheetHeader className="px-4 py-3 border-b">
+   407→            <SheetTitle className="flex items-center gap-2 text-sm">
+   408→              <ListTree className="h-4 w-4 text-sky-600" />
+   409→              段落导航
+   410→              <span className="ml-1 text-[11px] text-muted-foreground font-normal">
+   411→                · {headings.length} 个标题
+   412→              </span>
+   413→            </SheetTitle>
+   414→          </SheetHeader>
+   415→          <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-2">
+   416→            {headings.length === 0 ? (
+   417→              <div className="text-center py-8 text-muted-foreground text-xs">
+   418→                暂无标题结构
+   419→                <div className="mt-1 text-[10px] text-muted-foreground/70">
+   420→                  MinerU 解析完成后此处显示论文大小标题
+   421→                </div>
+   422→              </div>
+   423→            ) : (
+   424→              <ul className="space-y-0">
+   425→                {headings.map((h, i) => {
+   426→                  const isActive = activeHeadingIdx === h.idx;
+   427→                  const isH1 = h.level === 1;
+   428→                  return (
+   429→                    <li key={i}>
+   430→                      <button
+   431→                        type="button"
+   432→                        onClick={() => {
+   433→                          jumpToHeading(h.idx);
+   434→                          // Don't auto-close — let user click multiple headings
+   435→                        }}
+   436→                        title={h.text}
+   437→                        className={cn(
+   438→                          "w-full text-left rounded transition-colors flex items-stretch gap-2",
+   439→                          // H1: bigger padding, separator above
+   440→                          isH1
+   441→                            ? "mt-2 first:mt-0 px-1.5 py-2"
+   442→                            : "px-1.5 py-1.5",
+   443→                          isActive
+   444→                            ? "bg-sky-50 dark:bg-sky-950/40"
+   445→                            : "hover:bg-muted/60"
+   446→                        )}
+   447→                      >
+   448→                        {/* H1: left vertical bar. H2: small dot. */}
+   449→                        <span
+   450→                          className={cn(
+   451→                            "flex-shrink-0 rounded-full self-stretch",
+   452→                            isH1
+   453→                              ? isActive
+   454→                                ? "w-[3px] bg-sky-600 dark:bg-sky-400"
+   455→                                : "w-[3px] bg-sky-400/70 dark:bg-sky-700/70"
+   456→                              : cn(
+   457→                                  "w-1 h-1 mt-[7px] rounded-full",
+   458→                                  isActive ? "bg-sky-500" : "bg-muted-foreground/40"
+   459→                                )
+   460→                          )}
+   461→                        />
+   462→                        <span
+   463→                          className={cn(
+   464→                            "flex-1 min-w-0",
+   465→                            isH1
+   466→                              ? cn(
+   467→                                  "text-[13px] font-semibold leading-snug line-clamp-2",
+   468→                                  isActive
+   469→                                    ? "text-sky-700 dark:text-sky-300"
+   470→                                    : "text-foreground"
+   471→                                )
+   472→                              : cn(
+   473→                                  "text-[12px] font-normal leading-snug line-clamp-2",
+   474→                                  isActive
+   475→                                    ? "text-sky-700 dark:text-sky-300"
+   476→                                    : "text-foreground/75"
+   477→                                )
+   478→                          )}
+   479→                        >
+   480→                          {h.text}
+   481→                        </span>
+   482→                      </button>
+   483→                    </li>
+   484→                  );
+   485→                })}
+   486→              </ul>
+   487→            )}
+   488→          </div>
+   489→        </SheetContent>
+   490→      </Sheet>
+   491→
+   492→      {/* Reading surface */}
+   493→      <div ref={containerRef} className="flex-1 overflow-auto scrollbar-thin">
+   494→        <div className="max-w-[820px] mx-auto px-6 py-6 space-y-1.5">
+   495→          {!markdown && !fallbackText && !loading && (
+   496→            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
+   497→              <FileText className="h-10 w-10 opacity-30" />
+   498→              <p className="text-sm">导入 PDF 后，将自动调用 MinerU 解析为分块结构</p>
+   499→              <p className="text-xs text-muted-foreground/70 max-w-[400px] text-center">
+   500→                解析完成后此处显示按段落/标题/图表/表格分块的阅读视图，点击段落即可在右侧翻译
+   501→              </p>
+   502→            </div>
+   503→          )}
+   504→
+   505→          {/* Plain-text fallback (progressive) */}
+   506→          {!hasBlocks && fallbackText && (
+   507→            <div className="text-[14px] leading-[1.8] text-foreground/85 whitespace-pre-wrap">
+   508→              {loading && (
+   509→                <div className="mb-3 text-[11px] text-blue-600 dark:text-blue-400 italic">
+   510→                  ⚡ 快速预览（基于 PDF 文本层），MinerU 结构化解析仍在进行中…
+   511→                </div>
+   512→              )}
+   513→              {fallbackText}
+   514→            </div>
+   515→          )}
+   516→
+   517→          {/* MinerU structured blocks */}
+   518→          {hasBlocks && (
+   519→            <>
+   520→              {renderBlocks.map((b) => (
+   521→                <BlockView
+   522→                  key={b._idx}
+   523→                  block={b}
+   524→                  index={b._idx}
+   525→                  isActive={activeIdx === b._idx}
+   526→                  isSearchHit={searchMatches.includes(b._idx)}
+   527→                  imageUrl={imageUrl(b.img_path)}
+   528→                  onParagraphClick={onParagraphClick}
+   529→                  onActivate={() => setActiveIdx(b._idx)}
+   530→                  blockRef={(el) => {
+   531→                    blockRefs.current[b._idx] = el;
+   532→                  }}
+   533→                />
+   534→              ))}
+   535→            </>
+   536→          )}
+   537→        </div>
+   538→      </div>
+   539→    </div>
+   540→  );
+   541→});
+   542→
+   543→export default BlockReader;
+   544→
+   545→// ---------- Sub-component: renders a single block ----------
+   546→
+   547→function BlockView({
+   548→  block,
+   549→  index,
+   550→  isActive,
+   551→  isSearchHit,
+   552→  imageUrl,
+   553→  onParagraphClick,
+   554→  onActivate,
+   555→  blockRef,
+   556→}: {
+   557→  block: MinerUBlock & { _idx: number };
+   558→  index: number;
+   559→  isActive: boolean;
+   560→  isSearchHit: boolean;
+   561→  imageUrl: string | null;
+   562→  onParagraphClick?: (text: string, idx: number) => void;
+   563→  onActivate?: (idx: number) => void;
+   564→  blockRef: (el: HTMLDivElement | null) => void;
+   565→}) {
+   566→  const type = (block.type || "").toLowerCase();
+   567→  const rawText = block.text || "";
+   568→  const text = cleanMinerUText(rawText);
+   569→  const level = block.text_level;
+   570→
+   571→  // Headings
+   572→  if (type === "text" && level && level >= 1 && level <= 6) {
+   573→    const sizeCls =
+   574→      level === 1
+   575→        ? "text-2xl"
+   576→        : level === 2
+   577→        ? "text-xl"
+   578→        : level === 3
+   579→        ? "text-lg"
+   580→        : "text-base";
+   581→    return (
+   582→      <div ref={blockRef} data-block-idx={index} data-page={block.page_idx} className="scroll-mt-4">
+   583→        <div
+   584→          className={cn(
+   585→            "font-bold mt-5 mb-2 leading-tight",
+   586→            sizeCls,
+   587→            isActive && "text-primary"
+   588→          )}
+   589→        >
+   590→          {text}
+   591→        </div>
+   592→        {block.page_idx !== undefined && level <= 2 && (
+   593→          <div className="text-[10px] text-muted-foreground/60 -mt-1 mb-1">
+   594→            <Hash className="inline h-2.5 w-2.5" /> 第 {block.page_idx + 1} 页
+   595→          </div>
+   596→        )}
+   597→      </div>
+   598→    );
+   599→  }
+   600→
+   601→  // Tables — table_body is HTML from MinerU; render via ReactMarkdown + rehypeRaw
+   602→  if (type === "table") {
+   603→    return (
+   604→      <div
+   605→        ref={blockRef}
+   606→        data-block-idx={index}
+   607→        data-page={block.page_idx}
+   608→        className={cn(
+   609→          "my-3 rounded-md border border-border/60 overflow-hidden bg-background scroll-mt-4",
+   610→          isActive && "ring-2 ring-primary/50"
+   611→        )}
+   612→      >
+   613→        {block.table_caption && typeof block.table_caption === "string" && (
+   614→          <div className="px-3 py-1.5 text-[11px] text-muted-foreground bg-muted/40 border-b">
+   615→            <TableIcon className="inline h-3 w-3 mr-1" />
+   616→            {block.table_caption}
+   617→          </div>
+   618→        )}
+   619→        {block.table_body && (
+   620→          <div
+   621→            className="block-reader-table text-[12px] overflow-x-auto"
+   622→            onClick={(e) => {
+   623→              if ((e.target as HTMLElement).closest("td,th")) {
+   624→                const cellText = (e.target as HTMLElement).textContent || "";
+   625→                if (cellText.trim().length > 1) onParagraphClick?.(cellText.trim(), index);
+   626→              }
+   627→            }}
+   628→          >
+   629→            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+   630→              {block.table_body}
+   631→            </ReactMarkdown>
+   632→          </div>
+   633→        )}
+   634→        {block.table_footnote && typeof block.table_footnote === "string" && (
+   635→          <div className="px-3 py-1 text-[10px] text-muted-foreground/80 border-t bg-muted/20">
+   636→            {block.table_footnote}
+   637→          </div>
+   638→        )}
+   639→      </div>
+   640→    );
+   641→  }
+   642→
+   643→  // Images / charts
+   644→  if (type === "image" || type === "chart") {
+   645→    // chart_caption / image_caption are arrays — pick the longest item that
+   646→    // starts with "Figure N" (the real caption), or fall back to the longest
+   647→    // item, then to the block's text field.
+   648→    const captionArrs = [
+   649→      ...(Array.isArray(block.chart_caption) ? block.chart_caption : []),
+   650→      ...(Array.isArray(block.image_caption) ? block.image_caption : []),
+   651→    ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+   652→    const figCaption = captionArrs
+   653→      .filter((s) => /^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(s))
+   654→      .sort((a, b) => b.length - a.length)[0];
+   655→    const caption = figCaption || captionArrs.sort((a, b) => b.length - a.length)[0] || text || "";
+   656→    return (
+   657→      <div
+   658→        ref={blockRef}
+   659→        data-block-idx={index}
+   660→        data-page={block.page_idx}
+   661→        className={cn(
+   662→          "my-3 flex flex-col items-center scroll-mt-4",
+   663→          isActive && "ring-2 ring-primary/50 rounded"
+   664→        )}
+   665→      >
+   666→        {imageUrl && (
+   667→          <img
+   668→            src={imageUrl}
+   669→            alt={caption || "figure"}
+   670→            className="max-w-full rounded shadow-sm border border-border/40"
+   671→            loading="lazy"
+   672→          />
+   673→        )}
+   674→        {caption && (
+   675→          <div className="text-[11px] text-muted-foreground italic mt-1.5 text-center max-w-[600px] prose-inline-sm">
+   676→            <ReactMarkdown
+   677→              remarkPlugins={[remarkGfm]}
+   678→              rehypePlugins={[rehypeRaw]}
+   679→              components={{
+   680→                p: ({ children }) => <span>{children}</span>,
+   681→                br: () => <span> </span>,
+   682→              }}
+   683→            >
+   684→              {caption}
+   685→            </ReactMarkdown>
+   686→          </div>
+   687→        )}
+   688→      </div>
+   689→    );
+   690→  }
+   691→
+   692→  // Equations
+   693→  if (type === "equation") {
+   694→    return (
+   695→      <div
+   696→        ref={blockRef}
+   697→        data-block-idx={index}
+   698→        data-page={block.page_idx}
+   699→        className="my-2 px-3 py-2 bg-muted/30 rounded text-center font-mono text-[14px] overflow-x-auto scroll-mt-4"
+   700→      >
+   701→        {text.replace(/^\$\$/, "").replace(/\$\$$/, "").trim()}
+   702→      </div>
+   703→    );
+   704→  }
+   705→
+   706→  // Regular text paragraphs (and ref_text etc.)
+   707→  if (type === "text" || type === "ref_text" || type === "page_footnote") {
+   708→    if (!text || !text.trim()) return null;
+   709→    return (
+   710→      <div
+   711→        ref={blockRef}
+   712→        data-block-idx={index}
+   713→        data-page={block.page_idx}
+   714→        onClick={() => {
+   715→          if (text.trim().length > 1) {
+   716→            onActivate?.(index);
+   717→            onParagraphClick?.(text.trim(), index);
+   718→          }
+   719→        }}
+   720→        className={cn(
+   721→          "group relative px-2 py-1 -mx-2 rounded cursor-pointer transition-colors scroll-mt-4",
+   722→          "hover:bg-blue-50/60 dark:hover:bg-blue-950/20",
+   723→          isActive && "bg-blue-50 dark:bg-blue-950/30",
+   724→          isSearchHit && !isActive && "bg-amber-50 dark:bg-amber-950/20"
+   725→        )}
+   726→        title="点击在右侧翻译此段"
+   727→      >
+   728→        {isActive && (
+   729→          <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-primary rounded-r" />
+   730→        )}
+   731→        {isSearchHit && !isActive && (
+   732→          <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-amber-500 rounded-r" />
+   733→        )}
+   734→        {/* Render inline markdown (bold/italic/sup/sub) so MinerU's **emphasis**
+   735→            and math symbols display correctly. */}
+   736→        <div className="text-[14px] leading-[1.85] text-foreground/90 prose-inline-sm">
+   737→          <ReactMarkdown
+   738→            remarkPlugins={[remarkGfm]}
+   739→            disallowedElements={["p", "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr", "img", "ul", "ol", "li", "blockquote", "code", "pre"]}
+   740→            unwrapDisallowed
+   741→          >
+   742→            {text}
+   743→          </ReactMarkdown>
+   744→        </div>
+   745→      </div>
+   746→    );
+   747→  }
+   748→
+   749→  // Unknown block types — render text if present
+   750→  if (text && text.trim()) {
+   751→    return (
+   752→      <div
+   753→        ref={blockRef}
+   754→        data-block-idx={index}
+   755→        data-page={block.page_idx}
+   756→        className="text-[14px] leading-[1.85] text-foreground/80 scroll-mt-4"
+   757→      >
+   758→        {text}
+   759→      </div>
+   760→    );
+   761→  }
+   762→
+   763→  return null;
+   764→}
+   765→
+   766→// ---------- helpers ----------
+   767→
+   768→/**
+   769→ * Find the index of the block whose text best matches the given quote or
+   770→ * keywords. Uses a scoring approach:
+   771→ *
+   772→ *   - exact quote substring match  → score 1000
+   773→ *   - quote-head (first 25 chars) substring match → score 800
+   774→ *   - per-keyword substring match  → +100/keyword (longer keywords weighted more)
+   775→ *   - prefer blocks where MORE keywords match
+   776→ *
+   777→ * Returns the highest-scoring block index, or -1 if no block scored > 0.
+   778→ */
+   779→function findBlockIndex(
+   780→  blocks: MinerUBlock[],
+   781→  quote: string,
+   782→  keywords: string[]
+   783→): number {
+   784→  if (!blocks || blocks.length === 0) return -1;
+   785→
+   786→  // Normalize a string for matching: lowercase, collapse whitespace.
+   787→  // Also strip <sup>/<sub>/<i> HTML tags so e.g. "SiglecF<sup>hi</sup>"
+   788→  // matches a search for "siglecfhi".
+   789→  const norm = (s: string) =>
+   790→    (s || "")
+   791→      .toLowerCase()
+   792→      .replace(/<\/?(?:sup|sub|i|b|em|strong|span)[^>]*>/gi, "")
+   793→      .replace(/\s+/g, " ")
+   794→      .trim();
+   795→
+   796→  const q = norm(quote || "");
+   797→  const qHead = q.slice(0, 25);
+   798→  const kws = (keywords || [])
+   799→    .filter((k) => k && k.length >= 2)
+   800→    .map(norm)
+   801→    .sort((a, b) => b.length - a.length); // longest first
+   802→
+   803→  // Extract any "Figure N" / "Fig N" / "Fig NA" references from the quote
+   804→  // itself — if the LLM included the figure callout in its quote, we want
+   805→  // blocks that mention the same figure to score higher.
+   806→  const figRefsInQuote = new Set<string>();
+   807→  const figRefRe = /\b(?:fig(?:ure|\.)?)\s*(\d+)\s*([a-z])?/gi;
+   808→  let m: RegExpExecArray | null;
+   809→  while ((m = figRefRe.exec(q)) !== null) {
+   810→    const num = m[1];
+   811→    const panel = m[2] || "";
+   812→    figRefsInQuote.add(`figure ${num}`);
+   813→    if (panel) {
+   814→      figRefsInQuote.add(`figure ${num}${panel}`);
+   815→      figRefsInQuote.add(`fig. ${num}`);
+   816→      figRefsInQuote.add(`fig ${num}${panel}`);
+   817→    }
+   818→  }
+   819→
+   820→  let bestIdx = -1;
+   821→  let bestScore = 0;
+   822→
+   823→  for (let i = 0; i < blocks.length; i++) {
+   824→    const t = norm(blocks[i].text || "");
+   825→    if (!t) continue;
+   826→
+   827→    let score = 0;
+   828→
+   829→    // 1) Exact quote match
+   830→    if (q.length > 4 && t.includes(q)) {
+   831→      score += 1000;
+   832→    }
+   833→    // 2) Quote head match (LLM often paraphrases the tail)
+   834→    else if (qHead.length > 6 && t.includes(qHead)) {
+   835→      score += 800;
+   836→    }
+   837→
+   838→    // 3) Keyword matches — longer keywords score more
+   839→    for (const kw of kws) {
+   840→      if (t.includes(kw)) {
+   841→        // Weight by length: 4-char keyword = 100, 10-char = 250
+   842→        score += Math.min(300, 25 + kw.length * 25);
+   843→      }
+   844→    }
+   845→
+   846→    // 4) Token overlap bonus: split quote into words, count how many appear
+   847→    if (q.length > 4) {
+   848→      const tokens = q.split(/[,\s.;:()]+/).filter((w) => w.length > 3);
+   849→      let hits = 0;
+   850→      for (const tok of tokens) {
+   851→        if (t.includes(tok)) hits++;
+   852→      }
+   853→      if (tokens.length > 0) {
+   854→        score += Math.round((hits / tokens.length) * 200);
+   855→      }
+   856→    }
+   857→
+   858→    // 5) Figure-reference bonus — if the quote mentions "Figure 1A", boost
+   859→    // blocks that also mention "Figure 1" / "Fig. 1A". This is the panel
+   860→    // jump fallback when the LLM's quote is too short or paraphrased.
+   861→    if (figRefsInQuote.size > 0) {
+   862→      for (const ref of figRefsInQuote) {
+   863→        if (t.includes(ref)) {
+   864→          score += 150;
+   865→          break;
+   866→        }
+   867→      }
+   868→    }
+   869→
+   870→    if (score > bestScore) {
+   871→      bestScore = score;
+   872→      bestIdx = i;
+   873→    }
+   874→  }
+   875→
+   876→  // Require at least some signal — avoid jumping to block 0 on no match
+   877→  return bestScore > 0 ? bestIdx : -1;
+   878→}
+   879→
