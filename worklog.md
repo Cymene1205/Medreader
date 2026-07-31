@@ -1042,3 +1042,27 @@ Stage Summary:
 - 已完成 4 项体验修复并部署到 production server
 - 用户需要刷新页面查看效果；对于"问题与背景"等已有 LLM 分析的论文，需要点"重试"按钮重新生成才能应用新的提示词
 - 对于已提取的 figures，旧的拆分小图需要重新提取才能合并为完整图（可调用 reextract-and-enrich.mjs 脚本）
+
+---
+
+Task ID: polish-2026-07-31-v2
+Agent: main
+Task: 用户反馈 6 个问题：全文框架绿色配色改深蓝+默认展开+取消折叠；图拆分仍未解决；思维导图错位；点击图注弹窗要大图+图注；figure-detail 改用"表型层/机制层/临床数据/引出问题/提出猜想/验证猜想"分类；论证主线缺展开折叠
+
+Work Log:
+- outline-panel.tsx: SECTIONS 配色全部改为深蓝色系（#1E3A8A/#1E40AF/#3B82F6/#2563EB），头部 "全文框架" 标签从 emerald 改为 blue；openItems 默认全部 4 项展开；删除 isAlwaysOpen 限制，论证主线现在也可折叠
+- mindmap-view.tsx: BRANCH_COLORS 同步改为深蓝色系；节点尺寸全部加大（ROOT 280×130, SECTION 340×220, CHILD 280×140, FIGURE 240×110）；DAGRE_CONFIG 间距加大（nodesep 70→90, ranksep 180→220, margin 60→80）；新增 ranker: "longest-path" 减少节点挤压；渲染器中所有节点 width/minHeight 改用 SIZE 常量；section summary line-clamp 4→5；child line-clamp 4→5
+- extract-figures.ts: 重写 Phase 1 run-merging 逻辑——只有 "Figure N" caption 文本块才断开 image run，其他文本块（panel label/axis label/footnote）一律不断开；这从根上解决了"一张 Figure 被拆成 N 个候选→N 个小图"的问题；pickBestImageBlock 新增 img_path 过滤（无 img_path 的块不参与选择），无 caption + 无图块的候选直接跳过
+- figure-detail/route.ts: systemPrompt 加入"层级命名规则"——title 必须从「引出问题/提出猜想/表型层/机制层/验证猜想/临床数据/方法建立」7 个层次中选一个最贴切的，不能再写"关键证据"等模糊名称
+- figure-chain.tsx: ROLE_COLORS + LAYER_COLORS 全部改为深蓝色系；captionDialog 弹窗加大（80%→90%, maxW 1000→1100, maxH 85vh→90vh, img maxH 60vh→70vh）；caption 渲染加 remarkGfm
+- block-reader.tsx: 新增 onImageClick prop + Dialog——点击智能解析界面任意图片弹出大图（max-h-[70vh]）+ 完整图注（ReactMarkdown + rehypeRaw 渲染 sup/sub 等）
+- scripts/reextract-bun.ts: 新脚本，用 bun 运行 TS，直接调用 src/lib/extract-figures.ts 的 extractAndStoreFigures()；自动清理 stale argumentSpine + 重置 figure detailStatus
+- 对 cms8rsv2t000vq8e6c7zjs5js (vafadarnejad 论文) 跑了重提取：7 figures 全部成功，无重复无拆分；POST /api/figures 触发 Call A，7 张图全部有 question + chainIndex
+
+Stage Summary:
+- 全文框架配色统一为深蓝系，4 个 section 全部默认展开且可折叠
+- 图拆分问题从根上解决（不再 flush on any text block）
+- 思维导图节点尺寸加大 + dagre 间距加大 + ranker=longest-path 应该消除错位
+- 点击图片弹大图 + 图注已就位
+- figure-detail 层级命名现在会用「表型层/机制层/...」7 类之一（已 reset detailStatus，下次展开会重新生成）
+- production server pid=13135 已重启，HTTP 200

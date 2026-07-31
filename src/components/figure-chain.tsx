@@ -12,6 +12,7 @@ import {
 import { Loader2, ChevronRight, Image as ImageIcon, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
 /**
@@ -94,12 +95,12 @@ export type Citation = {
 
 const ROLE_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
   铺垫: { dot: "#94A3B8", bg: "bg-slate-100 dark:bg-slate-900/40", text: "text-slate-600 dark:text-slate-400" },
-  关键证据: { dot: "#2563EB", bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-600 dark:text-blue-400" },
-  验证: { dot: "#0D9488", bg: "bg-teal-100 dark:bg-teal-900/40", text: "text-teal-600 dark:text-teal-400" },
-  延伸: { dot: "#9333EA", bg: "bg-purple-100 dark:bg-purple-900/40", text: "text-purple-600 dark:text-purple-400" },
+  关键证据: { dot: "#1E3A8A", bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-700 dark:text-blue-300" },
+  验证: { dot: "#2563EB", bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-600 dark:text-blue-400" },
+  延伸: { dot: "#3B82F6", bg: "bg-blue-50 dark:bg-blue-900/30", text: "text-blue-500 dark:text-blue-400" },
 };
 
-const LAYER_COLORS = ["#2563EB", "#0D9488", "#9333EA", "#EA580C"];
+const LAYER_COLORS = ["#1E3A8A", "#1E40AF", "#2563EB", "#3B82F6"];
 
 function roleStyle(role: string | null) {
   return ROLE_COLORS[role || ""] || ROLE_COLORS["铺垫"];
@@ -522,10 +523,10 @@ export default function FigureChain({
         open={!!captionDialogFigure}
         onOpenChange={(o) => !o && setCaptionDialogFigure(null)}
       >
-        <DialogContent className="w-[80%] max-w-[1000px] max-h-[85vh] flex flex-col p-0 gap-0">
+        <DialogContent className="w-[90%] max-w-[1100px] max-h-[90vh] flex flex-col p-0 gap-0">
           {captionDialogFigure && (
             <>
-              <DialogHeader className="px-4 py-3 border-b">
+              <DialogHeader className="px-4 py-3 border-b flex-shrink-0">
                 <DialogTitle className="text-base">
                   {captionDialogFigure.label}
                   {captionDialogFigure.isLinchpin && (
@@ -537,20 +538,21 @@ export default function FigureChain({
               </DialogHeader>
               <div className="flex-1 overflow-y-auto scrollbar-thin">
                 {captionDialogFigure.imagePath && (
-                  <div className="bg-muted/30 p-3 flex items-center justify-center">
+                  <div className="bg-muted/30 p-4 flex items-center justify-center">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={`/api/figure-image/${captionDialogFigure.id}`}
                       alt={captionDialogFigure.label}
-                      className="max-w-full max-h-[60vh] object-contain rounded shadow-sm"
+                      className="max-w-full max-h-[70vh] object-contain rounded shadow-sm"
                     />
                   </div>
                 )}
-                <div className="px-4 py-3 text-[12px] leading-relaxed text-foreground/85">
+                <div className="px-4 py-3 text-[12px] leading-relaxed text-foreground/85 prose-inline-sm">
                   {/* Caption may contain <sup>/<sub>/<i> HTML tags from MinerU.
                       Use ReactMarkdown + rehypeRaw to render them properly.
                       Also handles **bold** and *italic* markdown. */}
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeRaw]}
                     components={{
                       // Inline-only rendering — captions shouldn't have block elements

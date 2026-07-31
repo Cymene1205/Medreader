@@ -279,51 +279,34 @@ export function extractFiguresFromBlocks(
       curRun.push(b);
       curRunPage = page;
     } else {
-      // Non-image block — by default flush the current run.
-      // BUT: if this text block is a short panel label like "(A) ...",
-      // "(B) ...", "a,", "b,", or a single letter/digit, AND the next
-      // non-text block is also an image/chart on the same page, we treat
-      // it as an intra-figure label and DO NOT flush. This is critical
-      // for multi-panel figures where MinerU emits panel labels as
-      // separate text blocks BETWEEN image blocks (which would otherwise
-      // split one Figure into N candidates → N duplicate half-figures).
+      // Non-image block — decide whether to flush or keep the run going.
       const rawText = (typeof b.text === "string" ? b.text : "").trim();
-      const isPanelLabel =
-        rawText.length > 0 &&
-        rawText.length < 80 && // short
-        // matches "(A)", "(B)", "（A）", "A.", "a)", "A:", "(a,b)", "(A–C)", etc.
-        /^\s*[\(（]?[A-Za-z](?:\s*[,，\-–]\s*[A-Za-z])*\s*[\)）]?\s*[:：.\-、]?/.test(rawText) &&
-        // exclude real captions ("Figure 1 ...", "Fig. 2 ...")
-        !/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(rawText);
 
-      if (isPanelLabel && curRunPage === page) {
-        // Peek ahead: is the next non-text block an image on the same page?
-        let nextImgIdx = -1;
-        for (let j = i + 1; j < Math.min(blocks.length, i + 4); j++) {
-          const nb = blocks[j];
-          if (nb.type === "image" || nb.type === "chart") {
-            nextImgIdx = j;
-            break;
-          }
-          // If we hit another non-image block that's NOT a panel label, stop.
-          const nbText = (typeof nb.text === "string" ? nb.text : "").trim();
-          const nbIsPanel =
-            nbText.length > 0 &&
-            nbText.length < 80 &&
-            /^\s*[\(（]?[A-Za-z](?:\s*[,，\-–]\s*[A-Za-z])*\s*[\)）]?\s*[:：.\-、]?/.test(nbText) &&
-            !/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(nbText);
-          if (!nbIsPanel) break;
+      // Determine if this text block is a "Figure N" caption — those
+      // mark the START of a new figure and SHOULD flush.
+      const isFigureCaption =
+        rawText.length >= 30 &&
+        /^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(rawText) &&
+        !/https?:\/\//i.test(rawText);
+
+      if (isFigureCaption) {
+        // This is a new figure's caption — flush the previous run.
+        flushRun();
+      } else {
+        // Otherwise it's a panel label / axis label / short description /
+        // footnote — all of these are INTRA-figure noise that MinerU
+        // sometimes emits between image blocks of the SAME figure.
+        //
+        // Critical: do NOT flush. This is what was causing "拆分小图"
+        // (one Figure split into N candidates → N duplicate half-figures).
+        //
+        // EXCEPTION: if the page changed (curRunPage !== page) we still
+        // need to flush — different page means different figure.
+        if (curRunPage !== null && curRunPage !== page) {
+          flushRun();
         }
-        if (nextImgIdx !== -1 && (blocks[nextImgIdx].page_idx ?? 0) === page) {
-          // Skip this panel label — don't flush. Continue the run.
-          continue;
-        }
+        // Otherwise: skip this text block, keep growing the current run.
       }
-
-      // Special case: if this text block is a "Figure N" caption (Shape 3),
-      // we DON'T want to merge it with the next image run. The flush below
-      // already handles that correctly.
-      flushRun();
     }
   }
   flushRun();
@@ -348,16 +331,22 @@ export function extractFiguresFromBlocks(
   };
 
   // Helper: pick the "best" image block from a candidate — prefer the
-  // largest by bbox area; fall back to the first block if areas are 0.
+  // LARGEST by bbox area (this is the composite / full-figure image);
+  // require img_path to be present; fall back to the first block with
+  // img_path if no block has a bbox.
   const pickBestImageBlock = (cand: { blocks: MinerUBlock[] }): MinerUBlock | null => {
     if (cand.blocks.length === 0) return null;
-    let best = cand.blocks[0];
+    // Only consider blocks that actually have an img_path — otherwise
+    // we'd point at a block whose image file doesn't exist.
+    const withPath = cand.blocks.filter((b) => b.img_path);
+    if (withPath.length === 0) return null;
+    let best = withPath[0];
     let bestArea = blockArea(best);
-    for (let i = 1; i < cand.blocks.length; i++) {
-      const a = blockArea(cand.blocks[i]);
+    for (let i = 1; i < withPath.length; i++) {
+      const a = blockArea(withPath[i]);
       // Strictly greater — ties keep the earlier (top-most) block.
       if (a > bestArea) {
-        best = cand.blocks[i];
+        best = withPath[i];
         bestArea = a;
       }
     }
@@ -391,7 +380,12 @@ export function extractFiguresFromBlocks(
     // 2b: Strategy B fallback — look at the next 1-2 blocks AFTER this
     // candidate. If a text block starts with "Figure N", use it as the
     // caption and pair with the LARGEST image block of this candidate.
-    const largestBlock = pickBestImageBlock(cand) || cand.blocks[cand.blocks.length - 1];
+    const largestBlock = pickBestImageBlock(cand);
+    if (!largestBlock) {
+      // No usable image block at all — skip this candidate.
+      // (This avoids creating "figure" entries whose image won't render.)
+      continue;
+    }
     for (let j = cand.endIdx + 1; j <= Math.min(blocks.length - 1, cand.endIdx + 2); j++) {
       const nb = blocks[j];
       if (nb.type !== "text") continue;
@@ -404,8 +398,8 @@ export function extractFiguresFromBlocks(
         break;
       }
     }
-    // If still no caption found: this candidate is just a panel with no
-    // caption info — skip it. We'd rather miss a figure than create a
+    // If still no caption found: this candidate is just an image without
+    // any caption info — skip it. We'd rather miss a figure than create a
     // duplicate / half-figure entry. (Captions from citations in Call A
     // can still pick these up if needed.)
   }

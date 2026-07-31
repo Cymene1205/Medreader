@@ -133,10 +133,10 @@ const SECTIONS: Array<{
   title: string;
   color: string;
 }> = [
-  { key: "questionBackground", index: 1, title: "问题与背景", color: "#2563EB" },
-  { key: "argumentSpine", index: 2, title: "论证主线", color: "#0D9488" },
-  { key: "novelty", index: 3, title: "创新性", color: "#9333EA" },
-  { key: "limitsOpportunities", index: 4, title: "局限与机会", color: "#EA580C" },
+  { key: "questionBackground", index: 1, title: "问题与背景", color: "#1E3A8A" }, // 深蓝
+  { key: "argumentSpine", index: 2, title: "论证主线", color: "#1E40AF" },       // 深蓝
+  { key: "novelty", index: 3, title: "创新性", color: "#3B82F6" },              // 蓝
+  { key: "limitsOpportunities", index: 4, title: "局限与机会", color: "#2563EB" }, // 蓝
 ];
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -153,7 +153,12 @@ export default function OutlinePanel({
   onJumpToPage,
   figuresStatus = "idle",
 }: Props) {
-  const [openItems, setOpenItems] = useState<string[]>(["argumentSpine"]); // 论证主线 default open
+  const [openItems, setOpenItems] = useState<string[]>([
+    "questionBackground",
+    "argumentSpine",
+    "novelty",
+    "limitsOpportunities",
+  ]); // all 4 sections default open
   const [retrying, setRetrying] = useState<string | null>(null);
 
   const fs = (px: number) => `${px}px`;
@@ -198,21 +203,21 @@ export default function OutlinePanel({
         onClick={() => onCollapsedChange?.(!collapsed)}
         className={cn(
           "w-full px-3 py-2 flex items-center gap-2 text-left transition-colors flex-shrink-0",
-          "hover:bg-emerald-50/60 dark:hover:bg-emerald-950/30",
-          "border-b border-emerald-100/70 dark:border-emerald-900/40"
+          "hover:bg-blue-50/60 dark:hover:bg-blue-950/30",
+          "border-b border-blue-100/70 dark:border-blue-900/40"
         )}
         title={collapsed ? "展开全文框架" : "折叠全文框架"}
         aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
         aria-expanded={!collapsed}
       >
-        <LayoutGrid className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
-        <span className="text-[12px] font-semibold flex-1 text-emerald-700 dark:text-emerald-300">
+        <LayoutGrid className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+        <span className="text-[12px] font-semibold flex-1 text-blue-700 dark:text-blue-300">
           全文框架
         </span>
         {outline && (
           <Badge
             variant="secondary"
-            className="text-[10px] h-4 px-1.5 bg-emerald-100/70 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+            className="text-[10px] h-4 px-1.5 bg-blue-100/70 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
           >
             4 层
           </Badge>
@@ -255,8 +260,8 @@ export default function OutlinePanel({
                   const isOpen = openItems.includes(sec.key);
                   const isFailed = outline.failedParts?.includes(sec.key);
                   const isRetrying = retrying === sec.key;
-                  // 论证主线 default expanded and can't be collapsed
-                  const isAlwaysOpen = sec.key === "argumentSpine";
+                  // All 4 sections are collapsible (argumentSpine used to be
+                  // always-open, but the user requested it be foldable too).
 
                   // Determine if section has content
                   const hasContent = (() => {
@@ -283,10 +288,10 @@ export default function OutlinePanel({
                       {/* Header */}
                       <button
                         type="button"
-                        onClick={() => !isAlwaysOpen && toggleItem(sec.key)}
+                        onClick={() => toggleItem(sec.key)}
                         className={cn(
                           "w-full text-left px-2.5 py-2 flex items-start gap-2",
-                          !isAlwaysOpen && "hover:bg-muted/40"
+                          "hover:bg-muted/40"
                         )}
                       >
                         <span
@@ -351,18 +356,16 @@ export default function OutlinePanel({
                             </div>
                           )}
                         </div>
-                        {!isAlwaysOpen && (
-                          <ChevronRight
-                            className={cn(
-                              "h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-1 transition-transform",
-                              isOpen && "rotate-90"
-                            )}
-                          />
-                        )}
+                        <ChevronRight
+                          className={cn(
+                            "h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-1 transition-transform",
+                            isOpen && "rotate-90"
+                          )}
+                        />
                       </button>
 
                       {/* Body */}
-                      {(isOpen || isAlwaysOpen) && (
+                      {isOpen && (
                         <div className="px-2.5 pb-2.5 pt-0 space-y-2">
                           {/* ArgumentSpine: special rendering — summary + figure chain */}
                           {sec.key === "argumentSpine" && (

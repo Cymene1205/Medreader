@@ -34,6 +34,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export type MinerUBlock = {
   type: string;
@@ -113,6 +119,14 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
   // Heading navigator side-drawer state
   const [headingsOpen, setHeadingsOpen] = useState(false);
   const [activeHeadingIdx, setActiveHeadingIdx] = useState<number | null>(null);
+
+  // Image preview dialog — clicking any figure opens a large preview
+  // with the full caption rendered below.
+  const [imgPreview, setImgPreview] = useState<{
+    imageUrl: string;
+    caption: string;
+    label?: string;
+  } | null>(null);
 
   const hasBlocks = blocks && blocks.length > 0;
 
@@ -527,6 +541,14 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
                   imageUrl={imageUrl(b.img_path)}
                   onParagraphClick={onParagraphClick}
                   onActivate={() => setActiveIdx(b._idx)}
+                  onImageClick={(url, cap) => {
+                    const labelMatch = cap.match(/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i);
+                    setImgPreview({
+                      imageUrl: url,
+                      caption: cap,
+                      label: labelMatch ? labelMatch[0] : undefined,
+                    });
+                  }}
                   blockRef={(el) => {
                     blockRefs.current[b._idx] = el;
                   }}
@@ -536,6 +558,48 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
           )}
         </div>
       </div>
+
+      {/* Image preview dialog — large image + full caption */}
+      <Dialog
+        open={!!imgPreview}
+        onOpenChange={(o) => !o && setImgPreview(null)}
+      >
+        <DialogContent className="w-[90%] max-w-[1100px] max-h-[90vh] flex flex-col p-0 gap-0">
+          {imgPreview && (
+            <>
+              <DialogHeader className="px-4 py-3 border-b flex-shrink-0">
+                <DialogTitle className="text-base">
+                  {imgPreview.label || "图片预览"}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="flex-1 overflow-y-auto scrollbar-thin">
+                <div className="bg-muted/30 p-4 flex items-center justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={imgPreview.imageUrl}
+                    alt={imgPreview.label || "figure"}
+                    className="max-w-full max-h-[70vh] object-contain rounded shadow-sm"
+                  />
+                </div>
+                {imgPreview.caption && (
+                  <div className="px-4 py-3 text-[12px] leading-relaxed text-foreground/85 prose-inline-sm">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeRaw]}
+                      components={{
+                        p: ({ children }) => <span>{children}</span>,
+                        br: () => <span> </span>,
+                      }}
+                    >
+                      {imgPreview.caption}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });
@@ -553,6 +617,7 @@ function BlockView({
   onParagraphClick,
   onActivate,
   blockRef,
+  onImageClick,
 }: {
   block: MinerUBlock & { _idx: number };
   index: number;
@@ -562,6 +627,7 @@ function BlockView({
   onParagraphClick?: (text: string, idx: number) => void;
   onActivate?: (idx: number) => void;
   blockRef: (el: HTMLDivElement | null) => void;
+  onImageClick?: (imageUrl: string, caption: string) => void;
 }) {
   const type = (block.type || "").toLowerCase();
   const rawText = block.text || "";
@@ -671,8 +737,13 @@ function BlockView({
           <img
             src={imageUrl}
             alt={caption || "figure"}
-            className="max-w-full rounded shadow-sm border border-border/40"
+            className="max-w-full rounded shadow-sm border border-border/40 cursor-zoom-in hover:shadow-md hover:border-primary/40 transition-all"
             loading="lazy"
+            onClick={() => {
+              if (imageUrl && onImageClick) {
+                onImageClick(imageUrl, caption);
+              }
+            }}
           />
         )}
         {caption && (

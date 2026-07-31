@@ -34,10 +34,10 @@ type MindmapViewProps = {
 const ROOT_COLOR = "#475569";
 
 const BRANCH_COLORS: Record<string, string> = {
-  questionBackground: "#2563EB",
-  argumentSpine: "#0D9488",
-  novelty: "#9333EA",
-  limitsOpportunities: "#EA580C",
+  questionBackground: "#1E3A8A",  // 深蓝
+  argumentSpine: "#1E40AF",       // 深蓝
+  novelty: "#3B82F6",             // 蓝
+  limitsOpportunities: "#2563EB", // 蓝
 };
 
 const BRANCH_TITLES: Record<string, string> = {
@@ -47,17 +47,22 @@ const BRANCH_TITLES: Record<string, string> = {
   limitsOpportunities: "局限与机会",
 };
 
-const ROOT_SIZE = { width: 260, height: 110 };
-const SECTION_SIZE = { width: 320, height: 200 };
-const CHILD_SIZE = { width: 260, height: 120 };
-const FIGURE_SIZE = { width: 220, height: 100 };
+const ROOT_SIZE = { width: 280, height: 130 };
+const SECTION_SIZE = { width: 340, height: 220 };
+const CHILD_SIZE = { width: 280, height: 140 };
+const FIGURE_SIZE = { width: 240, height: 110 };
 
+// Dagre layout config — generous spacing to prevent node overlap.
+// `nodesep` = vertical gap between nodes at same rank.
+// `ranksep` = horizontal gap between ranks (root → section → child).
+// We use larger values than before to give text room to breathe.
 const DAGRE_CONFIG = {
   rankdir: "LR" as const,
-  nodesep: 70,
-  ranksep: 180,
-  marginx: 60,
-  marginy: 60,
+  nodesep: 90,        // was 70 → 90 (more vertical gap)
+  ranksep: 220,       // was 180 → 220 (more horizontal gap)
+  marginx: 80,
+  marginy: 80,
+  ranker: "longest-path" as const,  // distributes nodes more evenly
 };
 
 const MINIMAP_DEFAULT_COLOR = "#94A3B8";
@@ -114,9 +119,9 @@ function buildFlow(
   const rootId = "root";
   const rootTitle = outline.title || "论文";
   // Estimate root node height based on title length so long titles get
-  // enough vertical space (rough heuristic: 22 chars per line at width 260).
-  const rootLines = Math.max(2, Math.ceil(rootTitle.length / 22));
-  const rootHeight = Math.max(ROOT_SIZE.height, rootLines * 26 + 24);
+  // enough vertical space (rough heuristic: 24 chars per line at width 280).
+  const rootLines = Math.max(2, Math.ceil(rootTitle.length / 24));
+  const rootHeight = Math.max(ROOT_SIZE.height, rootLines * 28 + 32);
   nodes.push({
     id: rootId,
     type: "input",
@@ -334,12 +339,12 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
     const bg = d.dimColor || ROOT_COLOR;
     return (
       <div
-        className="rounded-lg px-3 py-2.5 text-white shadow-md"
+        className="rounded-lg px-4 py-3 text-white shadow-md"
         style={{
           background: `linear-gradient(135deg, ${bg} 0%, ${bg}DD 100%)`,
           border: `1px solid ${bg}`,
-          width: 260,
-          minHeight: 110,
+          width: ROOT_SIZE.width,
+          minHeight: ROOT_SIZE.height,
           boxShadow: selected
             ? `0 0 0 3px ${bg}55, 0 4px 12px ${bg}33`
             : `0 2px 8px ${bg}22`,
@@ -349,31 +354,31 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
         <div className="text-[9px] uppercase tracking-wider opacity-70 mb-1 font-medium">
           Paper Title
         </div>
-        <div className="text-[13px] font-semibold leading-snug">{d.label}</div>
+        <div className="text-[14px] font-semibold leading-snug">{d.label}</div>
       </div>
     );
   }
 
   // Figure node
   if (d.isFigure) {
-    const color = d.dimColor || "#0D9488";
+    const color = d.dimColor || "#1E40AF";
     return (
       <div
-        className="rounded-lg px-2.5 py-2 shadow-sm"
+        className="rounded-lg px-3 py-2 shadow-sm"
         style={{
           background: "#fff",
           border: `2px solid ${color}`,
-          width: 220,
-          minHeight: 100,
+          width: FIGURE_SIZE.width,
+          minHeight: FIGURE_SIZE.height,
           boxShadow: selected ? `0 0 0 3px ${color}55` : undefined,
         }}
       >
         <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="text-[11.5px] font-bold leading-tight" style={{ color }}>
+        <div className="text-[12px] font-bold leading-tight" style={{ color }}>
           {d.label}
         </div>
         {d.summary && (
-          <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-3 leading-snug">
+          <div className="text-[10.5px] text-muted-foreground mt-1 line-clamp-3 leading-snug">
             {d.summary}
           </div>
         )}
@@ -384,20 +389,20 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
 
   // Section node
   if (d.isSection) {
-    const color = d.dimColor || "#2563EB";
+    const color = d.dimColor || "#1E3A8A";
     return (
       <div
         className="rounded-lg bg-white shadow-sm flex overflow-hidden"
         style={{
           border: `1px solid ${color}`,
           borderLeft: `5px solid ${color}`,
-          width: 320,
-          minHeight: 200,
+          width: SECTION_SIZE.width,
+          minHeight: SECTION_SIZE.height,
           boxShadow: selected ? `0 0 0 3px ${color}44` : undefined,
         }}
       >
         <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="px-3 py-2.5 flex-1 min-w-0">
+        <div className="px-3 py-3 flex-1 min-w-0">
           <div className="flex items-start gap-2">
             <span
               className="flex-shrink-0 w-6 h-6 rounded-md text-[11px] font-bold flex items-center justify-center mt-0.5 text-white shadow-sm"
@@ -411,7 +416,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
                 {d.label}
               </div>
               {d.summary && (
-                <div className="text-[11px] text-muted-foreground mt-1 line-clamp-4 leading-relaxed">
+                <div className="text-[11px] text-muted-foreground mt-1.5 line-clamp-5 leading-relaxed">
                   {d.summary}
                 </div>
               )}
@@ -425,15 +430,15 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
 
   // Spine summary node (argumentSpine narrative text)
   if (d.isSpineSummary) {
-    const bg = d.dimColor || "#0D9488";
+    const bg = d.dimColor || "#1E40AF";
     return (
       <div
-        className="rounded-lg px-2.5 py-2 shadow-sm"
+        className="rounded-lg px-3 py-2.5 shadow-sm"
         style={{
           background: `${bg}10`,
           border: `1px dashed ${bg}`,
-          width: 260,
-          minHeight: 120,
+          width: CHILD_SIZE.width,
+          minHeight: CHILD_SIZE.height,
           boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
         }}
       >
@@ -453,12 +458,12 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
   const bg = d.dimColor || "#F1F5F9";
   return (
     <div
-      className="rounded-lg px-2.5 py-2 shadow-sm"
+      className="rounded-lg px-3 py-2 shadow-sm"
       style={{
         background: d.isSubtitle ? `${bg}25` : `${bg}12`,
         border: d.isSubtitle ? `1.5px solid ${bg}80` : `1px solid ${bg}40`,
-        width: 260,
-        minHeight: 120,
+        width: CHILD_SIZE.width,
+        minHeight: CHILD_SIZE.height,
         boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
       }}
     >
@@ -468,7 +473,7 @@ const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
           小标题
         </div>
       )}
-      <div className="text-[11.5px] font-medium leading-snug text-foreground/90 line-clamp-4">
+      <div className="text-[11.5px] font-medium leading-snug text-foreground/90 line-clamp-5">
         {d.label}
       </div>
       <Handle type="source" position={Position.Right} style={hiddenHandle} />
