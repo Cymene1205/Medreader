@@ -66,9 +66,10 @@ export function SiteFooter() {
             <ul className="space-y-2">
               {[
                 { label: "技术架构", href: "#stack" },
-                { label: "应用场景", href: "#usecases" },
+                { label: "部署方案", href: "#deployment" },
+                { label: "路线图", href: "#roadmap" },
                 { label: "作者", href: "#author" },
-                { label: "立即开始", href: "/register" },
+                { label: "立即开始", href: "/login" },
               ].map((it) => (
                 <li key={it.href}>
                   <a

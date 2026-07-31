@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { label: "六维分析", en: "Dimensions", href: "#dimensions" },
   { label: "工作流", en: "Workflow", href: "#workflow" },
   { label: "技术架构", en: "Stack", href: "#stack" },
+  { label: "部署方案", en: "Deploy", href: "#deployment" },
+  { label: "路线图", en: "Roadmap", href: "#roadmap" },
   { label: "应用场景", en: "Use Cases", href: "#usecases" },
   { label: "作者", en: "Author", href: "#author" },
 ];
@@ -70,7 +72,7 @@ export function SiteHeader() {
 
           <div className="flex items-center gap-2">
             <a
-              href="https://github.com"
+              href="https://github.com/Cymene1205/Medreader"
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 font-sans-ui text-[11px] tracking-[0.08em] uppercase text-[var(--ink-soft)] border border-[var(--rule)] rounded-sm hover:border-[var(--burgundy)] hover:text-[var(--burgundy)] transition-colors"

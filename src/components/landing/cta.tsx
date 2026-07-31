@@ -6,7 +6,8 @@ import { ArrowRight, Github, Server, FileText } from "lucide-react";
 
 export function CTA() {
   const { data: session, status } = useSession();
-  const primaryHref = status === "loading" ? "/register" : session?.user ? "/app" : "/register";
+  // v2.0 解耦式架构：未登录主 CTA 指向 /login（登录是入口）。
+  const primaryHref = status === "loading" ? "/login" : session?.user ? "/app" : "/login";
   const primaryLabel = session?.user ? "进入工作台" : "立即开始阅读";
   return (
     <section
@@ -69,7 +70,7 @@ export function CTA() {
               </Link>
 
               <a
-                href="https://github.com"
+                href="https://github.com/Cymene1205/Medreader"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group flex items-center justify-between gap-4 px-6 py-5 bg-transparent text-[var(--paper)] border border-[var(--paper)]/40 rounded-sm hover:bg-[var(--paper)]/10 transition-colors"
@@ -81,7 +82,7 @@ export function CTA() {
                       GitHub 仓库
                     </div>
                     <div className="font-serif-en italic text-xs opacity-70">
-                      Source code · MIT License
+                      Cymene1205/Medreader · MIT License
                     </div>
                   </div>
                 </div>
@@ -89,7 +90,7 @@ export function CTA() {
               </a>
 
               <a
-                href="#stack"
+                href="#deployment"
                 className="group flex items-center justify-between gap-4 px-6 py-5 bg-transparent text-[var(--paper)] border border-[var(--paper)]/40 rounded-sm hover:bg-[var(--paper)]/10 transition-colors"
               >
                 <div className="flex items-center gap-3">
@@ -99,7 +100,7 @@ export function CTA() {
                       自托管部署
                     </div>
                     <div className="font-serif-en italic text-xs opacity-70">
-                      Docker Compose · 2 vCPU / 2 GiB
+                      Docker Compose · 阿里云 ECS · 2 vCPU / 2 GiB
                     </div>
                   </div>
                 </div>

@@ -161,6 +161,54 @@ export function TechStack() {
             </p>
           </div>
         </div>
+
+        {/* v2.0 工程决策卡片 */}
+        <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="scholarly-card p-6 fade-up" style={{ animationDelay: "120ms" }}>
+            <div className="flex items-baseline justify-between mb-4 pb-3 border-b border-[var(--rule)]">
+              <h3 className="journal-heading text-lg">解耦式架构</h3>
+              <span className="font-serif-en italic text-xs text-[var(--ink-muted)]">Decoupled</span>
+            </div>
+            <p className="font-serif-cn text-sm text-[var(--ink-soft)] leading-[1.85]">
+              Landing 公开门面页与 App 工作区物理分离 —— 前者不需要登录、面向
+              GitHub 引流与社交分享，后者受 Next.js middleware 全量保护。两个
+              区域可以独立部署、独立扩容、独立迭代。
+            </p>
+            <div className="mt-4 pt-3 border-t border-dotted border-[var(--rule)] font-serif-en italic text-xs text-[var(--ink-muted)]">
+              v2.0 · / + /app · independent routing
+            </div>
+          </div>
+
+          <div className="scholarly-card p-6 fade-up" style={{ animationDelay: "240ms" }}>
+            <div className="flex items-baseline justify-between mb-4 pb-3 border-b border-[var(--rule)]">
+              <h3 className="journal-heading text-lg">Docker 多阶段构建</h3>
+              <span className="font-serif-en italic text-xs text-[var(--ink-muted)]">Multi-stage</span>
+            </div>
+            <p className="font-serif-cn text-sm text-[var(--ink-soft)] leading-[1.85]">
+              三阶段（deps → builder → runner）构建，runner 仅含 standalone
+              产物 + Prisma 客户端 + tini PID 1。镜像体积从全量 node_modules
+              的 1.2 GB 压缩到约 180 MB，冷启动 &lt; 5 秒。
+            </p>
+            <div className="mt-4 pt-3 border-t border-dotted border-[var(--rule)] font-serif-en italic text-xs text-[var(--ink-muted)]">
+              node:20-alpine · tini · standalone server.js
+            </div>
+          </div>
+
+          <div className="scholarly-card p-6 fade-up" style={{ animationDelay: "360ms" }}>
+            <div className="flex items-baseline justify-between mb-4 pb-3 border-b border-[var(--rule)]">
+              <h3 className="journal-heading text-lg">Prisma v6 锁版</h3>
+              <span className="font-serif-en italic text-xs text-[var(--ink-muted)]">Pinned</span>
+            </div>
+            <p className="font-serif-cn text-sm text-[var(--ink-soft)] leading-[1.85]">
+              显式锁 <code className="font-mono text-[var(--burgundy)]">@prisma/client@6.11.1</code>。
+              v7 引入 breaking change —— schema 中 <code className="font-mono">url</code> 字段
+              不再支持，会直接破坏现有 SQLite 数据源配置。锁版是务实的工程妥协。
+            </p>
+            <div className="mt-4 pt-3 border-t border-dotted border-[var(--rule)] font-serif-en italic text-xs text-[var(--ink-muted)]">
+              6.11.1 · until v7 schema migration is ready
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

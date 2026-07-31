@@ -2,11 +2,13 @@
 
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowRight, FileText, Sparkles, MessageSquareQuote } from "lucide-react";
+import { ArrowRight, FileText, Sparkles, MessageSquareQuote, Github } from "lucide-react";
 
 export function Hero() {
   const { data: session, status } = useSession();
-  const primaryHref = status === "loading" ? "/register" : session?.user ? "/app" : "/register";
+  // v2.0 解耦式架构：未登录主 CTA 指向 /login（登录是入口），
+  // 而不是 /register（注册是次选，登录页有"注册"链接）。
+  const primaryHref = status === "loading" ? "/login" : session?.user ? "/app" : "/login";
   const primaryLabel = session?.user ? "进入工作台" : "立即开始阅读";
   return (
     <section
@@ -68,16 +70,19 @@ export function Hero() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
               <a
-                href="#features"
+                href="https://github.com/Cymene1205/Medreader"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent text-[var(--ink)] font-sans-ui text-sm tracking-[0.08em] uppercase border border-[var(--ink)] rounded-sm hover:bg-[var(--ink)] hover:text-[var(--paper)] transition-all"
               >
-                浏览功能
+                <Github className="w-4 h-4" />
+                GitHub
               </a>
               <a
-                href="#author"
+                href="#features"
                 className="inline-flex items-center gap-2 px-3 py-3.5 font-serif-en italic text-sm text-[var(--burgundy)] hover:underline underline-offset-4"
               >
-                关于作者 ↗
+                浏览功能 ↘
               </a>
             </div>
 
