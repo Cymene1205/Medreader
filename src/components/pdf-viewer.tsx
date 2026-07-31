@@ -58,190 +58,70 @@ export default function PdfViewer({
     let mounted = true;
     let cancelled = false;
     (async () => {
+      const t0 = performance.now();
+      console.log("[pdf-viewer] init start");
       try {
-        // ── Step 1: load the pdfjs-dist library itself ──────────────────
+        // ── Step 1: load the pdfjs-dist main library ─────────────────
         let lib: any;
         try {
           lib = await import("pdfjs-dist");
+          console.log(`[pdf-viewer] pdfjs-dist loaded v${lib.version} in ${Math.round(performance.now() - t0)}ms`);
         } catch (importErr) {
           console.error("[pdf-viewer] import('pdfjs-dist') failed:", importErr);
           if (!cancelled) {
             setError(
-              `pdfjs-dist 库加载失败：${importErr instanceof Error ? importErr.message : String(importErr)}。请检查网络或刷新页面重试。`
+              `pdfjs-dist 库加载失败：${importErr instanceof Error ? importErr.message : String(importErr)}。请刷新页面重试；如反复失败请检查网络连接。`
             );
           }
           return;
         }
         if (cancelled) return;
 
-        // ── Step 2: locate a worker ──────────────────────────────────────
-        // pdf.worker.js is an ESM module (file ends with `export{...}`).
-        // Spawning it as a classic Worker via `new Worker(url)` throws
-        // SyntaxError. We must spawn with `{ type: "module" }`.
+        // ── Step 2: load the worker source into the MAIN THREAD ──────
+        // Strategy: import `pdf.worker.min.mjs` directly into the main
+        // bundle. As a side-effect it sets `globalThis.pdfjsWorker`,
+        // which pdf.js v6+ detects and uses to run in "fake worker"
+        // mode — all PDF parsing happens on the main thread.
         //
-        // Strategy:
-        //   1. Try to create a module Worker from same-origin URL
-        //      (/pdf.worker.js or /api/pdf-worker). Pass it to pdf.js
-        //      via GlobalWorkerOptions.workerPort — this bypasses
-        //      pdf.js's own worker-spawning logic and works reliably
-        //      across dev/prod/proxy setups.
-        //   2. If that fails, fall back to pdf.js's workerSrc + Blob URL
-        //      (let pdf.js spawn the worker itself).
-        //   3. Last resort: CDN workerSrc (cdnjs). Will fail behind GFW
-        //      but at least initializes.
-        //   4. If everything fails, set workerSrc to "" — pdf.js falls
-        //      back to fake-worker mode (main thread, slow but works).
-        const sameOriginCandidates = ["/pdf.worker.js", "/api/pdf-worker"];
-
-        let workerReady = false;
-
-        // ── Approach A: try `new Worker(url, { type: "module" })` ──────
-        // This is the most reliable way to load an ESM worker. If the URL
-        // returns 404 or a non-JS body, the Worker constructor may still
-        // succeed but fail at message-handshake time — so we also do a
-        // HEAD-like GET first to validate the URL exists and is JS.
-        for (const url of sameOriginCandidates) {
-          if (workerReady) break;
-          try {
-            // Quick HEAD-like check (we just look at the headers).
-            const probe = await fetch(url, { method: "GET", cache: "no-store" });
-            if (!probe.ok) {
-              console.warn(`[pdf-viewer] worker candidate ${url} HTTP ${probe.status}`);
-              // Drain to free the connection.
-              try { await probe.arrayBuffer(); } catch {}
-              continue;
-            }
-            const ct = probe.headers.get("content-type") || "";
-            const len = Number(probe.headers.get("content-length") || "0");
-            // Drain to free the connection.
-            try { await probe.arrayBuffer(); } catch {}
-            if (len < 100_000) {
-              console.warn(`[pdf-viewer] worker candidate ${url} too small (${len}b)`);
-              continue;
-            }
-            if (!(ct.includes("javascript") || ct.includes("ecmascript") || ct === "")) {
-              console.warn(`[pdf-viewer] worker candidate ${url} wrong content-type: ${ct}`);
-              continue;
-            }
-
-            // Try to spawn a module worker.
-            // This may throw:
-            //   - SyntaxError if the script isn't valid ESM
-            //   - SecurityError if cross-origin without CORS
-            //   - NetworkError if the URL is unreachable
-            // We catch and fall through to the next candidate.
-            try {
-              const worker = new Worker(url, { type: "module" });
-              // Verify the worker is alive by sending a ping. pdf.js's
-              // worker will respond to "ready" but we can't easily test
-              // that without pdf.js. Instead we just trust the
-              // constructor succeeded.
-              lib.GlobalWorkerOptions.workerPort = worker;
-              workerReady = true;
-              console.log(`[pdf-viewer] worker ready via module Worker from ${url} (${len}b)`);
-              break;
-            } catch (spawnErr) {
-              console.warn(`[pdf-viewer] new Worker(${url}, {type:module}) failed:`, spawnErr);
-            }
-          } catch (probeErr) {
-            console.warn(`[pdf-viewer] probe ${url} failed:`, probeErr);
-          }
-        }
-
-        // ── Approach B: pdf.js workerSrc + Blob URL with polyfill ────
-        // Fetch the worker text, PREPEND the polyfill code (so the
-        // Worker thread also gets Math.sumPrecise / Map.getOrInsertComputed
-        // etc. — these don't transfer from the main thread), wrap in a
-        // Blob, hand the Blob URL to pdf.js.
+        // Why we NO LONGER try real Worker / Blob URL:
+        //   The previous version tried `new Worker(url, {type:"module"})`
+        //   and Blob URL strategies. In practice on shared/preview
+        //   deployments behind Caddy, these would silently fail to
+        //   handshake with pdf.js — the Worker spawns but never sends
+        //   "ready", causing getDocument() to hang forever with NO
+        //   error message. Users see a perpetual spinner or a vague
+        //   "PDF 渲染失败" with no useful diagnostic.
         //
-        // Why prepend: pdfjs v6 calls Math.sumPrecise inside the Worker
-        // thread, but the Worker has its own global scope. Main-thread
-        // polyfills don't apply. We must inject the polyfill into the
-        // worker source itself.
-        if (!workerReady) {
-          for (const url of sameOriginCandidates) {
-            if (workerReady) break;
-            try {
-              const res = await fetch(url, { cache: "no-store" });
-              if (!res.ok) continue;
-              const text = await res.text();
-              if (text.length < 100_000) continue;
-
-              // Fetch the polyfill source (synchronously loaded by
-              // <script src="/polyfills.js"> in <head>). We re-fetch it
-              // here as text so we can prepend it to the worker source.
-              let polyfillSource = "";
-              try {
-                const pfRes = await fetch("/polyfills.js", { cache: "no-store" });
-                if (pfRes.ok) {
-                  polyfillSource = await pfRes.text();
-                }
-              } catch (pfErr) {
-                console.warn("[pdf-viewer] polyfill fetch for worker failed:", pfErr);
-              }
-
-              const combined =
-                polyfillSource +
-                "\n;\n// ─── worker code below ───\n" +
-                text;
-              const blob = new Blob([combined], { type: "application/javascript" });
-              lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-              workerReady = true;
-              console.log(
-                `[pdf-viewer] worker ready via Blob URL from ${url} (${text.length}b worker + ${polyfillSource.length}b polyfill)`
-              );
-              break;
-            } catch (blobErr) {
-              console.warn(`[pdf-viewer] Blob URL from ${url} failed:`, blobErr);
-            }
-          }
-        }
-
-        // ── Approach C: CDN workerSrc ──────────────────────────────────
-        if (!workerReady) {
+        //   The fake worker approach is slightly slower (parsing runs on
+        //   main thread, blocking UI for ~1-3s on a typical 20-page PDF)
+        //   but is 100% reliable: no worker spawn, no network fetch, no
+        //   CORS, no polyfill prepend, no handshake. If it fails, the
+        //   error is thrown synchronously and surfaces immediately.
+        console.log("[pdf-viewer] using fake worker (main thread) mode");
+        try {
+          await import("pdfjs-dist/build/pdf.worker.min.mjs");
+          // Explicitly disable workerSrc so pdf.js recognizes the fake
+          // worker mode and doesn't try to spawn its own Worker.
           try {
-            const cdnUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
-            lib.GlobalWorkerOptions.workerSrc = cdnUrl;
-            workerReady = true;
-            console.warn(`[pdf-viewer] falling back to CDN worker: ${cdnUrl}`);
-          } catch (cdnErr) {
-            console.warn("[pdf-viewer] CDN worker setup failed:", cdnErr);
+            lib.GlobalWorkerOptions.workerSrc = "";
+          } catch {
+            /* ignore */
           }
-        }
-
-        // ── Approach D: import worker code into main thread ───────────
-        // This is the ultimate fallback. We dynamically import the
-        // worker module directly into the main bundle. The worker code
-        // sets `globalThis.pdfjsWorker = { WorkerMessageHandler }` as a
-        // side-effect, and pdf.js detects this and runs in "fake worker"
-        // mode — all parsing happens on the main thread (slower but
-        // guaranteed to work, no spawn / no network / no CORS).
-        //
-        // We do NOT set workerSrc at all in this mode; pdf.js v6+
-        // detects `globalThis.pdfjsWorker` is set and skips worker
-        // spawning entirely.
-        if (!workerReady) {
-          try {
-            await import("pdfjs-dist/build/pdf.worker.min.mjs");
-            workerReady = true;
-            console.warn(
-              "[pdf-viewer] all worker sources failed — loaded pdf.worker.min.mjs into main thread (fake worker mode, slower but works)"
+          console.log("[pdf-viewer] fake worker module loaded");
+        } catch (importErr) {
+          console.error("[pdf-viewer] fake worker import failed:", importErr);
+          if (!cancelled) {
+            setError(
+              `PDF worker 模块加载失败：${importErr instanceof Error ? importErr.message : String(importErr)}。请刷新页面重试；如反复失败请检查网络连接。`
             );
-          } catch (importErr) {
-            console.error("[pdf-viewer] main-thread worker import failed:", importErr);
-            // Truly last resort: just clear workerSrc and hope pdf.js
-            // can figure it out.
-            try {
-              lib.GlobalWorkerOptions.workerSrc = "";
-            } catch {
-              // ignore
-            }
           }
+          return;
         }
 
         if (mounted && !cancelled) {
           pdfjsLibRef.current = lib;
           setLibReady(true);
+          console.log(`[pdf-viewer] init done in ${Math.round(performance.now() - t0)}ms`);
         }
       } catch (e) {
         console.error("[pdf-viewer] init crashed unexpectedly:", e);
@@ -267,6 +147,7 @@ export default function PdfViewer({
     setPages([]);
 
     (async () => {
+      const t0 = performance.now();
       try {
         const lib = pdfjsLibRef.current;
         // CRITICAL: pdfjs's getDocument() TRANSFERS ownership of the
@@ -279,10 +160,12 @@ export default function PdfViewer({
         // is one buffer copy per load (~1-3ms for a typical PDF), which
         // is negligible compared to the actual parse cost.
         const buf = fileData.slice(0);
+        console.log(`[pdf-viewer] getDocument start (${buf.byteLength} bytes)`);
         const loadingTask = lib.getDocument({
           data: new Uint8Array(buf),
         });
         const doc = await loadingTask.promise;
+        console.log(`[pdf-viewer] document loaded: ${doc.numPages} pages in ${Math.round(performance.now() - t0)}ms`);
         if (cancelled) return;
         setPdfDoc(doc);
         setNumPages(doc.numPages);
@@ -290,6 +173,7 @@ export default function PdfViewer({
         // Pre-extract text content per page (for outline keyword search)
         const infos: PageInfo[] = [];
         for (let i = 1; i <= doc.numPages; i++) {
+          if (cancelled) return;
           const page = await doc.getPage(i);
           const viewport = page.getViewport({ scale: 1 });
           const tc = await page.getTextContent();
@@ -310,7 +194,9 @@ export default function PdfViewer({
         }
         if (cancelled) return;
         setPages(infos);
+        console.log(`[pdf-viewer] text extraction done in ${Math.round(performance.now() - t0)}ms`);
       } catch (e) {
+        console.error("[pdf-viewer] load PDF failed:", e);
         setError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setLoading(false);
@@ -504,14 +390,15 @@ export default function PdfViewer({
             <div className="text-sm text-red-500 font-medium mb-2">
               PDF 渲染失败
             </div>
-            <div className="text-xs text-muted-foreground mb-3 leading-relaxed">
+            <div className="text-xs text-muted-foreground mb-3 leading-relaxed break-words">
               {error}
             </div>
             <div className="text-[11px] text-muted-foreground/80 leading-relaxed bg-muted/40 rounded px-3 py-2 border border-border/40">
-              <strong className="text-foreground">可能的解决方法：</strong>
-              <br />· 刷新页面后重新上传 PDF（worker 文件可能加载失败）
-              <br />· 检查网络是否能访问同源 <code className="text-[10px] bg-muted px-1 rounded">/api/pdf-worker</code> 路径
-              <br />· 如错误信息含 <code className="text-[10px] bg-muted px-1 rounded">toHex</code>，说明 PDF worker 版本与 pdfjs-dist 不匹配，需重新构建（<code className="text-[10px] bg-muted px-1 rounded">npm run build</code>）
+              <strong className="text-foreground">排查步骤：</strong>
+              <br />· 按 <kbd className="text-[10px] bg-muted px-1 rounded">F12</kbd> 打开浏览器开发者工具，切到 <strong>Console</strong> 标签页查看 <code className="text-[10px] bg-muted px-1 rounded">[pdf-viewer]</code> 开头的日志，能看到具体卡在哪一步
+              <br />· 刷新页面后重新上传 PDF（可能是首次加载 worker 文件超时）
+              <br />· 如错误信息含 <code className="text-[10px] bg-muted px-1 rounded">No "GlobalWorkerOptions.workerSrc"</code>，说明 worker 加载全部失败，请截图反馈
+              <br />· 如错误信息含 <code className="text-[10px] bg-muted px-1 rounded">toHex</code> 或 <code className="text-[10px] bg-muted px-1 rounded">sumPrecise</code>，说明 polyfill 缺失，需要刷新或清除浏览器缓存
             </div>
           </div>
         )}

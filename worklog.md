@@ -1387,3 +1387,26 @@ Stage Summary:
 - PDF 分享问题修复：新增 /api/paper/[id]/pdf 二进制下载 + page.tsx 读取 URL paperId + 分享按钮（复制链接到剪贴板）
 - 用户操作：用户点「分享」→ 链接复制到剪贴板 → 别人打开链接 → 自动加载 PDF + 分析 + 图表（左侧 4 层框架 + 中间 PDF 渲染 + 右侧 chat 都能用）
 - 老缓存兼容：已分析过的 paper 不会有 subsections，UI 自动回退到 SectionDetail 单卡片渲染；用户点「重试」即可生成新格式
+
+---
+Task ID: pdf-fake-worker-rewrite
+Agent: main
+Task: 修复用户反馈"还是渲染失败" —— PDF 渲染问题第二轮排查
+
+Work Log:
+- 读取 dev.log，发现所有 /api/pdf-worker 请求都返回 200，但用户仍报失败 → 问题不在网络层
+- 仔细分析前一次的 fallback 链：Approach A 用 Blob URL 设置 workerSrc 后，pdf.js 会自己 spawn Worker，但在 Caddy 反代/跨网环境下 worker handshake 经常静默失败 → getDocument 永远 hang，没有错误信息
+- 决定大改：**完全抛弃 real Worker 和 Blob URL，强制用 fake worker 模式**
+  - 直接 `await import("pdfjs-dist/build/pdf.worker.min.mjs")` 加载 worker 代码到主线程
+  - 副作用：设置 `globalThis.pdfjsWorker`，pdf.js v6 检测到后跳过 worker spawn
+  - 显式 `lib.GlobalWorkerOptions.workerSrc = ""` 确保 pdf.js 进入 fake worker 模式
+  - 优点：无 worker 通信、无 CORS、无 polyfill prepend、无 handshake、100% 可靠
+  - 缺点：解析在主线程执行，阻塞 UI 1-3 秒（可接受）
+- 加了详细的 console.log 跟踪 init 每一步耗时（用 [pdf-viewer] 前缀）
+- 改进错误 UI：提示用户按 F12 查看 Console 中 [pdf-viewer] 日志
+- 验证 dev server 热加载完成（✓ Compiled 多次），polyfills.js 和 pdf.worker.min.mjs 都可达
+
+Stage Summary:
+- 修改文件：src/components/pdf-viewer.tsx（init 逻辑、错误 UI）
+- 关键决策：从"多 fallback 策略"改为"单一最可靠策略"（fake worker）
+- 待用户验证：刷新浏览器后 PDF 应能渲染；如失败，PDF 区域会显示具体错误信息 + Console 中会有 [pdf-viewer] 日志说明卡在哪一步

@@ -1,0 +1,200 @@
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 701ms (compile: 302ms, render: 400ms)
+prisma:query SELECT 1
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 169ms (compile: 94ms, render: 75ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/session 200 in 272ms (compile: 151ms, render: 121ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`filePath` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21/pdf 200 in 502ms (compile: 190ms, render: 312ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 39ms (compile: 12ms, render: 28ms)
+ GET /api/pdf-worker 200 in 163ms (compile: 32ms, render: 131ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 36ms (compile: 3ms, render: 33ms)
+ GET /app 200 in 1158ms (compile: 552ms, render: 606ms)
+ GET /app 200 in 1165ms (compile: 833ms, render: 333ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 263ms (compile: 247ms, render: 15ms)
+ GET /app 200 in 821ms (compile: 270ms, render: 551ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 535ms (compile: 259ms, render: 276ms)
+ GET /app 200 in 535ms (compile: 516ms, render: 19ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 807ms (compile: 259ms, render: 548ms)
+ GET /app 200 in 533ms (compile: 253ms, render: 281ms)
+ GET /app 200 in 533ms (compile: 516ms, render: 17ms)
+ GET /app 200 in 537ms (compile: 253ms, render: 284ms)
+ GET /app 200 in 537ms (compile: 518ms, render: 19ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 264ms (compile: 250ms, render: 15ms)
+✓ Compiled in 176ms
+ GET /app 200 in 843ms (compile: 317ms, render: 526ms)
+ GET /app 200 in 838ms (compile: 813ms, render: 25ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 800ms (compile: 263ms, render: 537ms)
+ GET /app 200 in 523ms (compile: 250ms, render: 273ms)
+ GET /app 200 in 523ms (compile: 508ms, render: 16ms)
+ GET /app 200 in 777ms (compile: 249ms, render: 528ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 515ms (compile: 254ms, render: 261ms)
+ GET /app 200 in 516ms (compile: 501ms, render: 15ms)
+ GET /app 200 in 779ms (compile: 257ms, render: 522ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 509ms (compile: 490ms, render: 18ms)
+ GET /app 200 in 510ms (compile: 241ms, render: 269ms)
+ GET /api/auth/session 200 in 72ms (compile: 54ms, render: 18ms)
+ GET /api/auth/session 200 in 14ms (compile: 4ms, render: 10ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 344ms (compile: 249ms, render: 95ms)
+ GET /api/pdf-worker 200 in 16ms (compile: 2ms, render: 14ms)
+ GET /api/pdf-worker 200 in 14ms (compile: 1935µs, render: 12ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 62ms (compile: 50ms, render: 12ms)
+ GET /api/auth/session 200 in 11ms (compile: 2ms, render: 9ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`filePath` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/pdf-worker 200 in 42ms (compile: 5ms, render: 37ms)
+ GET /api/paper/cms8wal9p003zq866exsz2g21/pdf 200 in 286ms (compile: 54ms, render: 233ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 7ms (compile: 2ms, render: 5ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 6ms (compile: 1745µs, render: 5ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 511ms (compile: 270ms, render: 242ms)
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 109ms (compile: 89ms, render: 19ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/session 200 in 164ms (compile: 147ms, render: 17ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`filePath` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21/pdf 200 in 628ms (compile: 193ms, render: 435ms)
+ GET /api/pdf-worker 200 in 67ms (compile: 3ms, render: 64ms)
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 22ms (compile: 4ms, render: 18ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 8ms (compile: 3ms, render: 6ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 364ms (compile: 297ms, render: 67ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 333ms (compile: 296ms, render: 38ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 305ms (compile: 264ms, render: 41ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 444ms (compile: 292ms, render: 152ms)
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 207ms (compile: 72ms, render: 135ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/session 200 in 219ms (compile: 58ms, render: 161ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`filePath` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21/pdf 200 in 619ms (compile: 175ms, render: 444ms)
+ GET /api/pdf-worker 200 in 155ms (compile: 3ms, render: 152ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 11ms (compile: 5ms, render: 6ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 12ms (compile: 6ms, render: 6ms)
+✓ Compiled in 190ms
+ GET /api/pdf-worker 200 in 18ms (compile: 2ms, render: 15ms)
+ GET /api/pdf-worker 200 in 17ms (compile: 1642µs, render: 15ms)
+ GET /api/pdf-worker 200 in 18ms (compile: 2ms, render: 16ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 623ms (compile: 350ms, render: 273ms)
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 165ms (compile: 90ms, render: 75ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/session 200 in 179ms (compile: 135ms, render: 44ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`filePath` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21/pdf 200 in 437ms (compile: 130ms, render: 307ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 24ms (compile: 4ms, render: 20ms)
+ GET /api/pdf-worker 200 in 61ms (compile: 4ms, render: 57ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 42ms (compile: 10ms, render: 32ms)
+ GET / 307 in 190ms (compile: 60ms, render: 131ms)
+ GET / 307 in 912ms (compile: 2ms, render: 910ms)
+ GET /app 200 in 882ms (compile: 279ms, render: 602ms)
+ GET /app 200 in 544ms (compile: 485ms, render: 59ms)
+ GET / 307 in 36ms (compile: 3ms, render: 33ms)
+ GET /app 200 in 316ms (compile: 267ms, render: 49ms)
+ GET /api/auth/session 200 in 132ms (compile: 97ms, render: 35ms)
+ GET /api/pdf-worker 200 in 18ms (compile: 2ms, render: 16ms)
+ GET /api/auth/session 200 in 74ms (compile: 54ms, render: 19ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 351ms (compile: 274ms, render: 78ms)
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 80ms (compile: 54ms, render: 27ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/session 200 in 161ms (compile: 77ms, render: 84ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 27ms (compile: 14ms, render: 13ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 10ms (compile: 1873µs, render: 8ms)
+ GET /api/pdf-worker 200 in 17ms (compile: 1922µs, render: 15ms)
+ POST /api/upload 200 in 128ms (compile: 5ms, render: 123ms)
+prisma:query INSERT INTO `main`.`Paper` (`id`, `userId`, `title`, `filePath`, `parseStatus`, `createdAt`) VALUES (?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `title` AS `title`, `filePath` AS `filePath`, `parseStatus` AS `parseStatus`, `parsedText` AS `parsedText`, `markdown` AS `markdown`, `blocksJson` AS `blocksJson`, `imagesDir` AS `imagesDir`, `mineruTaskId` AS `mineruTaskId`, `pageCount` AS `pageCount`, `createdAt` AS `createdAt`, `citationsJson` AS `citationsJson`, `analysisJson` AS `analysisJson`
+prisma:query INSERT INTO `main`.`UsageEvent` (`id`, `userId`, `action`, `meta`, `createdAt`) VALUES (?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `meta` AS `meta`, `createdAt` AS `createdAt`
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 62ms (compile: 55ms, render: 7ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 63ms (compile: 54ms, render: 10ms)
+ineru] state=done progress={}
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 205ms (compile: 187ms, render: 18ms)
+prisma:query SELECT 1
+prisma:query UPDATE `main`.`Paper` SET `parseStatus` = ?, `title` = ?, `markdown` = ?, `blocksJson` = ?, `imagesDir` = ?, `pageCount` = ?, `parsedText` = ? WHERE (`main`.`Paper`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `userId` AS `userId`, `title` AS `title`, `filePath` AS `filePath`, `parseStatus` AS `parseStatus`, `parsedText` AS `parsedText`, `markdown` AS `markdown`, `blocksJson` AS `blocksJson`, `imagesDir` AS `imagesDir`, `mineruTaskId` AS `mineruTaskId`, `pageCount` AS `pageCount`, `createdAt` AS `createdAt`, `citationsJson` AS `citationsJson`, `analysisJson` AS `analysisJson`
+[upload] extracted paper title for cms8wtksp005qq866g8oq9dfd: "Dynamics of Cardiac Neutrophil Diversity in Murine Myocardial Infarction"
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`markdown`, `main`.`Paper`.`parsedText` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query UPDATE `main`.`Paper` SET `citationsJson` = ? WHERE (`main`.`Paper`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `userId` AS `userId`, `title` AS `title`, `filePath` AS `filePath`, `parseStatus` AS `parseStatus`, `parsedText` AS `parsedText`, `markdown` AS `markdown`, `blocksJson` AS `blocksJson`, `imagesDir` AS `imagesDir`, `mineruTaskId` AS `mineruTaskId`, `pageCount` AS `pageCount`, `createdAt` AS `createdAt`, `citationsJson` AS `citationsJson`, `analysisJson` AS `analysisJson`
+prisma:query SELECT 1
+prisma:query DELETE FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ?
+prisma:query BEGIN IMMEDIATE
+prisma:query INSERT INTO `main`.`Figure` (`id`, `paperId`, `label`, `caption`, `imagePath`, `pageIndex`, `order`, `panelCount`, `isLinchpin`, `detailStatus`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?,?,?,?)
+prisma:query COMMIT
+[upload] post-MinerU: extracted 7 main figures + aligned citations for cms8wtksp005qq866g8oq9dfd
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 69ms (compile: 57ms, render: 12ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`markdown`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`analysisJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/pdf-worker 200 in 22ms (compile: 1851µs, render: 20ms)
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Paper` SET `analysisJson` = ? WHERE (`main`.`Paper`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `userId` AS `userId`, `title` AS `title`, `filePath` AS `filePath`, `parseStatus` AS `parseStatus`, `parsedText` AS `parsedText`, `markdown` AS `markdown`, `blocksJson` AS `blocksJson`, `imagesDir` AS `imagesDir`, `mineruTaskId` AS `mineruTaskId`, `pageCount` AS `pageCount`, `createdAt` AS `createdAt`, `citationsJson` AS `citationsJson`, `analysisJson` AS `analysisJson`
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` IN (?) ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query INSERT INTO `main`.`UsageEvent` (`id`, `userId`, `action`, `meta`, `createdAt`) VALUES (?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `meta` AS `meta`, `createdAt` AS `createdAt`
+ POST /api/analyze 200 in 11.3s (compile: 2ms, render: 11.3s)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` IN (?) ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wtksp005qq866g8oq9dfd 200 in 8ms (compile: 3ms, render: 6ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wtksp005qq866g8oq9dfd 200 in 8ms (compile: 1690µs, render: 6ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 67ms (compile: 56ms, render: 11ms)
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query BEGIN IMMEDIATE
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `question` = ?, `method` = ?, `role` = ?, `isLinchpin` = ?, `chainIndex` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query COMMIT
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` IN (?) ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Paper` SET `analysisJson` = ? WHERE (`main`.`Paper`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `userId` AS `userId`, `title` AS `title`, `filePath` AS `filePath`, `parseStatus` AS `parseStatus`, `parsedText` AS `parsedText`, `markdown` AS `markdown`, `blocksJson` AS `blocksJson`, `imagesDir` AS `imagesDir`, `mineruTaskId` AS `mineruTaskId`, `pageCount` AS `pageCount`, `createdAt` AS `createdAt`, `citationsJson` AS `citationsJson`, `analysisJson` AS `analysisJson`
+prisma:query INSERT INTO `main`.`UsageEvent` (`id`, `userId`, `action`, `meta`, `createdAt`) VALUES (?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `meta` AS `meta`, `createdAt` AS `createdAt`
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ POST /api/figures 200 in 5.0s (compile: 2ms, render: 5.0s)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE (`main`.`Figure`.`paperId` = ? AND `main`.`Figure`.`label` = ?) LIMIT ? OFFSET ?
+prisma:query UPDATE `main`.`Figure` SET `detailStatus` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`markdown`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wtksp005qq866g8oq9dfd 200 in 68ms (compile: 56ms, render: 12ms)
+ GET /api/analyze?paperId=cms8wtksp005qq866g8oq9dfd 200 in 11ms (compile: 3ms, render: 8ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wtksp005qq866g8oq9dfd 200 in 12ms (compile: 5ms, render: 7ms)
+prisma:query INSERT INTO `main`.`TokenUsage` (`id`, `userId`, `action`, `provider`, `model`, `promptTokens`, `completionTokens`, `totalTokens`, `costCny`, `paperId`, `createdAt`) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `provider` AS `provider`, `model` AS `model`, `promptTokens` AS `promptTokens`, `completionTokens` AS `completionTokens`, `totalTokens` AS `totalTokens`, `costCny` AS `costCny`, `paperId` AS `paperId`, `createdAt` AS `createdAt`
+prisma:query UPDATE `main`.`Figure` SET `detailJson` = ?, `detailStatus` = ?, `question` = ? WHERE (`main`.`Figure`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `paperId` AS `paperId`, `label` AS `label`, `caption` AS `caption`, `imagePath` AS `imagePath`, `pageIndex` AS `pageIndex`, `order` AS `order`, `panelCount` AS `panelCount`, `question` AS `question`, `method` AS `method`, `role` AS `role`, `isLinchpin` AS `isLinchpin`, `chainIndex` AS `chainIndex`, `detailJson` AS `detailJson`, `detailStatus` AS `detailStatus`, `createdAt` AS `createdAt`
+prisma:query INSERT INTO `main`.`UsageEvent` (`id`, `userId`, `action`, `meta`, `createdAt`) VALUES (?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `action` AS `action`, `meta` AS `meta`, `createdAt` AS `createdAt`
+ POST /api/figure-detail 200 in 5.4s (compile: 5ms, render: 5.4s)
+ GET /api/auth/session 200 in 65ms (compile: 56ms, render: 9ms)
+ GET /app?paperId=cms8wal9p003zq866exsz2g21 200 in 329ms (compile: 280ms, render: 49ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`title`, `main`.`Paper`.`parseStatus`, `main`.`Paper`.`parsedText`, `main`.`Paper`.`markdown`, `main`.`Paper`.`blocksJson`, `main`.`Paper`.`imagesDir`, `main`.`Paper`.`pageCount`, `main`.`Paper`.`createdAt`, `main`.`Paper`.`citationsJson` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/paper/cms8wal9p003zq866exsz2g21 200 in 131ms (compile: 55ms, render: 76ms)
+ GET /api/auth/session 200 in 202ms (compile: 55ms, render: 147ms)
+prisma:query SELECT `main`.`Paper`.`id`, `main`.`Paper`.`analysisJson`, `main`.`Paper`.`title` FROM `main`.`Paper` WHERE (`main`.`Paper`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/analyze?paperId=cms8wal9p003zq866exsz2g21 200 in 13ms (compile: 2ms, render: 11ms)
+prisma:query SELECT `main`.`Figure`.`id`, `main`.`Figure`.`paperId`, `main`.`Figure`.`label`, `main`.`Figure`.`caption`, `main`.`Figure`.`imagePath`, `main`.`Figure`.`pageIndex`, `main`.`Figure`.`order`, `main`.`Figure`.`panelCount`, `main`.`Figure`.`question`, `main`.`Figure`.`method`, `main`.`Figure`.`role`, `main`.`Figure`.`isLinchpin`, `main`.`Figure`.`chainIndex`, `main`.`Figure`.`detailJson`, `main`.`Figure`.`detailStatus`, `main`.`Figure`.`createdAt` FROM `main`.`Figure` WHERE `main`.`Figure`.`paperId` = ? ORDER BY `main`.`Figure`.`order` ASC LIMIT ? OFFSET ?
+ GET /api/figures?paperId=cms8wal9p003zq866exsz2g21 200 in 9ms (compile: 1973µs, render: 7ms)
+ GET /api/pdf-worker 200 in 19ms (compile: 4ms, render: 15ms)
+ GET /api/auth/session 200 in 65ms (compile: 56ms, render: 9ms)

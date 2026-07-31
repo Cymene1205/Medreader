@@ -1,0 +1,753 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useEffect, useRef, useState, useCallback } from "react";
+     4→     4→import {
+     5→     5→  FileText,
+     6→     6→  Loader2,
+     7→     7→  ZoomIn,
+     8→     8→  ZoomOut,
+     9→     9→  ChevronLeft,
+    10→    10→  ChevronRight,
+    11→    11→  MousePointer2,
+    12→    12→  Square,
+    13→    13→} from "lucide-react";
+    14→    14→import { Button } from "@/components/ui/button";
+    15→    15→import { cn } from "@/lib/utils";
+    16→    16→
+    17→    17→type Props = {
+    18→    18→  fileData: ArrayBuffer | null;
+    19→    19→  fileName?: string;
+    20→    20→  onTextSelect?: (text: string) => void;
+    21→    21→  onImageSelect?: (imageBase64: string) => void;
+    22→    22→  /** keyword to highlight & scroll to (from outline click) */
+    23→    23→  highlightToken?: { quote: string; keywords: string[]; nonce: number } | null;
+    24→    24→  /** Direct page jump — when this changes (via nonce), scroll the PDF to
+    25→    25→   *  the given page (1-indexed). Used by "跳到原图 p.N" buttons. */
+    26→    26→  jumpToPage?: { pageIndex: number; nonce: number } | null;
+    27→    27→};
+    28→    28→
+    29→    29→type PageInfo = {
+    30→    30→  pageNum: number;
+    31→    31→  width: number;
+    32→    32→  height: number;
+    33→    33→  textItems: { str: string; transform: number[]; width: number; height: number }[];
+    34→    34→};
+    35→    35→
+    36→    36→export default function PdfViewer({
+    37→    37→  fileData,
+    38→    38→  fileName,
+    39→    39→  onTextSelect,
+    40→    40→  onImageSelect,
+    41→    41→  highlightToken,
+    42→    42→  jumpToPage,
+    43→    43→}: Props) {
+    44→    44→  const containerRef = useRef<HTMLDivElement>(null);
+    45→    45→  const pagesRef = useRef<HTMLDivElement[]>([]);
+    46→    46→  const [pdfDoc, setPdfDoc] = useState<any>(null);
+    47→    47→  const [numPages, setNumPages] = useState(0);
+    48→    48→  const [loading, setLoading] = useState(false);
+    49→    49→  const [scale, setScale] = useState(1.2);
+    50→    50→  const [mode, setMode] = useState<"text" | "image">("text");
+    51→    51→  const [pages, setPages] = useState<PageInfo[]>([]);
+    52→    52→  const [error, setError] = useState<string | null>(null);
+    53→    53→  const [libReady, setLibReady] = useState(false);
+    54→    54→  const pdfjsLibRef = useRef<any>(null);
+    55→    55→
+    56→    56→  // Load pdfjs-dist dynamically (client-only)
+    57→    57→  useEffect(() => {
+    58→    58→    let mounted = true;
+    59→    59→    let cancelled = false;
+    60→    60→    (async () => {
+    61→    61→      try {
+    62→    62→        // ── Step 1: load the pdfjs-dist library itself ──────────────────
+    63→    63→        let lib: any;
+    64→    64→        try {
+    65→    65→          lib = await import("pdfjs-dist");
+    66→    66→        } catch (importErr) {
+    67→    67→          console.error("[pdf-viewer] import('pdfjs-dist') failed:", importErr);
+    68→    68→          if (!cancelled) {
+    69→    69→            setError(
+    70→    70→              `pdfjs-dist 库加载失败：${importErr instanceof Error ? importErr.message : String(importErr)}。请检查网络或刷新页面重试。`
+    71→    71→            );
+    72→    72→          }
+    73→    73→          return;
+    74→    74→        }
+    75→    75→        if (cancelled) return;
+    76→    76→
+    77→    77→        // ── Step 2: locate a worker ──────────────────────────────────────
+    78→    78→        // pdf.worker.js is an ESM module (file ends with `export{...}`).
+    79→    79→        // Spawning it as a classic Worker via `new Worker(url)` throws
+    80→    80→        // SyntaxError. We must spawn with `{ type: "module" }`.
+    81→    81→        //
+    82→    82→        // Strategy:
+    83→    83→        //   1. Try to create a module Worker from same-origin URL
+    84→    84→        //      (/pdf.worker.js or /api/pdf-worker). Pass it to pdf.js
+    85→    85→        //      via GlobalWorkerOptions.workerPort — this bypasses
+    86→    86→        //      pdf.js's own worker-spawning logic and works reliably
+    87→    87→        //      across dev/prod/proxy setups.
+    88→    88→        //   2. If that fails, fall back to pdf.js's workerSrc + Blob URL
+    89→    89→        //      (let pdf.js spawn the worker itself).
+    90→    90→        //   3. Last resort: CDN workerSrc (cdnjs). Will fail behind GFW
+    91→    91→        //      but at least initializes.
+    92→    92→        //   4. If everything fails, set workerSrc to "" — pdf.js falls
+    93→    93→        //      back to fake-worker mode (main thread, slow but works).
+    94→    94→        const sameOriginCandidates = ["/pdf.worker.js", "/api/pdf-worker"];
+    95→    95→
+    96→    96→        let workerReady = false;
+    97→    97→
+    98→    98→        // ── Approach A: try `new Worker(url, { type: "module" })` ──────
+    99→    99→        // This is the most reliable way to load an ESM worker. If the URL
+   100→   100→        // returns 404 or a non-JS body, the Worker constructor may still
+   101→   101→        // succeed but fail at message-handshake time — so we also do a
+   102→   102→        // HEAD-like GET first to validate the URL exists and is JS.
+   103→   103→        for (const url of sameOriginCandidates) {
+   104→   104→          if (workerReady) break;
+   105→   105→          try {
+   106→   106→            // Quick HEAD-like check (we just look at the headers).
+   107→   107→            const probe = await fetch(url, { method: "GET", cache: "no-store" });
+   108→   108→            if (!probe.ok) {
+   109→   109→              console.warn(`[pdf-viewer] worker candidate ${url} HTTP ${probe.status}`);
+   110→   110→              // Drain to free the connection.
+   111→   111→              try { await probe.arrayBuffer(); } catch {}
+   112→   112→              continue;
+   113→   113→            }
+   114→   114→            const ct = probe.headers.get("content-type") || "";
+   115→   115→            const len = Number(probe.headers.get("content-length") || "0");
+   116→   116→            // Drain to free the connection.
+   117→   117→            try { await probe.arrayBuffer(); } catch {}
+   118→   118→            if (len < 100_000) {
+   119→   119→              console.warn(`[pdf-viewer] worker candidate ${url} too small (${len}b)`);
+   120→   120→              continue;
+   121→   121→            }
+   122→   122→            if (!(ct.includes("javascript") || ct.includes("ecmascript") || ct === "")) {
+   123→   123→              console.warn(`[pdf-viewer] worker candidate ${url} wrong content-type: ${ct}`);
+   124→   124→              continue;
+   125→   125→            }
+   126→   126→
+   127→   127→            // Try to spawn a module worker.
+   128→   128→            // This may throw:
+   129→   129→            //   - SyntaxError if the script isn't valid ESM
+   130→   130→            //   - SecurityError if cross-origin without CORS
+   131→   131→            //   - NetworkError if the URL is unreachable
+   132→   132→            // We catch and fall through to the next candidate.
+   133→   133→            try {
+   134→   134→              const worker = new Worker(url, { type: "module" });
+   135→   135→              // Verify the worker is alive by sending a ping. pdf.js's
+   136→   136→              // worker will respond to "ready" but we can't easily test
+   137→   137→              // that without pdf.js. Instead we just trust the
+   138→   138→              // constructor succeeded.
+   139→   139→              lib.GlobalWorkerOptions.workerPort = worker;
+   140→   140→              workerReady = true;
+   141→   141→              console.log(`[pdf-viewer] worker ready via module Worker from ${url} (${len}b)`);
+   142→   142→              break;
+   143→   143→            } catch (spawnErr) {
+   144→   144→              console.warn(`[pdf-viewer] new Worker(${url}, {type:module}) failed:`, spawnErr);
+   145→   145→            }
+   146→   146→          } catch (probeErr) {
+   147→   147→            console.warn(`[pdf-viewer] probe ${url} failed:`, probeErr);
+   148→   148→          }
+   149→   149→        }
+   150→   150→
+   151→   151→        // ── Approach B: pdf.js workerSrc + Blob URL with polyfill ────
+   152→   152→        // Fetch the worker text, PREPEND the polyfill code (so the
+   153→   153→        // Worker thread also gets Math.sumPrecise / Map.getOrInsertComputed
+   154→   154→        // etc. — these don't transfer from the main thread), wrap in a
+   155→   155→        // Blob, hand the Blob URL to pdf.js.
+   156→   156→        //
+   157→   157→        // Why prepend: pdfjs v6 calls Math.sumPrecise inside the Worker
+   158→   158→        // thread, but the Worker has its own global scope. Main-thread
+   159→   159→        // polyfills don't apply. We must inject the polyfill into the
+   160→   160→        // worker source itself.
+   161→   161→        if (!workerReady) {
+   162→   162→          for (const url of sameOriginCandidates) {
+   163→   163→            if (workerReady) break;
+   164→   164→            try {
+   165→   165→              const res = await fetch(url, { cache: "no-store" });
+   166→   166→              if (!res.ok) continue;
+   167→   167→              const text = await res.text();
+   168→   168→              if (text.length < 100_000) continue;
+   169→   169→
+   170→   170→              // Fetch the polyfill source (synchronously loaded by
+   171→   171→              // <script src="/polyfills.js"> in <head>). We re-fetch it
+   172→   172→              // here as text so we can prepend it to the worker source.
+   173→   173→              let polyfillSource = "";
+   174→   174→              try {
+   175→   175→                const pfRes = await fetch("/polyfills.js", { cache: "no-store" });
+   176→   176→                if (pfRes.ok) {
+   177→   177→                  polyfillSource = await pfRes.text();
+   178→   178→                }
+   179→   179→              } catch (pfErr) {
+   180→   180→                console.warn("[pdf-viewer] polyfill fetch for worker failed:", pfErr);
+   181→   181→              }
+   182→   182→
+   183→   183→              const combined =
+   184→   184→                polyfillSource +
+   185→   185→                "\n;\n// ─── worker code below ───\n" +
+   186→   186→                text;
+   187→   187→              const blob = new Blob([combined], { type: "application/javascript" });
+   188→   188→              lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+   189→   189→              workerReady = true;
+   190→   190→              console.log(
+   191→   191→                `[pdf-viewer] worker ready via Blob URL from ${url} (${text.length}b worker + ${polyfillSource.length}b polyfill)`
+   192→   192→              );
+   193→   193→              break;
+   194→   194→            } catch (blobErr) {
+   195→   195→              console.warn(`[pdf-viewer] Blob URL from ${url} failed:`, blobErr);
+   196→   196→            }
+   197→   197→          }
+   198→   198→        }
+   199→   199→
+   200→   200→        // ── Approach C: CDN workerSrc ──────────────────────────────────
+   201→   201→        if (!workerReady) {
+   202→   202→          try {
+   203→   203→            const cdnUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+   204→   204→            lib.GlobalWorkerOptions.workerSrc = cdnUrl;
+   205→   205→            workerReady = true;
+   206→   206→            console.warn(`[pdf-viewer] falling back to CDN worker: ${cdnUrl}`);
+   207→   207→          } catch (cdnErr) {
+   208→   208→            console.warn("[pdf-viewer] CDN worker setup failed:", cdnErr);
+   209→   209→          }
+   210→   210→        }
+   211→   211→
+   212→   212→        // ── Approach D: import worker code into main thread ───────────
+   213→   213→        // This is the ultimate fallback. We dynamically import the
+   214→   214→        // worker module directly into the main bundle. The worker code
+   215→   215→        // sets `globalThis.pdfjsWorker = { WorkerMessageHandler }` as a
+   216→   216→        // side-effect, and pdf.js detects this and runs in "fake worker"
+   217→   217→        // mode — all parsing happens on the main thread (slower but
+   218→   218→        // guaranteed to work, no spawn / no network / no CORS).
+   219→   219→        //
+   220→   220→        // We do NOT set workerSrc at all in this mode; pdf.js v6+
+   221→   221→        // detects `globalThis.pdfjsWorker` is set and skips worker
+   222→   222→        // spawning entirely.
+   223→   223→        if (!workerReady) {
+   224→   224→          try {
+   225→   225→            await import("pdfjs-dist/build/pdf.worker.min.mjs");
+   226→   226→            workerReady = true;
+   227→   227→            console.warn(
+   228→   228→              "[pdf-viewer] all worker sources failed — loaded pdf.worker.min.mjs into main thread (fake worker mode, slower but works)"
+   229→   229→            );
+   230→   230→          } catch (importErr) {
+   231→   231→            console.error("[pdf-viewer] main-thread worker import failed:", importErr);
+   232→   232→            // Truly last resort: just clear workerSrc and hope pdf.js
+   233→   233→            // can figure it out.
+   234→   234→            try {
+   235→   235→              lib.GlobalWorkerOptions.workerSrc = "";
+   236→   236→            } catch {
+   237→   237→              // ignore
+   238→   238→            }
+   239→   239→          }
+   240→   240→        }
+   241→   241→
+   242→   242→        if (mounted && !cancelled) {
+   243→   243→          pdfjsLibRef.current = lib;
+   244→   244→          setLibReady(true);
+   245→   245→        }
+   246→   246→      } catch (e) {
+   247→   247→        console.error("[pdf-viewer] init crashed unexpectedly:", e);
+   248→   248→        if (!cancelled) {
+   249→   249→          setError(
+   250→   250→            `PDF 渲染初始化失败：${e instanceof Error ? e.message : String(e)}`
+   251→   251→          );
+   252→   252→        }
+   253→   253→      }
+   254→   254→    })();
+   255→   255→    return () => {
+   256→   256→      mounted = false;
+   257→   257→      cancelled = true;
+   258→   258→    };
+   259→   259→  }, []);
+   260→   260→
+   261→   261→  // Load PDF document
+   262→   262→  useEffect(() => {
+   263→   263→    if (!fileData || !libReady || !pdfjsLibRef.current) return;
+   264→   264→    let cancelled = false;
+   265→   265→    setLoading(true);
+   266→   266→    setError(null);
+   267→   267→    setPages([]);
+   268→   268→
+   269→   269→    (async () => {
+   270→   270→      try {
+   271→   271→        const lib = pdfjsLibRef.current;
+   272→   272→        // CRITICAL: pdfjs's getDocument() TRANSFERS ownership of the
+   273→   273→        // ArrayBuffer (detaches it). If we pass the original `fileData`
+   274→   274→        // and the component later re-mounts (e.g. user switches tabs and
+   275→   275→        // comes back), the second call would see a detached buffer and
+   276→   276→        // fail with "Cannot perform construct on a detached ArrayBuffer".
+   277→   277→        //
+   278→   278→        // Fix: always slice(0) to create a fresh copy each time. The cost
+   279→   279→        // is one buffer copy per load (~1-3ms for a typical PDF), which
+   280→   280→        // is negligible compared to the actual parse cost.
+   281→   281→        const buf = fileData.slice(0);
+   282→   282→        const loadingTask = lib.getDocument({
+   283→   283→          data: new Uint8Array(buf),
+   284→   284→        });
+   285→   285→        const doc = await loadingTask.promise;
+   286→   286→        if (cancelled) return;
+   287→   287→        setPdfDoc(doc);
+   288→   288→        setNumPages(doc.numPages);
+   289→   289→
+   290→   290→        // Pre-extract text content per page (for outline keyword search)
+   291→   291→        const infos: PageInfo[] = [];
+   292→   292→        for (let i = 1; i <= doc.numPages; i++) {
+   293→   293→          const page = await doc.getPage(i);
+   294→   294→          const viewport = page.getViewport({ scale: 1 });
+   295→   295→          const tc = await page.getTextContent();
+   296→   296→          infos.push({
+   297→   297→            pageNum: i,
+   298→   298→            width: viewport.width,
+   299→   299→            height: viewport.height,
+   300→   300→            textItems: tc.items
+   301→   301→              .filter((it: any) => typeof it.str === "string" && it.str.length > 0)
+   302→   302→              .map((it: any) => ({
+   303→   303→                str: it.str,
+   304→   304→                transform: it.transform,
+   305→   305→                width: it.width,
+   306→   306→                height: it.height,
+   307→   307→              })),
+   308→   308→          });
+   309→   309→          page.cleanup();
+   310→   310→        }
+   311→   311→        if (cancelled) return;
+   312→   312→        setPages(infos);
+   313→   313→      } catch (e) {
+   314→   314→        setError(e instanceof Error ? e.message : String(e));
+   315→   315→      } finally {
+   316→   316→        if (!cancelled) setLoading(false);
+   317→   317→      }
+   318→   318→    })();
+   319→   319→
+   320→   320→    return () => {
+   321→   321→      cancelled = true;
+   322→   322→    };
+   323→   323→  }, [fileData, libReady]);
+   324→   324→
+   325→   325→  // Render pages when doc / scale changes
+   326→   326→  useEffect(() => {
+   327→   327→    if (!pdfDoc) return;
+   328→   328→    let cancelled = false;
+   329→   329→
+   330→   330→    (async () => {
+   331→   331→      for (let i = 1; i <= pdfDoc.numPages; i++) {
+   332→   332→        if (cancelled) return;
+   333→   333→        const pageDiv = pagesRef.current[i - 1];
+   334→   334→        if (!pageDiv) continue;
+   335→   335→        await renderPage(pdfDoc, i, pageDiv, scale, pdfjsLibRef.current, mode);
+   336→   336→      }
+   337→   337→    })();
+   338→   338→
+   339→   339→    return () => {
+   340→   340→      cancelled = true;
+   341→   341→    };
+   342→   342→  }, [pdfDoc, scale, mode]);
+   343→   343→
+   344→   344→  // Handle highlight token (jump + flash)
+   345→   345→  useEffect(() => {
+   346→   346→    if (!highlightToken || pages.length === 0) return;
+   347→   347→    const { quote, keywords } = highlightToken;
+   348→   348→    // Find page containing the quote or any keyword
+   349→   349→    let targetPage = -1;
+   350→   350→    let matchText = quote;
+   351→   351→    for (const p of pages) {
+   352→   352→      const full = p.textItems.map((t) => t.str).join(" ");
+   353→   353→      if (quote && quote.length > 4 && full.includes(quote)) {
+   354→   354→        targetPage = p.pageNum;
+   355→   355→        matchText = quote;
+   356→   356→        break;
+   357→   357→      }
+   358→   358→      for (const kw of keywords) {
+   359→   359→        if (kw && kw.length > 1 && full.toLowerCase().includes(kw.toLowerCase())) {
+   360→   360→          targetPage = p.pageNum;
+   361→   361→          matchText = kw;
+   362→   362→          break;
+   363→   363→        }
+   364→   364→      }
+   365→   365→      if (targetPage !== -1) break;
+   366→   366→    }
+   367→   367→    if (targetPage === -1) {
+   368→   368→      // fallback: try first keyword in any page
+   369→   369→      const kw = keywords.find((k) => k && k.length > 1);
+   370→   370→      if (kw) {
+   371→   371→        for (const p of pages) {
+   372→   372→          const full = p.textItems.map((t) => t.str).join(" ");
+   373→   373→          if (full.toLowerCase().includes(kw.toLowerCase())) {
+   374→   374→            targetPage = p.pageNum;
+   375→   375→            matchText = kw;
+   376→   376→            break;
+   377→   377→          }
+   378→   378→        }
+   379→   379→      }
+   380→   380→    }
+   381→   381→    if (targetPage !== -1) {
+   382→   382→      const pageDiv = pagesRef.current[targetPage - 1];
+   383→   383→      if (pageDiv) {
+   384→   384→        pageDiv.scrollIntoView({ behavior: "smooth", block: "center" });
+   385→   385→        // Flash highlight
+   386→   386→        pageDiv.classList.add("page-flash");
+   387→   387→        setTimeout(() => pageDiv.classList.remove("page-flash"), 1800);
+   388→   388→        // Try to highlight text spans containing the keyword
+   389→   389→        const spans = pageDiv.querySelectorAll<HTMLElement>("span.pdf-text-span");
+   390→   390→        spans.forEach((sp) => {
+   391→   391→          const t = sp.textContent || "";
+   392→   392→          if (
+   393→   393→            matchText &&
+   394→   394→            t.toLowerCase().includes(matchText.toLowerCase().slice(0, 8))
+   395→   395→          ) {
+   396→   396→            sp.classList.add("pdf-text-flash");
+   397→   397→            setTimeout(() => sp.classList.remove("pdf-text-flash"), 2400);
+   398→   398→          }
+   399→   399→        });
+   400→   400→      }
+   401→   401→    }
+   402→   402→  }, [highlightToken, pages]);
+   403→   403→
+   404→   404→  // Direct page jump — for "跳到原图 p.N" button on figure cards.
+   405→   405→  // Scrolls the target page into view + flashes it. Doesn't need text matching
+   406→   406→  // because we already know the page number.
+   407→   407→  useEffect(() => {
+   408→   408→    if (!jumpToPage || pages.length === 0) return;
+   409→   409→    const target = jumpToPage.pageIndex;
+   410→   410→    if (target < 1 || target > pages.length) return;
+   411→   411→    const pageDiv = pagesRef.current[target - 1];
+   412→   412→    if (pageDiv) {
+   413→   413→      pageDiv.scrollIntoView({ behavior: "smooth", block: "center" });
+   414→   414→      pageDiv.classList.add("page-flash");
+   415→   415→      setTimeout(() => pageDiv.classList.remove("page-flash"), 1800);
+   416→   416→    }
+   417→   417→  }, [jumpToPage, pages]);
+   418→   418→
+   419→   419→  // Text selection listener
+   420→   420→  useEffect(() => {
+   421→   421→    if (mode !== "text") return;
+   422→   422→    const handler = () => {
+   423→   423→      const sel = window.getSelection();
+   424→   424→      if (sel && sel.toString().trim().length > 0) {
+   425→   425→        onTextSelect?.(sel.toString().trim());
+   426→   426→      }
+   427→   427→    };
+   428→   428→    document.addEventListener("mouseup", handler);
+   429→   429→    return () => document.removeEventListener("mouseup", handler);
+   430→   430→  }, [mode, onTextSelect]);
+   431→   431→
+   432→   432→  const zoomIn = () => setScale((s) => Math.min(s + 0.2, 3));
+   433→   433→  const zoomOut = () => setScale((s) => Math.max(s - 0.2, 0.5));
+   434→   434→
+   435→   435→  return (
+   436→   436→    <div className="flex flex-col h-full bg-muted/20">
+   437→   437→      {/* Toolbar */}
+   438→   438→      <div className="flex items-center gap-1 px-3 py-2 border-b bg-background/80 backdrop-blur-sm">
+   439→   439→        <span className="text-xs text-muted-foreground mr-2 max-w-[200px] truncate" title={fileName}>
+   440→   440→          {fileName || "未选择文件"}
+   441→   441→        </span>
+   442→   442→        <div className="flex-1" />
+   443→   443→        <Button
+   444→   444→          variant={mode === "text" ? "default" : "ghost"}
+   445→   445→          size="sm"
+   446→   446→          className="h-7 gap-1 text-xs"
+   447→   447→          onClick={() => setMode("text")}
+   448→   448→          title="文本选择模式"
+   449→   449→        >
+   450→   450→          <MousePointer2 className="h-3.5 w-3.5" />
+   451→   451→          文本
+   452→   452→        </Button>
+   453→   453→        <Button
+   454→   454→          variant={mode === "image" ? "default" : "ghost"}
+   455→   455→          size="sm"
+   456→   456→          className="h-7 gap-1 text-xs"
+   457→   457→          onClick={() => setMode("image")}
+   458→   458→          title="图片框选模式：在 PDF 上左键拖拽选择图片区域"
+   459→   459→        >
+   460→   460→          <Square className="h-3.5 w-3.5" />
+   461→   461→          框选
+   462→   462→        </Button>
+   463→   463→        <div className="w-px h-5 bg-border mx-1" />
+   464→   464→        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={zoomOut}>
+   465→   465→          <ZoomOut className="h-3.5 w-3.5" />
+   466→   466→        </Button>
+   467→   467→        <span className="text-xs text-muted-foreground w-10 text-center">
+   468→   468→          {Math.round(scale * 100)}%
+   469→   469→        </span>
+   470→   470→        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={zoomIn}>
+   471→   471→          <ZoomIn className="h-3.5 w-3.5" />
+   472→   472→        </Button>
+   473→   473→      </div>
+   474→   474→
+   475→   475→      {/* Mode hint */}
+   476→   476→      {mode === "image" && fileData && (
+   477→   477→        <div className="px-3 py-1.5 bg-amber-50 border-b border-amber-200 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+   478→   478→          框选模式：在 PDF 页面上按住左键拖拽选择图片区域，松开后图片将自动添加到提问框
+   479→   479→        </div>
+   480→   480→      )}
+   481→   481→
+   482→   482→      {/* PDF area */}
+   483→   483→      <div
+   484→   484→        ref={containerRef}
+   485→   485→        className="flex-1 overflow-auto p-4 flex flex-col items-center gap-4"
+   486→   486→      >
+   487→   487→        {!fileData && (
+   488→   488→          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-2 py-20">
+   489→   489→            <FileText className="h-10 w-10 opacity-40" />
+   490→   490→            <p className="text-sm">点击上方按钮导入 PDF 文献</p>
+   491→   491→            <p className="text-xs text-muted-foreground/70">
+   492→   492→              支持 PDF 格式；导入后将自动生成 6 维度层次化大纲
+   493→   493→            </p>
+   494→   494→          </div>
+   495→   495→        )}
+   496→   496→        {loading && (
+   497→   497→          <div className="flex items-center gap-2 text-sm text-muted-foreground py-12">
+   498→   498→            <Loader2 className="h-4 w-4 animate-spin" />
+   499→   499→            正在解析 PDF…
+   500→   500→          </div>
+   501→   501→        )}
+   502→   502→        {error && (
+   503→   503→          <div className="py-8 px-4 max-w-[600px] mx-auto">
+   504→   504→            <div className="text-sm text-red-500 font-medium mb-2">
+   505→   505→              PDF 渲染失败
+   506→   506→            </div>
+   507→   507→            <div className="text-xs text-muted-foreground mb-3 leading-relaxed">
+   508→   508→              {error}
+   509→   509→            </div>
+   510→   510→            <div className="text-[11px] text-muted-foreground/80 leading-relaxed bg-muted/40 rounded px-3 py-2 border border-border/40">
+   511→   511→              <strong className="text-foreground">可能的解决方法：</strong>
+   512→   512→              <br />· 刷新页面后重新上传 PDF（worker 文件可能加载失败）
+   513→   513→              <br />· 检查网络是否能访问同源 <code className="text-[10px] bg-muted px-1 rounded">/api/pdf-worker</code> 路径
+   514→   514→              <br />· 如错误信息含 <code className="text-[10px] bg-muted px-1 rounded">toHex</code>，说明 PDF worker 版本与 pdfjs-dist 不匹配，需重新构建（<code className="text-[10px] bg-muted px-1 rounded">npm run build</code>）
+   515→   515→            </div>
+   516→   516→          </div>
+   517→   517→        )}
+   518→   518→        {pdfDoc &&
+   519→   519→          Array.from({ length: numPages }).map((_, i) => (
+   520→   520→            <div
+   521→   521→              key={i}
+   522→   522→              ref={(el) => {
+   523→   523→                if (el) pagesRef.current[i] = el;
+   524→   524→              }}
+   525→   525→              data-page={i + 1}
+   526→   526→              className="pdf-page relative bg-white shadow-md"
+   527→   527→              style={{ border: "1px solid rgba(0,0,0,0.06)" }}
+   528→   528→            >
+   529→   529→              <canvas className="block" />
+   530→   530→              <div className="pdf-text-layer absolute inset-0" />
+   531→   531→              {mode === "image" && (
+   532→   532→                <ImageSelectOverlay
+   533→   533→                  pageNumber={i + 1}
+   534→   534→                  pdfDoc={pdfDoc}
+   535→   535→                  scale={scale}
+   536→   536→                  onCapture={(b64) => onImageSelect?.(b64)}
+   537→   537→                />
+   538→   538→              )}
+   539→   539→            </div>
+   540→   540→          ))}
+   541→   541→      </div>
+   542→   542→    </div>
+   543→   543→  );
+   544→   544→}
+   545→   545→
+   546→   546→// ---------- helpers ----------
+   547→   547→
+   548→   548→async function renderPage(
+   549→   549→  doc: any,
+   550→   550→  pageNum: number,
+   551→   551→  pageDiv: HTMLDivElement,
+   552→   552→  scale: number,
+   553→   553→  lib: any,
+   554→   554→  mode: "text" | "image"
+   555→   555→) {
+   556→   556→  const page = await doc.getPage(pageNum);
+   557→   557→  const viewport = page.getViewport({ scale });
+   558→   558→
+   559→   559→  const canvas = pageDiv.querySelector("canvas") as HTMLCanvasElement;
+   560→   560→  const textLayer = pageDiv.querySelector(".pdf-text-layer") as HTMLDivElement;
+   561→   561→
+   562→   562→  const ratio = window.devicePixelRatio || 1;
+   563→   563→  canvas.width = Math.floor(viewport.width * ratio);
+   564→   564→  canvas.height = Math.floor(viewport.height * ratio);
+   565→   565→  canvas.style.width = `${Math.floor(viewport.width)}px`;
+   566→   566→  canvas.style.height = `${Math.floor(viewport.height)}px`;
+   567→   567→  pageDiv.style.width = `${Math.floor(viewport.width)}px`;
+   568→   568→  pageDiv.style.height = `${Math.floor(viewport.height)}px`;
+   569→   569→
+   570→   570→  const ctx = canvas.getContext("2d")!;
+   571→   571→  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+   572→   572→
+   573→   573→  await page.render({
+   574→   574→    canvasContext: ctx,
+   575→   575→    viewport,
+   576→   576→    canvas,
+   577→   577→  }).promise;
+   578→   578→
+   579→   579→  // Build text layer
+   580→   580→  textLayer.innerHTML = "";
+   581→   581→  textLayer.style.width = `${Math.floor(viewport.width)}px`;
+   582→   582→  textLayer.style.height = `${Math.floor(viewport.height)}px`;
+   583→   583→  if (mode === "text") {
+   584→   584→    const textContent = await page.getTextContent();
+   585→   585→    // Build using TextLayer class (pdfjs v6)
+   586→   586→    try {
+   587→   587→      const tl = new lib.TextLayer({
+   588→   588→        textContentSource: textContent,
+   589→   589→        container: textLayer,
+   590→   590→        viewport,
+   591→   591→      });
+   592→   592→      await tl.render();
+   593→   593→    } catch {
+   594→   594→      // fallback: legacy renderTextLayer
+   595→   595→      try {
+   596→   596→        await lib.renderTextLayer({
+   597→   597→          textContentSource: textContent,
+   598→   598→          container: textLayer,
+   599→   599→          viewport,
+   600→   600→          textDivs: [],
+   601→   601→        }).promise;
+   602→   602→      } catch {
+   603→   603→        // ignore
+   604→   604→      }
+   605→   605→    }
+   606→   606→    // Mark spans for flash
+   607→   607→    textLayer
+   608→   608→      .querySelectorAll("span")
+   609→   609→      .forEach((sp) => sp.classList.add("pdf-text-span"));
+   610→   610→  }
+   611→   611→  page.cleanup();
+   612→   612→}
+   613→   613→
+   614→   614→// ---------- Image select overlay ----------
+   615→   615→function ImageSelectOverlay({
+   616→   616→  pageNumber,
+   617→   617→  pdfDoc,
+   618→   618→  scale,
+   619→   619→  onCapture,
+   620→   620→}: {
+   621→   621→  pageNumber: number;
+   622→   622→  pdfDoc: any;
+   623→   623→  scale: number;
+   624→   624→  onCapture: (b64: string) => void;
+   625→   625→}) {
+   626→   626→  const overlayRef = useRef<HTMLDivElement>(null);
+   627→   627→  const [dragging, setDragging] = useState(false);
+   628→   628→  const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+   629→   629→  const startRef = useRef<{ x: number; y: number } | null>(null);
+   630→   630→
+   631→   631→  const onMouseDown = (e: React.MouseEvent) => {
+   632→   632→    if (!overlayRef.current) return;
+   633→   633→    const bounds = overlayRef.current.getBoundingClientRect();
+   634→   634→    startRef.current = {
+   635→   635→      x: e.clientX - bounds.left,
+   636→   636→      y: e.clientY - bounds.top,
+   637→   637→    };
+   638→   638→    setDragging(true);
+   639→   639→    setRect({ x: startRef.current.x, y: startRef.current.y, w: 0, h: 0 });
+   640→   640→    e.preventDefault();
+   641→   641→  };
+   642→   642→
+   643→   643→  const onMouseMove = (e: React.MouseEvent) => {
+   644→   644→    if (!dragging || !startRef.current || !overlayRef.current) return;
+   645→   645→    const bounds = overlayRef.current.getBoundingClientRect();
+   646→   646→    const cx = e.clientX - bounds.left;
+   647→   647→    const cy = e.clientY - bounds.top;
+   648→   648→    const x = Math.min(startRef.current.x, cx);
+   649→   649→    const y = Math.min(startRef.current.y, cy);
+   650→   650→    const w = Math.abs(cx - startRef.current.x);
+   651→   651→    const h = Math.abs(cy - startRef.current.y);
+   652→   652→    setRect({ x, y, w, h });
+   653→   653→  };
+   654→   654→
+   655→   655→  const onMouseUp = useCallback(async () => {
+   656→   656→    if (!dragging || !rect || !overlayRef.current) {
+   657→   657→      setDragging(false);
+   658→   658→      return;
+   659→   659→    }
+   660→   660→    setDragging(false);
+   661→   661→    if (rect.w < 10 || rect.h < 10) {
+   662→   662→      setRect(null);
+   663→   663→      return;
+   664→   664→    }
+   665→   665→
+   666→   666→    try {
+   667→   667→      const page = await pdfDoc.getPage(pageNumber);
+   668→   668→      const viewport = page.getViewport({ scale });
+   669→   669→      // Render full page to offscreen canvas at devicePixelRatio.
+   670→   670→      //
+   671→   671→      // CRITICAL: We must set the ctx transform to `ratio` so the PDF
+   672→   672→      // (which renders in logical units of viewport.width ×
+   673→   673→      // viewport.height) gets scaled up to fill the full physical
+   674→   674→      // canvas (viewport.width * ratio × viewport.height * ratio).
+   675→   675→      // Without this transform, the rendered content would only fill
+   676→   676→      // the top-left corner of the canvas at 1/ratio scale, and the
+   677→   677→      // subsequent crop (which uses ratio-scaled coordinates) would
+   678→   678→      // extract mostly blank pixels OR — when the crop region extends
+   679→   679→      // past the actually-rendered area — fall back to grabbing the
+   680→   680→      // entire visible page from the main canvas instead.
+   681→   681→      const ratio = window.devicePixelRatio || 1;
+   682→   682→      const off = document.createElement("canvas");
+   683→   683→      off.width = Math.floor(viewport.width * ratio);
+   684→   684→      off.height = Math.floor(viewport.height * ratio);
+   685→   685→      const offCtx = off.getContext("2d")!;
+   686→   686→      offCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+   687→   687→      await page.render({
+   688→   688→        canvasContext: offCtx,
+   689→   689→        viewport,
+   690→   690→        canvas: off,
+   691→   691→      }).promise;
+   692→   692→
+   693→   693→      // Crop the rectangle. rect.x/y/w/h are in CSS pixels relative to
+   694→   694→      // the overlay (which is inset-0 on pageDiv), so they match the
+   695→   695→      // PDF viewport's logical coordinate system. Multiply by ratio
+   696→   696→      // to get physical-pixel offsets into the offscreen canvas.
+   697→   697→      const sx = Math.max(0, Math.floor(rect.x * ratio));
+   698→   698→      const sy = Math.max(0, Math.floor(rect.y * ratio));
+   699→   699→      const sw = Math.min(off.width - sx, Math.floor(rect.w * ratio));
+   700→   700→      const sh = Math.min(off.height - sy, Math.floor(rect.h * ratio));
+   701→   701→      if (sw < 4 || sh < 4) {
+   702→   702→        setRect(null);
+   703→   703→        return;
+   704→   704→      }
+   705→   705→      const out = document.createElement("canvas");
+   706→   706→      out.width = sw;
+   707→   707→      out.height = sh;
+   708→   708→      const outCtx = out.getContext("2d")!;
+   709→   709→      // Reset transform on the output canvas so drawImage uses raw
+   710→   710→      // physical pixel coordinates (otherwise the ratio transform
+   711→   711→      // would scale the source image down incorrectly).
+   712→   712→      outCtx.setTransform(1, 0, 0, 1, 0, 0);
+   713→   713→      outCtx.drawImage(off, sx, sy, sw, sh, 0, 0, sw, sh);
+   714→   714→      const b64 = out.toDataURL("image/png");
+   715→   715→      onCapture(b64);
+   716→   716→    } catch (e) {
+   717→   717→      console.error("image capture error", e);
+   718→   718→    } finally {
+   719→   719→      setRect(null);
+   720→   720→    }
+   721→   721→  }, [dragging, rect, pdfDoc, pageNumber, scale, onCapture]);
+   722→   722→
+   723→   723→  useEffect(() => {
+   724→   724→    if (!dragging) return;
+   725→   725→    const up = () => {
+   726→   726→      onMouseUp();
+   727→   727→    };
+   728→   728→    window.addEventListener("mouseup", up);
+   729→   729→    return () => window.removeEventListener("mouseup", up);
+   730→   730→  }, [dragging, onMouseUp]);
+   731→   731→
+   732→   732→  return (
+   733→   733→    <div
+   734→   734→      ref={overlayRef}
+   735→   735→      className="absolute inset-0 cursor-crosshair"
+   736→   736→      onMouseDown={onMouseDown}
+   737→   737→      onMouseMove={onMouseMove}
+   738→   738→    >
+   739→   739→      {rect && (
+   740→   740→        <div
+   741→   741→          className="absolute border-2 border-blue-500 bg-blue-500/15 pointer-events-none"
+   742→   742→          style={{
+   743→   743→            left: rect.x,
+   744→   744→            top: rect.y,
+   745→   745→            width: rect.w,
+   746→   746→            height: rect.h,
+   747→   747→          }}
+   748→   748→        />
+   749→   749→      )}
+   750→   750→    </div>
+   751→   751→  );
+   752→   752→}
+   753→   753→
