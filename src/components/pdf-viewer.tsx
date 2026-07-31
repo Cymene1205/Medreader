@@ -58,8 +58,39 @@ export default function PdfViewer({
     let mounted = true;
     (async () => {
       const lib = await import("pdfjs-dist");
-      // Use CDN worker matching version
-      lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+      // Use a same-origin worker served by our own API route.
+      //
+      // Why not CDN: cdnjs.cloudflare.com fails behind GFW / corporate
+      // firewalls / offline networks → "PDF 渲染无法进行" for non-dev users.
+      //
+      // Why not /public/pdf.worker.js: Next.js 16 standalone server returns
+      // 404 for that path (app-router matches .js files before static
+      // serving kicks in).
+      //
+      // Why not new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url):
+      // webpack emits the chunk to /_next/static/media/pdf.worker.min.<hash>.mjs,
+      // but standalone server ALSO returns 404 for .mjs files in /static/media
+      // (only .woff2 / .svg / .png etc. work).
+      //
+      // Solution: serve the worker through /api/pdf-worker route, which reads
+      // the file from public/pdf.worker.js (always present after build) and
+      // returns it as application/javascript. We fetch it as text and wrap
+      // in a Blob URL because pdf.js's workerSrc expects a URL it can spawn
+      // a Worker from — a same-origin blob: URL works perfectly.
+      try {
+        const res = await fetch("/api/pdf-worker");
+        if (res.ok) {
+          const text = await res.text();
+          const blob = new Blob([text], { type: "application/javascript" });
+          lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+        } else {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch {
+        // Last-resort fallback: CDN. Will fail offline but at least the
+        // library initializes without throwing.
+        lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+      }
       if (mounted) {
         pdfjsLibRef.current = lib;
         setLibReady(true);

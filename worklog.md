@@ -1066,3 +1066,96 @@ Stage Summary:
 - 点击图片弹大图 + 图注已就位
 - figure-detail 层级命名现在会用「表型层/机制层/...」7 类之一（已 reset detailStatus，下次展开会重新生成）
 - production server pid=13135 已重启，HTTP 200
+
+---
+Task ID: polish-2026-07-31-v3
+Agent: main (Super Z)
+Task: 用户反馈 5 个新问题：思维导图换 HTML 海报；全文框架取消折叠；figure 标签改回自由命名；配色低饱和度多色协调；PDF 渲染问题（其他人访问时无法渲染）
+
+Work Log:
+- 读取 2 张用户截图（VLM 分析）确认现状：figure 标签显示"提出猜想/机制层/验证猜想"（v2 改的 7 类强制规则）；全文框架头部显示"4层"折叠控件
+- 用户核心诉求重新理解："这个还是要原来那种分层,改回去不要乱动了"——指 figure 标签不要 7 类强制规则，恢复自由命名；"配色低饱和度不要全是一种颜色"——多色协调而非单一深蓝
+
+- 【Task 1 PDF 渲染修复】
+  - 根因：pdf-viewer.tsx 第 62 行 `lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/...'` 用了 cdnjs.cloudflare.com CDN
+  - 在中国大陆/防火墙/离线网络下 cdnjs 经常超时，导致 PDF 无法渲染（开发者本地能访问 CDN 看不到此问题）
+  - 尝试方案 A：把 worker 文件复制到 public/pdf.worker.min.mjs → Next.js 16 standalone server 对 .mjs 后缀文件返回 404
+  - 尝试方案 B：改名为 public/pdf.worker.js（.js 后缀）→ 仍 404
+  - 尝试方案 C：new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url) → webpack 把 worker bundle 到 /_next/static/media/pdf.worker.min.<hash>.mjs，但 standalone server 对 .mjs 后缀仍 404（woff2/svg 正常 200，但 .mjs 被拦截）
+  - 最终方案 D：创建 /api/pdf-worker API route，用 fs.readFile 读 public/pdf.worker.js 然后 Response 返回 application/javascript；client 端 fetch 这个 API + Blob URL.createObjectURL() 设置 workerSrc
+  - 验证：curl /api/pdf-worker 返回 200 OK + 1.25MB 内容 + content-type: application/javascript；其他 API route 也正常
+  - 踩坑：之前 server 重启失败（EADDRINUSE）导致 404 误判；用 pkill -9 -f "node server.js" + pkill -9 -f "next-server" 彻底清理后正常
+
+- 【Task 2 思维导图改 HTML 海报】
+  - 完全重写 src/components/mindmap-view.tsx，抛弃 @xyflow/react + @dagrejs/dagre
+  - 改为自上而下的结构化 HTML 海报布局：
+    · Hero header：渐变背景 + 论文标题（完整不截断）+ Paper Title 小标签
+    · Section 01 问题与背景：图标 + summary callout + bullet list（解析 markdown - / * / 1. / ### 四种格式）
+    · Section 02 论证主线：summary + figures 时间线（垂直 timeline + 圆点 + 卡片，每卡显示 label/badges/question/页码）
+    · Section 03 创新性：同 Section 01 结构
+    · Section 04 局限与机会：summary + pairs 对照网格（L1/L2 红色 + → 绿色）
+  - 保留原 props 接口（outline/figures/onChildClick/onFigureClick）—— page.tsx 调用方无需改动
+  - 4 个 section 用 4 种不同低饱和度色：slate-blue / warm tan / muted violet / sage green
+  - 整体 max-width 860px 居中，便于阅读
+
+- 【Task 3 全文框架取消折叠】
+  - outline-panel.tsx：
+    · 头部"全文框架"按钮改为 div（去掉 onClick + ChevronRight 折叠图标）
+    · 每个 section 的 header 从 button 改为 div（去掉 toggleItem onClick + ChevronRight）
+    · isOpen 硬编码为 true（永远展开）
+    · 删除 openItems state + toggleItem 函数（dead code）
+    · ChevronRight 从 lucide-react 导入中移除
+  - 配色：头部从 blue-600/700 改为 slate-600/700（中性色，跟 4 个 section 多色协调）
+  - 边框/背景：每个 section 用自己的 soft 色 + border 色（不再是统一深蓝）
+
+- 【Task 4 figure 标签改回自由命名】
+  - figure-detail/route.ts systemPrompt 删除"⚠️ 层级命名规则"段（7 类强制：引出问题/提出猜想/表型层/机制层/验证猜想/临床数据/方法建立）
+  - 改为：title 用 4-12 字精炼短语概括这层的论证目的，给 3 个示例（基线表型对比/关键通路验证/临床队列分析），自由命名但需准确贴切
+  - JSON 示例的 title 也从"表型层"改为"基线表型对比"
+  - 重置 9 个已分析 figures 的 detailStatus=none（scripts/reset-figure-detail.mjs），下次展开会用新规则重新生成
+
+- 【Task 5 配色低饱和度多色协调】
+  - outline-panel.tsx SECTIONS 配色：
+    · 问题与背景 #5B7C99 (slate-blue, 冷)
+    · 论证主线 #B8845C (warm tan, 暖)
+    · 创新性 #7B6BA8 (muted violet, 冷紫)
+    · 局限与机会 #5F8B7B (sage green, 中性)
+    · 每个 section 配套 soft (浅色背景) + border (中间色边框)
+  - figure-chain.tsx ROLE_COLORS 同步：
+    · 铺垫 → slate-400
+    · 关键证据 → slate-blue (跟问题与背景呼应)
+    · 验证 → warm tan (跟论证主线呼应)
+    · 延伸 → muted violet (跟创新性呼应)
+  - figure-chain.tsx LAYER_COLORS：4 层循环用 4 个 section 色
+  - outline-panel.tsx limits pairs 颜色：amber-600 → #C8556C (rose)，emerald-600 → sec.color (sage green)
+  - mindmap-view.tsx SECTION_THEME：4 个 section 用同样的低饱和度多色
+
+- 编译验证：npm run build 成功（22 pages，包含新增 /api/pdf-worker ƒ route）
+- 重启 production server：pid=15211，HTTP 200 正常
+- /api/pdf-worker 端点：返回 1.25MB worker JS，content-type 正确
+- /app 页面：200 OK，x-nextjs-cache: HIT
+
+Stage Summary:
+- ✅ PDF 渲染修复：worker 改为同源 /api/pdf-worker route，不再依赖 cdnjs CDN，其他人在受限网络下也能正常渲染 PDF
+- ✅ 思维导图：完全重写为结构化 HTML 海报，自上而下：标题→问题→论证(含 figures 时间线)→创新→局限，4 色低饱和度
+- ✅ 全文框架：取消所有折叠 UI，4 个 section 永远展开，配色改为 4 色低饱和度协调（不再是单一深蓝）
+- ✅ figure 标签：去掉 7 类强制规则，恢复自由命名（4-12 字精炼短语）
+- ✅ 配色：4 个 section 用 slate-blue/warm tan/muted violet/sage green 多色协调，role colors 和 layer colors 同步
+- 已重置 9 个 figures 的 detailStatus，用户下次展开 figure 卡片会看到新规则生成的自由命名 title
+
+Files Modified:
+- src/components/pdf-viewer.tsx（workerSrc 改为 fetch /api/pdf-worker + Blob URL）
+- src/components/mindmap-view.tsx（完全重写为 HTML 海报，~700 行 → ~700 行但完全不同结构）
+- src/components/outline-panel.tsx（取消折叠 UI + 多色配色 + 清理 dead code）
+- src/components/figure-chain.tsx（ROLE_COLORS + LAYER_COLORS 改为低饱和度多色）
+- src/app/api/figure-detail/route.ts（systemPrompt 去掉 7 类强制命名规则）
+
+Files Created:
+- src/app/api/pdf-worker/route.ts（同源 serve pdf.js worker）
+- public/pdf.worker.js（worker 静态文件，1.25MB）
+- scripts/reset-figure-detail.mjs（重置 figure detailStatus 脚本）
+
+Notes:
+- 之前两轮"图片分割问题"用户没再提，应该已经从根上解决（v2 的 extract-figures.ts 三阶段合并算法 + pickBestImageBlock）
+- 论证主线展开折叠：用户说"全文框架不需要折叠"——理解为整个全文框架都不要折叠，包括论证主线 section。如果用户后续要求论证主线单独可折叠，可以再加回 argumentSpine 的折叠按钮
+- 用户提到 PDF 渲染问题是"其他人用的时候"——本机开发者网络能访问 cdnjs 看不到问题，但部署给其他用户（医学院同学/导师）时国内网络访问 cdnjs 超时导致 PDF 无法渲染。现在改成同源 /api/pdf-worker 完全消除这个依赖

@@ -13,7 +13,6 @@ import {
   Loader2,
   LayoutGrid,
   FileSearch,
-  ChevronRight,
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
@@ -127,16 +126,20 @@ type Props = {
 
 type SectionKey = "questionBackground" | "argumentSpine" | "novelty" | "limitsOpportunities";
 
+// Low-saturation, multi-hue palette — cool/warm balance, no single-color wash.
+// Each section gets its own hue family with matched tint & border.
 const SECTIONS: Array<{
   key: SectionKey;
   index: number;
   title: string;
   color: string;
+  soft: string;
+  border: string;
 }> = [
-  { key: "questionBackground", index: 1, title: "问题与背景", color: "#1E3A8A" }, // 深蓝
-  { key: "argumentSpine", index: 2, title: "论证主线", color: "#1E40AF" },       // 深蓝
-  { key: "novelty", index: 3, title: "创新性", color: "#3B82F6" },              // 蓝
-  { key: "limitsOpportunities", index: 4, title: "局限与机会", color: "#2563EB" }, // 蓝
+  { key: "questionBackground", index: 1, title: "问题与背景", color: "#5B7C99", soft: "#EAF0F5", border: "#C7D5E0" },  // slate-blue (cool)
+  { key: "argumentSpine",     index: 2, title: "论证主线",     color: "#B8845C", soft: "#F7EFE7", border: "#E0CBB4" },  // warm tan (warm)
+  { key: "novelty",           index: 3, title: "创新性",       color: "#7B6BA8", soft: "#EFEAF5", border: "#D5CCE6" },  // muted violet (cool-purple)
+  { key: "limitsOpportunities", index: 4, title: "局限与机会",   color: "#5F8B7B", soft: "#E9F2EE", border: "#C4D9D0" },  // sage green (neutral-warm)
 ];
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -153,12 +156,6 @@ export default function OutlinePanel({
   onJumpToPage,
   figuresStatus = "idle",
 }: Props) {
-  const [openItems, setOpenItems] = useState<string[]>([
-    "questionBackground",
-    "argumentSpine",
-    "novelty",
-    "limitsOpportunities",
-  ]); // all 4 sections default open
   const [retrying, setRetrying] = useState<string | null>(null);
 
   const fs = (px: number) => `${px}px`;
@@ -189,48 +186,35 @@ export default function OutlinePanel({
     [paperId]
   );
 
-  const toggleItem = (key: string) => {
-    setOpenItems((cur) =>
-      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
-    );
-  };
-
   // ── Header (always rendered) ────────────────────────────────────────────
   return (
     <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
-      <button
-        type="button"
-        onClick={() => onCollapsedChange?.(!collapsed)}
+      {/* Header — no longer collapsible (user requested removal of folding)
+          so the entire panel stays open. We still respect the outer
+          `collapsed` prop for backward compat with page.tsx, but the inner
+          section list no longer has fold/unfold buttons. */}
+      <div
         className={cn(
-          "w-full px-3 py-2 flex items-center gap-2 text-left transition-colors flex-shrink-0",
-          "hover:bg-blue-50/60 dark:hover:bg-blue-950/30",
-          "border-b border-blue-100/70 dark:border-blue-900/40"
+          "w-full px-3 py-2 flex items-center gap-2 flex-shrink-0",
+          "border-b border-slate-200/70 dark:border-slate-800/60",
+          "bg-gradient-to-r from-slate-50/80 to-slate-100/40 dark:from-slate-900/60 dark:to-slate-900/30"
         )}
-        title={collapsed ? "展开全文框架" : "折叠全文框架"}
-        aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
-        aria-expanded={!collapsed}
       >
-        <LayoutGrid className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-        <span className="text-[12px] font-semibold flex-1 text-blue-700 dark:text-blue-300">
+        <LayoutGrid className="h-3.5 w-3.5 text-slate-600 dark:text-slate-400 flex-shrink-0" />
+        <span className="text-[12px] font-semibold flex-1 text-slate-700 dark:text-slate-300">
           全文框架
         </span>
         {outline && (
           <Badge
             variant="secondary"
-            className="text-[10px] h-4 px-1.5 bg-blue-100/70 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+            className="text-[10px] h-4 px-1.5 bg-slate-200/70 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300"
           >
             4 层
           </Badge>
         )}
-        <ChevronRight
-          className={cn(
-            "h-3 w-3 text-muted-foreground transition-transform flex-shrink-0",
-            !collapsed && "rotate-90"
-          )}
-        />
-      </button>
+      </div>
 
-      {!collapsed && (
+      {(!collapsed || true) && (
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           <div className="p-2">
             {loading && !outline && (
@@ -257,11 +241,11 @@ export default function OutlinePanel({
               <div className="space-y-1.5">
                 {SECTIONS.map((sec) => {
                   const part = outline[sec.key];
-                  const isOpen = openItems.includes(sec.key);
+                  // Sections are NO LONGER collapsible — always open.
+                  // (User explicitly requested removal of fold/unfold.)
+                  const isOpen = true;
                   const isFailed = outline.failedParts?.includes(sec.key);
                   const isRetrying = retrying === sec.key;
-                  // All 4 sections are collapsible (argumentSpine used to be
-                  // always-open, but the user requested it be foldable too).
 
                   // Determine if section has content
                   const hasContent = (() => {
@@ -278,21 +262,20 @@ export default function OutlinePanel({
                     <div
                       key={sec.key}
                       className={cn(
-                        "rounded-md border bg-card shadow-sm transition-all",
-                        isOpen ? "border-border" : "border-border/60"
+                        "rounded-md border bg-card shadow-sm transition-all"
                       )}
                       style={{
                         borderLeft: `3px solid ${sec.color}`,
+                        borderColor: sec.border,
                       }}
                     >
-                      {/* Header */}
-                      <button
-                        type="button"
-                        onClick={() => toggleItem(sec.key)}
+                      {/* Header — NOT a button anymore, just a div */}
+                      <div
                         className={cn(
                           "w-full text-left px-2.5 py-2 flex items-start gap-2",
-                          "hover:bg-muted/40"
+                          "rounded-t-md"
                         )}
+                        style={{ background: sec.soft }}
                       >
                         <span
                           className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5"
@@ -303,7 +286,7 @@ export default function OutlinePanel({
                         <div className="flex-1 min-w-0">
                           <div
                             className="font-medium leading-snug"
-                            style={{ fontSize: fs(13) }}
+                            style={{ fontSize: fs(13), color: sec.color }}
                           >
                             {sec.title}
                           </div>
@@ -356,15 +339,9 @@ export default function OutlinePanel({
                             </div>
                           )}
                         </div>
-                        <ChevronRight
-                          className={cn(
-                            "h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-1 transition-transform",
-                            isOpen && "rotate-90"
-                          )}
-                        />
-                      </button>
+                      </div>
 
-                      {/* Body */}
+                      {/* Body — always visible */}
                       {isOpen && (
                         <div className="px-2.5 pb-2.5 pt-0 space-y-2">
                           {/* ArgumentSpine: special rendering — summary + figure chain */}
@@ -413,10 +390,14 @@ export default function OutlinePanel({
                                 {outline.limitsOpportunities.pairs.map((p, i) => (
                                   <div
                                     key={i}
-                                    className="rounded border border-border/60 bg-muted/20 px-2 py-1.5"
+                                    className="rounded border bg-muted/20 px-2 py-1.5"
+                                    style={{ borderColor: sec.border }}
                                   >
                                     <div className="text-[11px] flex items-start gap-1.5">
-                                      <span className="text-amber-600 font-bold flex-shrink-0">
+                                      <span
+                                        className="font-bold flex-shrink-0 text-white px-1 rounded text-[9px]"
+                                        style={{ background: "#C8556C" }}
+                                      >
                                         L{i + 1}
                                       </span>
                                       <span className="flex-1 text-foreground/85">
@@ -424,7 +405,12 @@ export default function OutlinePanel({
                                       </span>
                                     </div>
                                     <div className="text-[11px] flex items-start gap-1.5 mt-0.5 pl-4">
-                                      <span className="text-emerald-600 flex-shrink-0">↳</span>
+                                      <span
+                                        className="flex-shrink-0 text-white px-1 rounded text-[9px]"
+                                        style={{ background: sec.color }}
+                                      >
+                                        →
+                                      </span>
                                       <span className="flex-1 text-muted-foreground">
                                         {p.opportunity}
                                       </span>

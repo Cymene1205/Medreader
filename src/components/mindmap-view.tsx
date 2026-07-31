@@ -1,24 +1,20 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  Handle,
-  Position,
-  useNodesState,
-  useEdgesState,
-  type Node,
-  type Edge,
-  type NodeProps,
-  type ReactFlowInstance,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
-import { Network, Loader2 } from "lucide-react";
-import dagre from "@dagrejs/dagre";
+  Network,
+  Loader2,
+  FileText,
+  Lightbulb,
+  FlaskConical,
+  AlertCircle,
+  ArrowRight,
+  Target,
+  Compass,
+} from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
 import type { Outline, OutlineChild, OutlineSection } from "@/components/outline-panel";
 import type { Figure } from "@/components/figure-chain";
 
@@ -29,468 +25,93 @@ type MindmapViewProps = {
   onFigureClick?: (figureLabel: string) => void;
 };
 
-// ── Layout config ─────────────────────────────────────────────────────────
+// ── Color system: low-saturation, multi-hue, coordinated ───────────────────
+//   4 sections use 4 distinct hues — cool/warm balance, no single-color wash.
+//   Hex values are HSL-derived with sat ≈ 25-35%, light ≈ 45-55% for the
+//   accent and 95% for the tint background.
 
-const ROOT_COLOR = "#475569";
+const SECTION_THEME = {
+  questionBackground: {
+    label: "01",
+    title: "问题与背景",
+    icon: Target,
+    accent: "#5B7C99",        // slate-blue (cool)
+    accentSoft: "#EAF0F5",    // very pale slate
+    accentBorder: "#C7D5E0",
+    textOnAccent: "#FFFFFF",
+  },
+  argumentSpine: {
+    label: "02",
+    title: "论证主线",
+    icon: Compass,
+    accent: "#B8845C",        // warm tan / terracotta (warm)
+    accentSoft: "#F7EFE7",
+    accentBorder: "#E0CBB4",
+    textOnAccent: "#FFFFFF",
+  },
+  novelty: {
+    label: "03",
+    title: "创新性",
+    icon: Lightbulb,
+    accent: "#7B6BA8",        // muted violet (cool-purple)
+    accentSoft: "#EFEAF5",
+    accentBorder: "#D5CCE6",
+    textOnAccent: "#FFFFFF",
+  },
+  limitsOpportunities: {
+    label: "04",
+    title: "局限与机会",
+    icon: FlaskConical,
+    accent: "#5F8B7B",        // sage green (warm-cool neutral)
+    accentSoft: "#E9F2EE",
+    accentBorder: "#C4D9D0",
+    textOnAccent: "#FFFFFF",
+  },
+} as const;
 
-const BRANCH_COLORS: Record<string, string> = {
-  questionBackground: "#1E3A8A",  // 深蓝
-  argumentSpine: "#1E40AF",       // 深蓝
-  novelty: "#3B82F6",             // 蓝
-  limitsOpportunities: "#2563EB", // 蓝
-};
+type SectionKey = keyof typeof SECTION_THEME;
 
-const BRANCH_TITLES: Record<string, string> = {
-  questionBackground: "问题与背景",
-  argumentSpine: "论证主线",
-  novelty: "创新性",
-  limitsOpportunities: "局限与机会",
-};
+// ── Bullet parsing (kept from old mindmap logic) ───────────────────────────
+//   Recognizes `-`, `*`, numbered `1.`, and `### subtitle` lines.
 
-const ROOT_SIZE = { width: 280, height: 130 };
-const SECTION_SIZE = { width: 340, height: 220 };
-const CHILD_SIZE = { width: 280, height: 140 };
-const FIGURE_SIZE = { width: 240, height: 110 };
+type ParsedBullet = { text: string; isSubtitle: boolean; order: number };
 
-// Dagre layout config — generous spacing to prevent node overlap.
-// `nodesep` = vertical gap between nodes at same rank.
-// `ranksep` = horizontal gap between ranks (root → section → child).
-// We use larger values than before to give text room to breathe.
-const DAGRE_CONFIG = {
-  rankdir: "LR" as const,
-  nodesep: 90,        // was 70 → 90 (more vertical gap)
-  ranksep: 220,       // was 180 → 220 (more horizontal gap)
-  marginx: 80,
-  marginy: 80,
-  ranker: "longest-path" as const,  // distributes nodes more evenly
-};
-
-const MINIMAP_DEFAULT_COLOR = "#94A3B8";
-
-// ── Types for our flow nodes ──────────────────────────────────────────────
-
-type FlowNodeData = {
-  label: string;
-  summary?: string;
-  dimColor?: string;
-  isRoot?: boolean;
-  isSection?: boolean;
-  isFigure?: boolean;
-  isLinchpin?: boolean;
-  isSubtitle?: boolean;
-  isSpineSummary?: boolean;
-  index?: number;
-  // Legacy — kept so old onChildClick signature still works
-  child?: OutlineChild;
-  section?: OutlineSection;
-  // New — figure reference
-  figureLabel?: string;
-};
-
-type FlowNode = {
-  id: string;
-  type?: string;
-  position: { x: number; y: number };
-  data: FlowNodeData;
-  style?: React.CSSProperties;
-};
-
-type FlowEdge = {
-  id: string;
-  source: string;
-  target: string;
-  type?: string;
-  animated?: boolean;
-  style?: React.CSSProperties;
-};
-
-// ── Build the flow from new 4-layer outline + figures ────────────────────
-
-function buildFlow(
-  outline: Outline | null,
-  figures: Figure[]
-): { nodes: FlowNode[]; edges: FlowEdge[] } {
-  if (!outline) return { nodes: [], edges: [] };
-
-  const nodes: FlowNode[] = [];
-  const edges: FlowEdge[] = [];
-
-  // Root — paper title (always show FULL title, no truncation)
-  const rootId = "root";
-  const rootTitle = outline.title || "论文";
-  // Estimate root node height based on title length so long titles get
-  // enough vertical space (rough heuristic: 24 chars per line at width 280).
-  const rootLines = Math.max(2, Math.ceil(rootTitle.length / 24));
-  const rootHeight = Math.max(ROOT_SIZE.height, rootLines * 28 + 32);
-  nodes.push({
-    id: rootId,
-    type: "input",
-    position: { x: 0, y: 0 },
-    data: {
-      label: rootTitle,
-      dimColor: ROOT_COLOR,
-      isRoot: true,
-    },
-    style: { width: `${ROOT_SIZE.width}px`, minHeight: `${rootHeight}px` },
-  });
-
-  const branchKeys = ["questionBackground", "argumentSpine", "novelty", "limitsOpportunities"] as const;
-
-  branchKeys.forEach((key, idx) => {
-    const sectionId = `sec-${key}`;
-    const color = BRANCH_COLORS[key];
-    const title = BRANCH_TITLES[key];
-
-    // Check if this section has content
-    const part = (outline as any)[key];
-    const hasFigures = key === "argumentSpine" && figures.length > 0;
-    const hasContent = part && (part.summary || part.detail || hasFigures);
-    if (!hasContent) return;
-
-    // Section node
-    nodes.push({
-      id: sectionId,
-      type: "default",
-      position: { x: 0, y: 0 },
-      data: {
-        label: title,
-        summary: part?.summary,
-        dimColor: color,
-        isSection: true,
-        index: idx,
-      },
-      style: { width: `${SECTION_SIZE.width}px`, minHeight: `${SECTION_SIZE.height}px` },
-    });
-    edges.push({
-      id: `e-${rootId}-${sectionId}`,
-      source: rootId,
-      target: sectionId,
-      style: { stroke: color, strokeWidth: 2 },
-    });
-
-    // argumentSpine: ALWAYS show figure nodes AND summary-as-bullet so the
-    // user sees both the chain of figures AND the textual narrative.
-    // (Previously: figures-only → rich detail text was lost.)
-    if (key === "argumentSpine") {
-      // 1) Figure child nodes (sorted by chainIndex then order)
-      if (figures.length > 0) {
-        const sortedFigs = [...figures].sort((a, b) => {
-          if (a.chainIndex == null && b.chainIndex == null) return a.order - b.order;
-          if (a.chainIndex == null) return 1;
-          if (b.chainIndex == null) return -1;
-          return a.chainIndex - b.chainIndex;
-        });
-        sortedFigs.forEach((fig) => {
-          const figNodeId = `fig-${fig.label.replace(/\s+/g, "_")}`;
-          nodes.push({
-            id: figNodeId,
-            type: "default",
-            position: { x: 0, y: 0 },
-            data: {
-              label: `${fig.label}${fig.isLinchpin ? " ⚡" : ""}`,
-              summary: fig.question || (fig.caption || "").slice(0, 100),
-              dimColor: fig.isLinchpin ? "#E11D48" : color,
-              isFigure: true,
-              isLinchpin: fig.isLinchpin,
-              figureLabel: fig.label,
-            },
-            style: {
-              width: `${FIGURE_SIZE.width}px`,
-              minHeight: `${FIGURE_SIZE.height}px`,
-              ...(fig.isLinchpin ? { borderColor: "#E11D48" } : {}),
-            },
-          });
-          edges.push({
-            id: `e-${sectionId}-${figNodeId}`,
-            source: sectionId,
-            target: figNodeId,
-            style: {
-              stroke: fig.isLinchpin ? "#E11D48" : color,
-              strokeWidth: fig.isLinchpin ? 2 : 1,
-            },
-          });
-        });
+function parseDetailBullets(detail: string | undefined): ParsedBullet[] {
+  if (!detail) return [];
+  const lines = detail.split(/\n/).map((l) => l.trim());
+  const out: ParsedBullet[] = [];
+  let order = 0;
+  for (const l of lines) {
+    if (!l) continue;
+    const subMatch = l.match(/^#{2,3}\s+(.+)$/);
+    if (subMatch) {
+      const t = subMatch[1].replace(/\*\*/g, "").trim();
+      if (t.length > 2) {
+        out.push({ text: t, isSubtitle: true, order: order++ });
       }
-      // 2) Also add summary as a text child node (if present)
-      const spineSummary = part?.summary;
-      if (spineSummary && spineSummary.trim().length > 0) {
-        const sumNodeId = `spine-summary-${key}`;
-        nodes.push({
-          id: sumNodeId,
-          type: "default",
-          position: { x: 0, y: 0 },
-          data: {
-            label: spineSummary.slice(0, 200),
-            dimColor: color,
-            isSpineSummary: true,
-          },
-          style: { width: `${CHILD_SIZE.width}px`, minHeight: `${CHILD_SIZE.height}px` },
-        });
-        edges.push({
-          id: `e-${sectionId}-${sumNodeId}`,
-          source: sectionId,
-          target: sumNodeId,
-          style: { stroke: color, strokeWidth: 1.5, strokeDasharray: "4 3" },
-        });
-      }
-    } else {
-      // For other branches — split detail Markdown into bullet children.
-      // Recognize `-`, `*`, AND numbered list items (`1.`, `2.`, etc.).
-      // Also pick up `### Subtitle` lines as their own nodes for richer map.
-      const detail = part?.detail;
-      if (detail) {
-        const lines = detail.split(/\n/).map((l: string) => l.trim());
-        const bullets: { text: string; isSubtitle: boolean }[] = [];
-        for (const l of lines) {
-          if (!l) continue;
-          // Markdown subtitle: ### xxx or ## xxx
-          const subMatch = l.match(/^#{2,3}\s+(.+)$/);
-          if (subMatch) {
-            const t = subMatch[1].replace(/\*\*/g, "").trim();
-            if (t.length > 2) bullets.push({ text: t, isSubtitle: true });
-            continue;
-          }
-          // Bullet: - xxx or * xxx
-          const bulMatch = l.match(/^[-*]\s+(.+)$/);
-          if (bulMatch) {
-            const t = bulMatch[1].replace(/\*\*/g, "").trim();
-            if (t.length > 5) bullets.push({ text: t, isSubtitle: false });
-            continue;
-          }
-          // Numbered: 1. xxx
-          const numMatch = l.match(/^\d+\.\s+(.+)$/);
-          if (numMatch) {
-            const t = numMatch[1].replace(/\*\*/g, "").trim();
-            if (t.length > 5) bullets.push({ text: t, isSubtitle: false });
-            continue;
-          }
-        }
-        // Allow up to 6 bullets, and slice text to 120 chars (was 60).
-        const picked = bullets.slice(0, 6);
-        picked.forEach((b, bIdx) => {
-          const childId = `child-${key}-${bIdx}`;
-          nodes.push({
-            id: childId,
-            type: "default",
-            position: { x: 0, y: 0 },
-            data: {
-              label: b.text.slice(0, 120),
-              dimColor: color,
-              isSubtitle: b.isSubtitle,
-            },
-            style: { width: `${CHILD_SIZE.width}px`, minHeight: `${CHILD_SIZE.height}px` },
-          });
-          edges.push({
-            id: `e-${sectionId}-${childId}`,
-            source: sectionId,
-            target: childId,
-            style: { stroke: color, strokeWidth: 1 },
-          });
-        });
-      }
+      continue;
     }
-  });
-
-  // Dagre layout
-  const g = new dagre.graphlib.Graph();
-  g.setGraph(DAGRE_CONFIG);
-  g.setDefaultEdgeLabel(() => ({}));
-
-  const nodeSizeMap: Record<string, { width: number; height: number }> = {};
-  for (const n of nodes) {
-    const w = parseInt(String(n.style?.width || "200px")) || 200;
-    const h = parseInt(String(n.style?.minHeight || "100px")) || 100;
-    nodeSizeMap[n.id] = { width: w, height: h };
-    g.setNode(n.id, { width: w, height: h });
+    const bulMatch = l.match(/^[-*]\s+(.+)$/);
+    if (bulMatch) {
+      const t = bulMatch[1].replace(/\*\*/g, "").trim();
+      if (t.length > 5) {
+        out.push({ text: t, isSubtitle: false, order: order++ });
+      }
+      continue;
+    }
+    const numMatch = l.match(/^\d+\.\s+(.+)$/);
+    if (numMatch) {
+      const t = numMatch[1].replace(/\*\*/g, "").trim();
+      if (t.length > 5) {
+        out.push({ text: t, isSubtitle: false, order: order++ });
+      }
+      continue;
+    }
   }
-  for (const e of edges) {
-    g.setEdge(e.source, e.target);
-  }
-  dagre.layout(g);
-
-  const layoutedNodes = nodes.map((n) => {
-    const pos = g.node(n.id);
-    return {
-      ...n,
-      position: pos
-        ? { x: pos.x - nodeSizeMap[n.id].width / 2, y: pos.y - nodeSizeMap[n.id].height / 2 }
-        : { x: 0, y: 0 },
-    };
-  });
-
-  return { nodes: layoutedNodes, edges };
+  return out;
 }
 
-// ── Custom node renderer ──────────────────────────────────────────────────
-
-const hiddenHandle: React.CSSProperties = {
-  opacity: 0,
-  width: 1,
-  height: 1,
-  pointerEvents: "none",
-};
-
-const DimNode = memo(function DimNode({ data, selected }: NodeProps) {
-  const d = data as unknown as FlowNodeData;
-
-  // Root node — paper title. Show FULL title (no line-clamp), with a
-  // "论文" badge above so the user immediately knows this is the article.
-  if (d.isRoot) {
-    const bg = d.dimColor || ROOT_COLOR;
-    return (
-      <div
-        className="rounded-lg px-4 py-3 text-white shadow-md"
-        style={{
-          background: `linear-gradient(135deg, ${bg} 0%, ${bg}DD 100%)`,
-          border: `1px solid ${bg}`,
-          width: ROOT_SIZE.width,
-          minHeight: ROOT_SIZE.height,
-          boxShadow: selected
-            ? `0 0 0 3px ${bg}55, 0 4px 12px ${bg}33`
-            : `0 2px 8px ${bg}22`,
-        }}
-      >
-        <Handle type="source" position={Position.Right} style={hiddenHandle} />
-        <div className="text-[9px] uppercase tracking-wider opacity-70 mb-1 font-medium">
-          Paper Title
-        </div>
-        <div className="text-[14px] font-semibold leading-snug">{d.label}</div>
-      </div>
-    );
-  }
-
-  // Figure node
-  if (d.isFigure) {
-    const color = d.dimColor || "#1E40AF";
-    return (
-      <div
-        className="rounded-lg px-3 py-2 shadow-sm"
-        style={{
-          background: "#fff",
-          border: `2px solid ${color}`,
-          width: FIGURE_SIZE.width,
-          minHeight: FIGURE_SIZE.height,
-          boxShadow: selected ? `0 0 0 3px ${color}55` : undefined,
-        }}
-      >
-        <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="text-[12px] font-bold leading-tight" style={{ color }}>
-          {d.label}
-        </div>
-        {d.summary && (
-          <div className="text-[10.5px] text-muted-foreground mt-1 line-clamp-3 leading-snug">
-            {d.summary}
-          </div>
-        )}
-        <Handle type="source" position={Position.Right} style={hiddenHandle} />
-      </div>
-    );
-  }
-
-  // Section node
-  if (d.isSection) {
-    const color = d.dimColor || "#1E3A8A";
-    return (
-      <div
-        className="rounded-lg bg-white shadow-sm flex overflow-hidden"
-        style={{
-          border: `1px solid ${color}`,
-          borderLeft: `5px solid ${color}`,
-          width: SECTION_SIZE.width,
-          minHeight: SECTION_SIZE.height,
-          boxShadow: selected ? `0 0 0 3px ${color}44` : undefined,
-        }}
-      >
-        <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="px-3 py-3 flex-1 min-w-0">
-          <div className="flex items-start gap-2">
-            <span
-              className="flex-shrink-0 w-6 h-6 rounded-md text-[11px] font-bold flex items-center justify-center mt-0.5 text-white shadow-sm"
-              style={{ background: color }}
-              aria-hidden
-            >
-              {(d.index ?? 0) + 1}
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="text-[14px] font-semibold leading-snug text-foreground">
-                {d.label}
-              </div>
-              {d.summary && (
-                <div className="text-[11px] text-muted-foreground mt-1.5 line-clamp-5 leading-relaxed">
-                  {d.summary}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-        <Handle type="source" position={Position.Right} style={hiddenHandle} />
-      </div>
-    );
-  }
-
-  // Spine summary node (argumentSpine narrative text)
-  if (d.isSpineSummary) {
-    const bg = d.dimColor || "#1E40AF";
-    return (
-      <div
-        className="rounded-lg px-3 py-2.5 shadow-sm"
-        style={{
-          background: `${bg}10`,
-          border: `1px dashed ${bg}`,
-          width: CHILD_SIZE.width,
-          minHeight: CHILD_SIZE.height,
-          boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
-        }}
-      >
-        <Handle type="target" position={Position.Left} style={hiddenHandle} />
-        <div className="text-[9px] uppercase tracking-wider opacity-60 mb-1 font-medium" style={{ color: bg }}>
-          论证主线
-        </div>
-        <div className="text-[11px] font-medium leading-relaxed text-foreground/90">
-          {d.label}
-        </div>
-        <Handle type="source" position={Position.Right} style={hiddenHandle} />
-      </div>
-    );
-  }
-
-  // Child node
-  const bg = d.dimColor || "#F1F5F9";
-  return (
-    <div
-      className="rounded-lg px-3 py-2 shadow-sm"
-      style={{
-        background: d.isSubtitle ? `${bg}25` : `${bg}12`,
-        border: d.isSubtitle ? `1.5px solid ${bg}80` : `1px solid ${bg}40`,
-        width: CHILD_SIZE.width,
-        minHeight: CHILD_SIZE.height,
-        boxShadow: selected ? `0 0 0 2px ${bg}55` : undefined,
-      }}
-    >
-      <Handle type="target" position={Position.Left} style={hiddenHandle} />
-      {d.isSubtitle && (
-        <div className="text-[9px] uppercase tracking-wider opacity-60 mb-0.5 font-medium" style={{ color: bg }}>
-          小标题
-        </div>
-      )}
-      <div className="text-[11.5px] font-medium leading-snug text-foreground/90 line-clamp-5">
-        {d.label}
-      </div>
-      <Handle type="source" position={Position.Right} style={hiddenHandle} />
-    </div>
-  );
-});
-
-DimNode.displayName = "DimNode";
-
-const nodeTypes = {
-  input: DimNode,
-  default: DimNode,
-  output: DimNode,
-  dimNode: DimNode,
-};
-
-// ── Main component ────────────────────────────────────────────────────────
+// ── Main poster component ──────────────────────────────────────────────────
 
 export default function MindmapView({
   outline,
@@ -498,138 +119,545 @@ export default function MindmapView({
   onChildClick,
   onFigureClick,
 }: MindmapViewProps) {
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(
-    () => buildFlow(outline, figures),
-    [outline, figures]
-  );
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes as Node[]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges as Edge[]);
-  const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
-
-  // Track previous node count — re-fit view when structure changes significantly
-  // (e.g., figures loaded late, outline sections populated).
-  const prevNodeCountRef = useRef(0);
-
-  useEffect(() => {
-    setNodes(layoutedNodes as Node[]);
-    setEdges(layoutedEdges as Edge[]);
-  }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
-
-  // Re-fit view when node count changes (figures arrived, etc.)
-  useEffect(() => {
-    const curCount = (layoutedNodes as Node[]).length;
-    if (
-      curCount !== prevNodeCountRef.current &&
-      curCount > 0 &&
-      rfInstance
-    ) {
-      prevNodeCountRef.current = curCount;
-      // Defer fitView to next tick so the new nodes have been laid out.
-      const t = setTimeout(() => rfInstance.fitView({ padding: 0.18, duration: 300 }), 60);
-      return () => clearTimeout(t);
-    }
-  }, [layoutedNodes, rfInstance]);
-
-  const handleNodeClick = useCallback(
-    (_event: React.MouseEvent, node: Node) => {
-      const d = node.data as unknown as FlowNodeData;
-      // Figure node — call onFigureClick if provided
-      if (d.isFigure && d.figureLabel) {
-        onFigureClick?.(d.figureLabel);
-        return;
-      }
-      // Section node — fire a synthetic onChildClick using summary as quote
-      if (d.isSection && d.summary) {
-        onChildClick(
-          {
-            id: `section-${d.label}`,
-            title: d.label,
-            quote: d.summary.slice(0, 30),
-            keywords: [],
-          },
-          {
-            id: `section-${d.label}`,
-            title: d.label,
-            summary: d.summary,
-            children: [],
-          }
-        );
-      }
-    },
-    [onChildClick, onFigureClick]
-  );
+  // Sorted figures (by figure number, fallback to chainIndex)
+  const sortedFigures = useMemo(() => {
+    return [...figures].sort((a, b) => {
+      const an = parseInt(a.label.replace(/\D/g, ""), 10) || 0;
+      const bn = parseInt(b.label.replace(/\D/g, ""), 10) || 0;
+      return an - bn;
+    });
+  }, [figures]);
 
   // Empty state
   if (!outline) {
     return (
-      <div className="h-full w-full flex items-center justify-center bg-muted">
+      <div className="h-full w-full flex items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-950">
         <div className="text-center text-muted-foreground px-6">
           <Network className="h-10 w-10 mx-auto opacity-40 mb-2" />
-          <p className="text-sm font-medium">导入 PDF 后自动生成思维导图</p>
+          <p className="text-sm font-medium">导入 PDF 后自动生成结构化海报</p>
           <p className="text-[11px] mt-1 text-muted-foreground/70">
-            以 4 层分析为骨架，可视化论文结构
+            自上而下：标题 → 问题 → 验证 → 创新 → 局限
           </p>
         </div>
       </div>
     );
   }
 
-  // Loading state
+  // Check if any content exists
   const hasAnyContent =
     outline.questionBackground ||
     outline.argumentSpine ||
     outline.novelty ||
     outline.limitsOpportunities ||
-    figures.length > 0;
+    sortedFigures.length > 0;
 
   if (!hasAnyContent) {
     return (
-      <div className="h-full w-full flex items-center justify-center bg-muted">
+      <div className="h-full w-full flex items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-950">
         <div className="text-center text-muted-foreground px-6">
           <Loader2 className="h-6 w-6 mx-auto animate-spin mb-2 text-primary" />
           <p className="text-sm font-medium">正在分析…</p>
           <p className="text-[11px] mt-1 text-muted-foreground/70">
-            Agent 正在生成 4 层结构化分析
+            Agent 正在生成结构化海报
           </p>
         </div>
       </div>
     );
   }
 
+  const title = outline.title || "（未识别论文标题）";
+
   return (
-    <div className="h-full w-full bg-muted relative">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={handleNodeClick}
-        onInit={setRfInstance}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.18 }}
-        proOptions={{ hideAttribution: true }}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={true}
-        minZoom={0.2}
-        maxZoom={2}
-      >
-        <Background color="#E5E9EE" gap={20} variant={BackgroundVariant.Dots} />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(n) =>
-            (n.data as unknown as FlowNodeData).dimColor || MINIMAP_DEFAULT_COLOR
-          }
-          nodeStrokeWidth={2}
-          maskColor="rgba(100, 116, 139, 0.1)"
-          style={{ borderRadius: 8 }}
-          ariaLabel="思维导图缩略图"
-        />
-        <Controls />
-      </ReactFlow>
+    <div className="h-full w-full overflow-y-auto bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+      {/* Poster container — max-width for readability, centered */}
+      <div className="mx-auto max-w-[860px] px-6 py-8 space-y-5">
+
+        {/* ── Hero: paper title ──────────────────────────────────────────── */}
+        <header
+          className="relative overflow-hidden rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800"
+          style={{
+            background:
+              "linear-gradient(135deg, #475569 0%, #5B7C99 50%, #6B8DA8 100%)",
+          }}
+        >
+          {/* Decorative grid pattern */}
+          <div
+            aria-hidden
+            className="absolute inset-0 opacity-10"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at 1px 1px, white 1px, transparent 0)",
+              backgroundSize: "24px 24px",
+            }}
+          />
+          <div className="relative px-7 py-8 text-white">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] font-semibold opacity-80 mb-3">
+              <FileText className="h-3 w-3" />
+              <span>Research Paper</span>
+            </div>
+            <h1 className="text-[22px] md:text-[26px] font-bold leading-[1.35] tracking-tight">
+              {title}
+            </h1>
+            {outline.failedParts && outline.failedParts.length > 0 && (
+              <div className="mt-3 text-[11px] opacity-70 flex items-center gap-1.5">
+                <AlertCircle className="h-3 w-3" />
+                <span>
+                  {outline.failedParts.length} 部分生成失败 · 可在「全文框架」中重试
+                </span>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {/* ── Section 01: Question & Background ──────────────────────────── */}
+        {(outline.questionBackground?.summary || outline.questionBackground?.detail) && (
+          <PosterSection
+            theme={SECTION_THEME.questionBackground}
+            summary={outline.questionBackground?.summary}
+            detail={outline.questionBackground?.detail}
+            onChildClick={onChildClick}
+          />
+        )}
+
+        {/* ── Section 02: Argument Spine ─────────────────────────────────── */}
+        {(outline.argumentSpine?.summary || sortedFigures.length > 0) && (
+          <ArgumentSpineSection
+            theme={SECTION_THEME.argumentSpine}
+            summary={outline.argumentSpine?.summary}
+            figures={sortedFigures}
+            linchpinFigure={outline.argumentSpine?.linchpinFigure}
+            onFigureClick={onFigureClick}
+          />
+        )}
+
+        {/* ── Section 03: Novelty ────────────────────────────────────────── */}
+        {(outline.novelty?.summary || outline.novelty?.detail) && (
+          <PosterSection
+            theme={SECTION_THEME.novelty}
+            summary={outline.novelty?.summary}
+            detail={outline.novelty?.detail}
+            onChildClick={onChildClick}
+          />
+        )}
+
+        {/* ── Section 04: Limits & Opportunities ─────────────────────────── */}
+        {(outline.limitsOpportunities?.summary ||
+          (outline.limitsOpportunities?.pairs &&
+            outline.limitsOpportunities.pairs.length > 0)) && (
+          <LimitsOpportunitiesSection
+            theme={SECTION_THEME.limitsOpportunities}
+            summary={outline.limitsOpportunities?.summary}
+            detail={outline.limitsOpportunities?.detail}
+            pairs={outline.limitsOpportunities?.pairs || []}
+            onChildClick={onChildClick}
+          />
+        )}
+
+        {/* Footer */}
+        <div className="pt-2 pb-4 text-center text-[10px] text-muted-foreground/60">
+          AI 概括生成 · 内容仅供研究参考 · 请回原文核验
+        </div>
+      </div>
     </div>
+  );
+}
+
+// ── Generic poster section (used by 01/03) ────────────────────────────────
+
+function PosterSection({
+  theme,
+  summary,
+  detail,
+  onChildClick,
+}: {
+  theme: typeof SECTION_THEME[SectionKey];
+  summary?: string;
+  detail?: string;
+  onChildClick: (child: OutlineChild, section: OutlineSection) => void;
+}) {
+  const bullets = parseDetailBullets(detail);
+  const Icon = theme.icon;
+
+  return (
+    <section
+      className="relative rounded-2xl border bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+      style={{ borderColor: theme.accentBorder }}
+    >
+      {/* Top accent strip */}
+      <div
+        aria-hidden
+        className="h-1.5"
+        style={{ background: theme.accent }}
+      />
+
+      {/* Section header */}
+      <header
+        className="px-6 pt-5 pb-3 flex items-start gap-3"
+        style={{ background: theme.accentSoft }}
+      >
+        <div
+          className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm"
+          style={{ background: theme.accent }}
+        >
+          <Icon className="h-5 w-5 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div
+            className="text-[10px] font-bold tracking-[0.15em] mb-0.5"
+            style={{ color: theme.accent }}
+          >
+            SECTION {theme.label}
+          </div>
+          <h2 className="text-[18px] font-semibold text-foreground leading-tight">
+            {theme.title}
+          </h2>
+        </div>
+      </header>
+
+      {/* Body */}
+      <div className="px-6 py-4 space-y-3.5">
+        {/* Summary callout */}
+        {summary && (
+          <div
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            style={{
+              background: theme.accentSoft,
+              borderColor: theme.accent,
+            }}
+          >
+            {summary}
+          </div>
+        )}
+
+        {/* Detail bullets */}
+        {bullets.length > 0 && (
+          <div className="space-y-2">
+            {bullets.map((b, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2.5"
+              >
+                <div
+                  className="flex-shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full"
+                  style={{ background: theme.accent }}
+                  aria-hidden
+                />
+                <div
+                  className={
+                    b.isSubtitle
+                      ? "text-[13px] font-semibold text-foreground leading-snug"
+                      : "text-[12.5px] leading-[1.65] text-foreground/80"
+                  }
+                >
+                  {b.text}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Fallback: render raw markdown if no bullets parsed (e.g., prose paragraph) */}
+        {bullets.length === 0 && detail && (
+          <div className="chat-markdown text-[12.5px] leading-[1.7] text-foreground/85">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
+            >
+              {detail}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── Argument spine section (special: includes figure cards) ──────────────
+
+function ArgumentSpineSection({
+  theme,
+  summary,
+  figures,
+  linchpinFigure,
+  onFigureClick,
+}: {
+  theme: typeof SECTION_THEME[SectionKey];
+  summary?: string;
+  figures: Figure[];
+  linchpinFigure?: string | null;
+  onFigureClick?: (figureLabel: string) => void;
+}) {
+  const Icon = theme.icon;
+
+  return (
+    <section
+      className="relative rounded-2xl border bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+      style={{ borderColor: theme.accentBorder }}
+    >
+      <div
+        aria-hidden
+        className="h-1.5"
+        style={{ background: theme.accent }}
+      />
+
+      <header
+        className="px-6 pt-5 pb-3 flex items-start gap-3"
+        style={{ background: theme.accentSoft }}
+      >
+        <div
+          className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm"
+          style={{ background: theme.accent }}
+        >
+          <Icon className="h-5 w-5 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div
+            className="text-[10px] font-bold tracking-[0.15em] mb-0.5"
+            style={{ color: theme.accent }}
+          >
+            SECTION {theme.label}
+          </div>
+          <h2 className="text-[18px] font-semibold text-foreground leading-tight">
+            {theme.title}
+          </h2>
+          <p className="text-[10.5px] text-muted-foreground mt-1">
+            {figures.length > 0
+              ? `${figures.length} 张主图按论证顺序串联`
+              : "暂无图表数据"}
+            {linchpinFigure && (
+              <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-medium bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                命门 · {linchpinFigure}
+              </span>
+            )}
+          </p>
+        </div>
+      </header>
+
+      <div className="px-6 py-4 space-y-3.5">
+        {/* Summary callout */}
+        {summary && (
+          <div
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            style={{
+              background: theme.accentSoft,
+              borderColor: theme.accent,
+            }}
+          >
+            {summary}
+          </div>
+        )}
+
+        {/* Figure chain — vertical timeline */}
+        {figures.length > 0 && (
+          <div className="relative pl-5 mt-2">
+            {/* Vertical timeline line */}
+            <div
+              aria-hidden
+              className="absolute left-[7px] top-2 bottom-2 w-[2px]"
+              style={{ background: `${theme.accent}40` }}
+            />
+
+            <ol className="space-y-2.5">
+              {figures.map((fig, idx) => {
+                const isLinchpin = fig.isLinchpin || fig.label === linchpinFigure;
+                return (
+                  <li key={fig.id} className="relative">
+                    {/* Timeline dot */}
+                    <div
+                      aria-hidden
+                      className="absolute left-[-19px] top-3 w-[12px] h-[12px] rounded-full border-2 border-white dark:border-slate-900 shadow-sm"
+                      style={{
+                        background: isLinchpin ? "#C8556C" : theme.accent,
+                        boxShadow: isLinchpin
+                          ? "0 0 0 3px rgba(200, 85, 108, 0.2)"
+                          : "none",
+                      }}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => onFigureClick?.(fig.label)}
+                      className="w-full text-left rounded-lg border border-border/60 bg-white dark:bg-slate-900 hover:shadow-md hover:border-foreground/20 transition-all px-3.5 py-2.5"
+                      style={
+                        isLinchpin
+                          ? { borderColor: "#C8556C", boxShadow: "0 0 0 1px #C8556C40" }
+                          : undefined
+                      }
+                    >
+                      {/* Header row: label + badges */}
+                      <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                        <span
+                          className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded text-white"
+                          style={{ background: isLinchpin ? "#C8556C" : theme.accent }}
+                        >
+                          {fig.label}
+                        </span>
+                        {isLinchpin && (
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                            命门
+                          </span>
+                        )}
+                        {fig.chainIndex != null && (
+                          <span className="text-[9px] text-muted-foreground">
+                            第 {fig.chainIndex} 环
+                          </span>
+                        )}
+                        {fig.panelCount > 0 && (
+                          <span className="text-[9px] text-muted-foreground">
+                            · panels A–{String.fromCharCode(64 + fig.panelCount)}
+                          </span>
+                        )}
+                        {fig.pageIndex > 0 && (
+                          <span className="text-[9px] text-muted-foreground">
+                            · p.{fig.pageIndex}
+                          </span>
+                        )}
+                      </div>
+                      {/* Question */}
+                      {fig.question ? (
+                        <div className="text-[12px] leading-snug text-foreground/85 flex items-start gap-1.5">
+                          <span
+                            className="text-[10px] font-bold flex-shrink-0 mt-0.5"
+                            style={{ color: theme.accent }}
+                          >
+                            Q
+                          </span>
+                          <span className="flex-1">{fig.question}</span>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-muted-foreground/70 italic line-clamp-2">
+                          {fig.caption.slice(0, 100)}
+                          {fig.caption.length > 100 ? "…" : ""}
+                        </div>
+                      )}
+                      {/* Footer hint */}
+                      <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground/60">
+                        <span>点击查看完整图注与逻辑层级</span>
+                        <ArrowRight className="h-2.5 w-2.5" />
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── Limits & Opportunities section (special: pairs grid) ──────────────────
+
+function LimitsOpportunitiesSection({
+  theme,
+  summary,
+  detail,
+  pairs,
+  onChildClick,
+}: {
+  theme: typeof SECTION_THEME[SectionKey];
+  summary?: string;
+  detail?: string;
+  pairs: Array<{ limitation: string; opportunity: string }>;
+  onChildClick: (child: OutlineChild, section: OutlineSection) => void;
+}) {
+  const Icon = theme.icon;
+
+  return (
+    <section
+      className="relative rounded-2xl border bg-white dark:bg-slate-900 shadow-sm overflow-hidden"
+      style={{ borderColor: theme.accentBorder }}
+    >
+      <div
+        aria-hidden
+        className="h-1.5"
+        style={{ background: theme.accent }}
+      />
+
+      <header
+        className="px-6 pt-5 pb-3 flex items-start gap-3"
+        style={{ background: theme.accentSoft }}
+      >
+        <div
+          className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center shadow-sm"
+          style={{ background: theme.accent }}
+        >
+          <Icon className="h-5 w-5 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div
+            className="text-[10px] font-bold tracking-[0.15em] mb-0.5"
+            style={{ color: theme.accent }}
+          >
+            SECTION {theme.label}
+          </div>
+          <h2 className="text-[18px] font-semibold text-foreground leading-tight">
+            {theme.title}
+          </h2>
+          {pairs.length > 0 && (
+            <p className="text-[10.5px] text-muted-foreground mt-1">
+              {pairs.length} 组「局限 → 机会」对照
+            </p>
+          )}
+        </div>
+      </header>
+
+      <div className="px-6 py-4 space-y-3.5">
+        {/* Summary callout */}
+        {summary && (
+          <div
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            style={{
+              background: theme.accentSoft,
+              borderColor: theme.accent,
+            }}
+          >
+            {summary}
+          </div>
+        )}
+
+        {/* Pairs grid — two-column on wider screens */}
+        {pairs.length > 0 && (
+          <div className="space-y-2">
+            {pairs.map((p, i) => (
+              <div
+                key={i}
+                className="rounded-lg border border-border/60 bg-muted/20 overflow-hidden"
+              >
+                <div className="flex items-start gap-2 px-3 py-2 border-b border-border/40">
+                  <span className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5" style={{ background: "#C8556C" }}>
+                    L{i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-foreground/85">
+                    {p.limitation}
+                  </div>
+                </div>
+                <div className="flex items-start gap-2 px-3 py-2">
+                  <span className="flex-shrink-0 w-5 h-5 rounded text-[10px] text-white flex items-center justify-center mt-0.5" style={{ background: theme.accent }}>
+                    <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-muted-foreground">
+                    {p.opportunity}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Fallback: render raw detail markdown if no pairs */}
+        {pairs.length === 0 && detail && (
+          <div className="chat-markdown text-[12.5px] leading-[1.7] text-foreground/85">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
+            >
+              {detail}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

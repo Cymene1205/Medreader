@@ -92,15 +92,20 @@ export type Citation = {
 };
 
 // ── Role → color mapping ──────────────────────────────────────────────────
+// Low-saturation, multi-hue palette — each role gets a distinct hue that
+// matches the outline-panel section colors (so 铺垫↔问题与背景 slate-blue,
+// 关键证据↔论证主线 warm tan, etc.) for visual coherence across views.
 
 const ROLE_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
-  铺垫: { dot: "#94A3B8", bg: "bg-slate-100 dark:bg-slate-900/40", text: "text-slate-600 dark:text-slate-400" },
-  关键证据: { dot: "#1E3A8A", bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-700 dark:text-blue-300" },
-  验证: { dot: "#2563EB", bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-600 dark:text-blue-400" },
-  延伸: { dot: "#3B82F6", bg: "bg-blue-50 dark:bg-blue-900/30", text: "text-blue-500 dark:text-blue-400" },
+  铺垫:    { dot: "#94A3B8", bg: "bg-slate-100 dark:bg-slate-900/40",  text: "text-slate-600 dark:text-slate-400" },
+  关键证据: { dot: "#5B7C99", bg: "bg-slate-100 dark:bg-slate-900/40", text: "text-slate-700 dark:text-slate-300" },
+  验证:    { dot: "#B8845C", bg: "bg-amber-50 dark:bg-amber-900/30",   text: "text-amber-700 dark:text-amber-300" },
+  延伸:    { dot: "#7B6BA8", bg: "bg-violet-50 dark:bg-violet-900/30", text: "text-violet-700 dark:text-violet-300" },
 };
 
-const LAYER_COLORS = ["#1E3A8A", "#1E40AF", "#2563EB", "#3B82F6"];
+// 4 layers cycle through the 4 section accent colors — same family as
+// outline-panel, so a figure's layers visually belong to its host view.
+const LAYER_COLORS = ["#5B7C99", "#B8845C", "#7B6BA8", "#5F8B7B"];
 
 function roleStyle(role: string | null) {
   return ROLE_COLORS[role || ""] || ROLE_COLORS["铺垫"];
