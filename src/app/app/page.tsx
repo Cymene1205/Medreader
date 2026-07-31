@@ -135,6 +135,28 @@ export default function Home() {
     setLlmHeaders(refreshLLMHeaders());
   }, [llmSettingsOpen]);
 
+  // Listen for "analysis updated" events — triggered by OutlinePanel's retry
+  // button after a successful partial retry. We refresh the outline from the
+  // server so the new content shows up.
+  useEffect(() => {
+    const handler = async () => {
+      if (!paperId) return;
+      try {
+        const res = await fetch(`/api/analyze?paperId=${paperId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.outline) {
+            setOutline(data.outline as Outline);
+          }
+        }
+      } catch (e) {
+        console.warn("[analysis-updated] refresh failed:", e);
+      }
+    };
+    window.addEventListener("medreader:analysis-updated", handler);
+    return () => window.removeEventListener("medreader:analysis-updated", handler);
+  }, [paperId]);
+
   const dismissLlmBanner = useCallback(() => {
     setLlmBannerDismissed(true);
     try {
