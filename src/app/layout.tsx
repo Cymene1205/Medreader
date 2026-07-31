@@ -55,6 +55,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        {/* ES2025 polyfills MUST run before any client JS bundle.
+            pdfjs-dist v6 uses Math.sumPrecise, Map.prototype.getOrInsertComputed,
+            and Iterator helpers — all Stage-3 proposals that only landed in
+            Chrome 137+ (April 2025). Without this script, pdfjs throws
+            `TypeError: Math.sumPrecise is not a function` on older browsers
+            and PDF rendering silently fails with a blank canvas.
+            Loaded synchronously in <head> so it executes before hydration. */}
+        <script src="/polyfills.js" />
+      </head>
       <body
         className={`${ebGaramond.variable} ${notoSerifSC.variable} ${inter.variable} antialiased bg-background text-foreground`}
       >

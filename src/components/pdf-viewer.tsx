@@ -60,11 +60,6 @@ export default function PdfViewer({
     (async () => {
       try {
         // ── Step 1: load the pdfjs-dist library itself ──────────────────
-        // This dynamic import pulls in a large chunk (~1MB) — under slow
-        // networks / shared-host preview proxies, the chunk fetch can
-        // time out or fail. We surface the error instead of swallowing
-        // it so the user can see "library load failed" instead of a
-        // blank forever-loading screen.
         let lib: any;
         try {
           lib = await import("pdfjs-dist");
@@ -80,79 +75,129 @@ export default function PdfViewer({
         if (cancelled) return;
 
         // ── Step 2: locate a worker ──────────────────────────────────────
-        // Strategy: try same-origin URLs first (fast + works behind
-        // firewalls), fall back to CDN, then to "fake worker" (main
-        // thread, slow but always works).
+        // pdf.worker.js is an ESM module (file ends with `export{...}`).
+        // Spawning it as a classic Worker via `new Worker(url)` throws
+        // SyntaxError. We must spawn with `{ type: "module" }`.
         //
-        // Why prefer same-origin URLs over Blob URLs:
-        //   We used to fetch() the worker text, wrap it in a Blob, and
-        //   pass `URL.createObjectURL(blob)` as workerSrc. That works,
-        //   but it adds an extra HTTP round-trip + uses extra memory.
-        //   Directly assigning workerSrc = "/pdf.worker.js" is simpler
-        //   and lets the browser cache the worker file across sessions.
-        //
-        // Two same-origin candidates:
-        //   A. /pdf.worker.js — Next.js dev server serves /public/*.js
-        //      files directly. Works in dev. May 404 in standalone prod
-        //      (app-router matches .js before static serving).
-        //   B. /api/pdf-worker — API route that reads the file from disk
-        //      and returns it as application/javascript. Works in both
-        //      dev and standalone prod.
-        // We HEAD-check both in parallel and use whichever returns 200
-        // + application/javascript. If both fail, fall back to CDN.
+        // Strategy:
+        //   1. Try to create a module Worker from same-origin URL
+        //      (/pdf.worker.js or /api/pdf-worker). Pass it to pdf.js
+        //      via GlobalWorkerOptions.workerPort — this bypasses
+        //      pdf.js's own worker-spawning logic and works reliably
+        //      across dev/prod/proxy setups.
+        //   2. If that fails, fall back to pdf.js's workerSrc + Blob URL
+        //      (let pdf.js spawn the worker itself).
+        //   3. Last resort: CDN workerSrc (cdnjs). Will fail behind GFW
+        //      but at least initializes.
+        //   4. If everything fails, set workerSrc to "" — pdf.js falls
+        //      back to fake-worker mode (main thread, slow but works).
+        const sameOriginCandidates = ["/pdf.worker.js", "/api/pdf-worker"];
+
         let workerReady = false;
 
-        const sameOriginCandidates = ["/pdf.worker.js", "/api/pdf-worker"];
-        // Run HEAD checks in parallel; the first one that succeeds wins.
-        // We use `cache: "no-store"` to avoid stale 404s from a previous
-        // deploy where the file didn't exist.
-        const headResults = await Promise.all(
-          sameOriginCandidates.map(async (url) => {
-            try {
-              const res = await fetch(url, {
-                method: "GET",
-                cache: "no-store",
-                // Only read headers, but fetch() doesn't have a true HEAD
-                // for cross-method, so we do GET and let the browser drop
-                // the body when we don't consume it. Acceptable cost (~1MB)
-                // since we'll re-fetch the same URL moments later as the
-                // workerSrc.
-              });
-              if (!res.ok) return { url, ok: false, status: res.status };
-              const ct = res.headers.get("content-type") || "";
-              const len = Number(res.headers.get("content-length") || "0");
-              // Drain the body so the connection can be reused.
-              try {
-                await res.arrayBuffer();
-              } catch {
-                // ignore body-read errors
-              }
-              // Sanity check: must be JS, must be substantial.
-              const looksLikeJsWorker =
-                (ct.includes("javascript") || ct.includes("ecmascript") || ct === "") &&
-                len > 100_000;
-              return { url, ok: looksLikeJsWorker, status: res.status, len };
-            } catch (e) {
-              return { url, ok: false, status: -1, err: e };
+        // ── Approach A: try `new Worker(url, { type: "module" })` ──────
+        // This is the most reliable way to load an ESM worker. If the URL
+        // returns 404 or a non-JS body, the Worker constructor may still
+        // succeed but fail at message-handshake time — so we also do a
+        // HEAD-like GET first to validate the URL exists and is JS.
+        for (const url of sameOriginCandidates) {
+          if (workerReady) break;
+          try {
+            // Quick HEAD-like check (we just look at the headers).
+            const probe = await fetch(url, { method: "GET", cache: "no-store" });
+            if (!probe.ok) {
+              console.warn(`[pdf-viewer] worker candidate ${url} HTTP ${probe.status}`);
+              // Drain to free the connection.
+              try { await probe.arrayBuffer(); } catch {}
+              continue;
             }
-          })
-        );
+            const ct = probe.headers.get("content-type") || "";
+            const len = Number(probe.headers.get("content-length") || "0");
+            // Drain to free the connection.
+            try { await probe.arrayBuffer(); } catch {}
+            if (len < 100_000) {
+              console.warn(`[pdf-viewer] worker candidate ${url} too small (${len}b)`);
+              continue;
+            }
+            if (!(ct.includes("javascript") || ct.includes("ecmascript") || ct === "")) {
+              console.warn(`[pdf-viewer] worker candidate ${url} wrong content-type: ${ct}`);
+              continue;
+            }
 
-        for (const r of headResults) {
-          if (r.ok) {
-            lib.GlobalWorkerOptions.workerSrc = r.url;
-            workerReady = true;
-            console.log(`[pdf-viewer] using worker source: ${r.url} (${r.len} bytes)`);
-            break;
-          } else {
-            console.warn(
-              `[pdf-viewer] worker candidate ${r.url} not usable: HTTP ${r.status}`,
-              (r as any).err ?? ""
-            );
+            // Try to spawn a module worker.
+            // This may throw:
+            //   - SyntaxError if the script isn't valid ESM
+            //   - SecurityError if cross-origin without CORS
+            //   - NetworkError if the URL is unreachable
+            // We catch and fall through to the next candidate.
+            try {
+              const worker = new Worker(url, { type: "module" });
+              // Verify the worker is alive by sending a ping. pdf.js's
+              // worker will respond to "ready" but we can't easily test
+              // that without pdf.js. Instead we just trust the
+              // constructor succeeded.
+              lib.GlobalWorkerOptions.workerPort = worker;
+              workerReady = true;
+              console.log(`[pdf-viewer] worker ready via module Worker from ${url} (${len}b)`);
+              break;
+            } catch (spawnErr) {
+              console.warn(`[pdf-viewer] new Worker(${url}, {type:module}) failed:`, spawnErr);
+            }
+          } catch (probeErr) {
+            console.warn(`[pdf-viewer] probe ${url} failed:`, probeErr);
           }
         }
 
-        // B. Try CDN if no same-origin source worked.
+        // ── Approach B: pdf.js workerSrc + Blob URL with polyfill ────
+        // Fetch the worker text, PREPEND the polyfill code (so the
+        // Worker thread also gets Math.sumPrecise / Map.getOrInsertComputed
+        // etc. — these don't transfer from the main thread), wrap in a
+        // Blob, hand the Blob URL to pdf.js.
+        //
+        // Why prepend: pdfjs v6 calls Math.sumPrecise inside the Worker
+        // thread, but the Worker has its own global scope. Main-thread
+        // polyfills don't apply. We must inject the polyfill into the
+        // worker source itself.
+        if (!workerReady) {
+          for (const url of sameOriginCandidates) {
+            if (workerReady) break;
+            try {
+              const res = await fetch(url, { cache: "no-store" });
+              if (!res.ok) continue;
+              const text = await res.text();
+              if (text.length < 100_000) continue;
+
+              // Fetch the polyfill source (synchronously loaded by
+              // <script src="/polyfills.js"> in <head>). We re-fetch it
+              // here as text so we can prepend it to the worker source.
+              let polyfillSource = "";
+              try {
+                const pfRes = await fetch("/polyfills.js", { cache: "no-store" });
+                if (pfRes.ok) {
+                  polyfillSource = await pfRes.text();
+                }
+              } catch (pfErr) {
+                console.warn("[pdf-viewer] polyfill fetch for worker failed:", pfErr);
+              }
+
+              const combined =
+                polyfillSource +
+                "\n;\n// ─── worker code below ───\n" +
+                text;
+              const blob = new Blob([combined], { type: "application/javascript" });
+              lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+              workerReady = true;
+              console.log(
+                `[pdf-viewer] worker ready via Blob URL from ${url} (${text.length}b worker + ${polyfillSource.length}b polyfill)`
+              );
+              break;
+            } catch (blobErr) {
+              console.warn(`[pdf-viewer] Blob URL from ${url} failed:`, blobErr);
+            }
+          }
+        }
+
+        // ── Approach C: CDN workerSrc ──────────────────────────────────
         if (!workerReady) {
           try {
             const cdnUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
@@ -164,16 +209,33 @@ export default function PdfViewer({
           }
         }
 
-        // C. If both fail, explicitly disable the worker — pdfjs will
-        //    run in fake-worker mode (main thread). Slow but functional.
+        // ── Approach D: import worker code into main thread ───────────
+        // This is the ultimate fallback. We dynamically import the
+        // worker module directly into the main bundle. The worker code
+        // sets `globalThis.pdfjsWorker = { WorkerMessageHandler }` as a
+        // side-effect, and pdf.js detects this and runs in "fake worker"
+        // mode — all parsing happens on the main thread (slower but
+        // guaranteed to work, no spawn / no network / no CORS).
+        //
+        // We do NOT set workerSrc at all in this mode; pdf.js v6+
+        // detects `globalThis.pdfjsWorker` is set and skips worker
+        // spawning entirely.
         if (!workerReady) {
-          console.warn(
-            "[pdf-viewer] all worker sources failed — using pdfjs fake-worker (main thread, slower)"
-          );
           try {
-            lib.GlobalWorkerOptions.workerSrc = "";
-          } catch {
-            // ignore
+            await import("pdfjs-dist/build/pdf.worker.min.mjs");
+            workerReady = true;
+            console.warn(
+              "[pdf-viewer] all worker sources failed — loaded pdf.worker.min.mjs into main thread (fake worker mode, slower but works)"
+            );
+          } catch (importErr) {
+            console.error("[pdf-viewer] main-thread worker import failed:", importErr);
+            // Truly last resort: just clear workerSrc and hope pdf.js
+            // can figure it out.
+            try {
+              lib.GlobalWorkerOptions.workerSrc = "";
+            } catch {
+              // ignore
+            }
           }
         }
 
