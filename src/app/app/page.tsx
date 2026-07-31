@@ -20,6 +20,12 @@ import LLMSettingsDialog, {
 } from "@/components/llm-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
   Upload,
@@ -35,8 +41,12 @@ import {
   Settings2,
   AlertTriangle,
   X,
+  Download,
+  ChevronDown,
+  FileCode2,
 } from "lucide-react";
 import Link from "next/link";
+import { exportAnalysisMarkdown, exportMindmapHtml } from "@/lib/export-utils";
 
 type HighlightToken = {
   quote: string;
@@ -597,6 +607,57 @@ export default function Home() {
           )}
           导入 PDF
         </Button>
+
+        {/* Download dropdown — placed right next to the import button.
+            Disabled until the analysis outline is ready. Two export options:
+            1) Markdown 智能分析版本 (structured .md with 4-layer analysis +
+               figure captions + 限制/机会 pairs)
+            2) HTML 思维导图 (standalone self-contained .html file that
+               renders the 4 sections as poster-style cards)
+            Both files are generated client-side and download instantly. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-8 gap-1.5"
+              disabled={!outline}
+              title={outline ? "下载分析结果" : "需先完成智能分析"}
+            >
+              <Download className="h-3.5 w-3.5" />
+              下载
+              <ChevronDown className="h-3 w-3 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem
+              disabled={!outline}
+              onClick={() => outline && exportAnalysisMarkdown(outline, figures)}
+              className="gap-2 cursor-pointer"
+            >
+              <FileText className="h-3.5 w-3.5 flex-shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[12px] font-medium">智能分析版本</span>
+                <span className="text-[10px] text-muted-foreground">
+                  Markdown · 4 层结构 + 图注
+                </span>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!outline}
+              onClick={() => outline && exportMindmapHtml(outline, figures)}
+              className="gap-2 cursor-pointer"
+            >
+              <FileCode2 className="h-3.5 w-3.5 flex-shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[12px] font-medium">HTML 思维导图</span>
+                <span className="text-[10px] text-muted-foreground">
+                  独立网页 · 可打印为 PDF
+                </span>
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Auth area */}
         {status === "loading" ? (

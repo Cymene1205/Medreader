@@ -236,14 +236,22 @@ export default function OutlinePanel({
   );
 
   // ── Header (always rendered) ────────────────────────────────────────────
-  // Determine whether we're in the MinerU-parsing phase (before outline exists).
-  // During this phase we show a dedicated "MinerU 正在加载" indicator inside
-  // the panel body so the user knows what's happening on the left side.
+  // Determine whether we're in the upload + parse + analyze pipeline.
+  // User request: "刚开始现在不是有minerU解析框我很喜欢,可以吧agent分析
+  // 的那个进程也放在那里显示一致一点,进度条拉长一点儿把agent分析也放进去"
+  // → unify the MinerU loading indicator and the Agent analysis indicator
+  //   into a single 4-step progress bar (上传 PDF → MinerU 解析 → 图表提取
+  //   → 智能分析). Show the same component for both phases so the user sees
+  //   one continuous progress flow on the left side.
   const isMineruLoading =
     !outline && (uploadStage === "uploading" || uploadStage === "parsing");
   // True while Stage 1 LLM analysis is running (after MinerU finished).
   const isAnalyzing =
     loading && !outline && uploadStage === "analyzing";
+  // True once Stage 2 (figure extraction + Call A + spine) is in flight
+  // AND the outline isn't ready yet — adds a "图表提取" sub-step to the bar.
+  const isExtractingFigures =
+    !outline && (figuresStatus === "extracting" || figuresStatus === "call-a");
 
   return (
     <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
@@ -289,25 +297,17 @@ export default function OutlinePanel({
       {!collapsed && (
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           <div className="p-2">
-            {/* MinerU 解析阶段：uploadStage === "uploading" | "parsing".
-                用户反馈「最开始的时候在左侧也显示一下mineru正在加载,不然不知道在干嘛」。
-                在 outline 还没出现前，左面板需要明确的加载提示，而不是静态占位符。 */}
-            {isMineruLoading && (
-              <MineruLoadingIndicator
-                stage={uploadStage}
+            {/* Unified loading indicator — shown for the ENTIRE upload →
+                MinerU parse → figure extraction → Agent analysis pipeline.
+                User request: unify so the user sees one continuous progress
+                bar on the left side rather than two different loading UIs. */}
+            {(isMineruLoading || isAnalyzing || isExtractingFigures) && (
+              <PipelineLoadingIndicator
+                uploadStage={uploadStage}
+                figuresStatus={figuresStatus}
+                figuresCount={figures.length}
                 statusMessage={mineruStatus}
               />
-            )}
-
-            {/* Stage 1 LLM 分析阶段：MinerU 已完成、4 层 outline 正在生成 */}
-            {isAnalyzing && (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                <p className="text-xs">Agent 正在分析文献…</p>
-                <p className="text-[10px] text-muted-foreground/70">
-                  生成 4 层结构化分析（约 15-30 秒）
-                </p>
-              </div>
             )}
 
             {/* 完全空闲：还没传 PDF */}
@@ -457,14 +457,13 @@ export default function OutlinePanel({
                           section header looks like a tidy collapsed chip. */}
                       {isOpen && (
                         <div className="px-2.5 pb-2.5 pt-0 space-y-2">
-                          {/* ArgumentSpine: special rendering — summary + figure chain */}
+                          {/* ArgumentSpine: summary is already shown in the
+                              section header (always visible whether open or
+                              collapsed). Per user request, do NOT repeat it
+                              here in the expanded body — only show the figure
+                              chain. */}
                           {sec.key === "argumentSpine" && (
                             <>
-                              {outline.argumentSpine?.summary && (
-                                <div className="rounded bg-muted/40 px-2.5 py-2 text-[11.5px] leading-relaxed text-foreground/85 whitespace-pre-wrap break-words">
-                                  {stripMarkdownInline(outline.argumentSpine.summary)}
-                                </div>
-                              )}
                               {figures.length > 0 ? (
                                 <FigureChain
                                   paperId={paperId || null}
@@ -483,48 +482,72 @@ export default function OutlinePanel({
                             </>
                           )}
 
-                          {/* Standard sections: render Markdown detail */}
+                          {/* Standard sections (问题与背景 / 创新性 / 局限与机会):
+                              render with a nicer card-style layout that
+                              matches the visual language of 论证主线.
+                              User request: "问题背景,创新性,限制性能不能也
+                              把内容像论证主线一样排版选个好看一点的排版方式" */}
                           {sec.key !== "argumentSpine" && part && (part as any).detail && (
-                            <div className="chat-markdown text-[12px] leading-[1.7] px-1">
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                rehypePlugins={[rehypeRaw]}
-                              >
-                                {(part as any).detail}
-                              </ReactMarkdown>
-                            </div>
+                            <SectionDetail
+                              detail={(part as any).detail}
+                              accentColor={sec.color}
+                              softColor={sec.soft}
+                              borderColor={sec.border}
+                            />
                           )}
 
-                          {/* LimitsOpportunities: render pairs explicitly */}
+                          {/* LimitsOpportunities: render pairs as two-column
+                              限制 / 机会 cards with arrow connectors — same
+                              visual language as the figure-chain layer list. */}
                           {sec.key === "limitsOpportunities" &&
                             outline.limitsOpportunities?.pairs &&
                             outline.limitsOpportunities.pairs.length > 0 && (
-                              <div className="space-y-1.5 mt-1">
+                              <div className="space-y-1.5 mt-2">
                                 {outline.limitsOpportunities.pairs.map((p, i) => (
                                   <div
                                     key={i}
-                                    className="rounded border bg-muted/20 px-2 py-1.5"
+                                    className="rounded-md border bg-card overflow-hidden shadow-sm"
                                     style={{ borderColor: sec.border }}
                                   >
-                                    <div className="text-[11px] flex items-start gap-1.5">
+                                    {/* Pair header: index badge */}
+                                    <div
+                                      className="px-2 py-1 flex items-center gap-1.5"
+                                      style={{ background: sec.soft }}
+                                    >
                                       <span
-                                        className="font-bold flex-shrink-0 text-white px-1 rounded text-[9px]"
+                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-bold text-white flex items-center justify-center"
+                                        style={{ background: sec.color }}
+                                      >
+                                        {i + 1}
+                                      </span>
+                                      <span
+                                        className="text-[10px] font-medium uppercase tracking-wide"
+                                        style={{ color: sec.color }}
+                                      >
+                                        局限 → 机会
+                                      </span>
+                                    </div>
+                                    {/* Limitation row */}
+                                    <div className="px-2 py-1.5 flex items-start gap-1.5 border-b border-dashed" style={{ borderColor: sec.border }}>
+                                      <span
+                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-mono font-bold text-white flex items-center justify-center mt-0.5"
                                         style={{ background: "#C8556C" }}
                                       >
-                                        L{i + 1}
+                                        L
                                       </span>
-                                      <span className="flex-1 text-foreground/85 whitespace-pre-wrap break-words">
+                                      <span className="flex-1 text-[11px] leading-relaxed text-foreground/85 whitespace-pre-wrap break-words">
                                         {stripMarkdownInline(p.limitation)}
                                       </span>
                                     </div>
-                                    <div className="text-[11px] flex items-start gap-1.5 mt-0.5 pl-4">
+                                    {/* Opportunity row */}
+                                    <div className="px-2 py-1.5 flex items-start gap-1.5 bg-muted/20">
                                       <span
-                                        className="flex-shrink-0 text-white px-1 rounded text-[9px]"
+                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-mono font-bold text-white flex items-center justify-center mt-0.5"
                                         style={{ background: sec.color }}
                                       >
-                                        →
+                                        O
                                       </span>
-                                      <span className="flex-1 text-muted-foreground whitespace-pre-wrap break-words">
+                                      <span className="flex-1 text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
                                         {stripMarkdownInline(p.opportunity)}
                                       </span>
                                     </div>
@@ -661,57 +684,94 @@ function ArgumentSpineProgress({
   );
 }
 
-// ── MinerU loading indicator ───────────────────────────────────────────────
-// Shown in the left panel during the upload + MinerU-parse phase (BEFORE
-// the LLM Stage 1 analysis starts). User feedback: "最开始的时候在左侧也显示
-// 一下mineru正在加载,不然不知道在干嘛".
+// ── Pipeline loading indicator ────────────────────────────────────────────
+// Unified progress bar covering the ENTIRE pre-outline pipeline:
+//   Step 1: 上传 PDF            (uploadStage: uploading)
+//   Step 2: MinerU 解析          (uploadStage: parsing)
+//   Step 3: 图表提取             (figuresStatus: extracting → call-a)
+//   Step 4: 智能分析             (uploadStage: analyzing, or figuresStatus: spine)
 //
-// Visual: a card with a pulsing dot row (3 steps: 上传 → 解析 → 分析) and
-// the live statusMessage from the parent (e.g. "MinerU 解析中…（已等 60s）").
+// User request: "刚开始现在不是有minerU解析框我很喜欢,可以吧agent分析的那个
+// 进程也放在那里显示一致一点,进度条拉长一点儿把agent分析也放进去"
+// → one indicator, four steps, longer bar, consistent visuals across phases.
 
-function MineruLoadingIndicator({
-  stage,
+function PipelineLoadingIndicator({
+  uploadStage,
+  figuresStatus,
+  figuresCount,
   statusMessage,
 }: {
-  stage: "uploading" | "parsing" | "analyzing" | "idle" | "done";
+  uploadStage: "uploading" | "parsing" | "analyzing" | "idle" | "done";
+  figuresStatus: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+  figuresCount: number;
   statusMessage?: string;
 }) {
-  // Three-step progress: 上传 PDF → MinerU 解析 → 智能分析
+  // Four-step progress — wider bar, distinct sub-status for each phase.
   type StepState = "done" | "active" | "pending";
   const steps: Array<{ key: string; label: string; state: StepState }> = (() => {
-    if (stage === "uploading") {
+    // Upload phase
+    if (uploadStage === "uploading") {
       return [
-        { key: "upload", label: "上传 PDF", state: "active" },
-        { key: "parse",  label: "MinerU 解析", state: "pending" },
-        { key: "analyze", label: "智能分析", state: "pending" },
+        { key: "upload",  label: "上传 PDF",     state: "active" },
+        { key: "parse",   label: "MinerU 解析",  state: "pending" },
+        { key: "extract", label: "图表提取",     state: "pending" },
+        { key: "analyze", label: "智能分析",     state: "pending" },
       ];
     }
-    if (stage === "parsing") {
+    // MinerU parsing phase
+    if (uploadStage === "parsing") {
       return [
-        { key: "upload", label: "上传 PDF", state: "done" },
-        { key: "parse",  label: "MinerU 解析", state: "active" },
-        { key: "analyze", label: "智能分析", state: "pending" },
+        { key: "upload",  label: "上传 PDF",     state: "done" },
+        { key: "parse",   label: "MinerU 解析",  state: "active" },
+        { key: "extract", label: "图表提取",     state: "pending" },
+        { key: "analyze", label: "智能分析",     state: "pending" },
       ];
     }
-    if (stage === "analyzing") {
+    // Figure extraction phase (after MinerU done, Call A in flight)
+    if (figuresStatus === "extracting" || figuresStatus === "call-a") {
       return [
-        { key: "upload", label: "上传 PDF", state: "done" },
-        { key: "parse",  label: "MinerU 解析", state: "done" },
-        { key: "analyze", label: "智能分析", state: "active" },
+        { key: "upload",  label: "上传 PDF",     state: "done" },
+        { key: "parse",   label: "MinerU 解析",  state: "done" },
+        { key: "extract", label: "图表提取",     state: "active" },
+        { key: "analyze", label: "智能分析",     state: "pending" },
+      ];
+    }
+    // Agent analysis phase (Stage 1 LLM call in flight, or Stage 2 spine)
+    if (uploadStage === "analyzing" || figuresStatus === "spine") {
+      return [
+        { key: "upload",  label: "上传 PDF",     state: "done" },
+        { key: "parse",   label: "MinerU 解析",  state: "done" },
+        { key: "extract", label: "图表提取",     state: figuresCount > 0 ? "done" : "active" },
+        { key: "analyze", label: "智能分析",     state: "active" },
       ];
     }
     return [
-      { key: "upload", label: "上传 PDF", state: "pending" },
-      { key: "parse",  label: "MinerU 解析", state: "pending" },
-      { key: "analyze", label: "智能分析", state: "pending" },
+      { key: "upload",  label: "上传 PDF",     state: "pending" },
+      { key: "parse",   label: "MinerU 解析",  state: "pending" },
+      { key: "extract", label: "图表提取",     state: "pending" },
+      { key: "analyze", label: "智能分析",     state: "pending" },
     ];
   })();
 
   const headline =
-    stage === "uploading" ? "正在上传 PDF…"
-    : stage === "parsing"  ? "MinerU 正在解析 PDF…"
-    : stage === "analyzing" ? "MinerU 完成，正在分析…"
-    : "等待中…";
+    uploadStage === "uploading" ? "正在上传 PDF…"
+    : uploadStage === "parsing"  ? "MinerU 正在解析 PDF…"
+    : figuresStatus === "extracting" || figuresStatus === "call-a"
+      ? "正在提取图表并生成层级化分析…"
+      : uploadStage === "analyzing" || figuresStatus === "spine"
+        ? "Agent 正在生成 4 层结构化分析…"
+        : "等待中…";
+
+  // Per-stage tip — gives the user context about what's happening behind
+  // the scenes at each step so they don't think the page is frozen.
+  const tip =
+    uploadStage === "uploading" ? "正在将 PDF 上传至服务器，随后启动结构化解析。"
+    : uploadStage === "parsing" ? "MinerU 正在抽取段落、图表与版式信息，通常需要 30-90 秒，复杂 PDF 可能更久。"
+    : figuresStatus === "extracting" || figuresStatus === "call-a"
+      ? "MinerU 完成解析，正在批量分析所有主图（Call A），用于构建论证主线。"
+      : uploadStage === "analyzing" || figuresStatus === "spine"
+        ? "正在生成 4 层结构化分析（问题与背景 · 论证主线 · 创新性 · 局限与机会），约 15-30 秒。"
+        : "";
 
   return (
     <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-gradient-to-b from-slate-50 to-slate-50/40 dark:from-slate-900/40 dark:to-slate-900/20 p-3 space-y-2.5">
@@ -723,8 +783,8 @@ function MineruLoadingIndicator({
         </span>
       </div>
 
-      {/* 3-step progress dots */}
-      <div className="flex items-center gap-1">
+      {/* 4-step progress dots — wider bar, equal-width columns */}
+      <div className="flex items-stretch gap-0.5">
         {steps.map((s, i) => (
           <div key={s.key} className="flex items-center gap-1 flex-1 min-w-0">
             <div
@@ -737,7 +797,7 @@ function MineruLoadingIndicator({
             />
             <span
               className={cn(
-                "text-[10px] truncate",
+                "text-[9.5px] truncate leading-tight",
                 s.state === "done" && "text-emerald-600 dark:text-emerald-400",
                 s.state === "active" && "text-slate-700 dark:text-slate-200 font-medium",
                 s.state === "pending" && "text-muted-foreground/60"
@@ -748,7 +808,7 @@ function MineruLoadingIndicator({
             {i < steps.length - 1 && (
               <div
                 className={cn(
-                  "flex-1 h-px min-w-[6px]",
+                  "flex-1 h-px min-w-[4px] mx-0.5",
                   s.state === "done" ? "bg-emerald-500/40" : "bg-border"
                 )}
               />
@@ -764,11 +824,170 @@ function MineruLoadingIndicator({
         </div>
       )}
 
-      {/* Helpful tip — explains what MinerU is doing behind the scenes */}
-      <div className="text-[10px] text-muted-foreground/60 leading-relaxed border-t border-slate-200/60 dark:border-slate-800/60 pt-2">
-        {stage === "uploading" && "正在将 PDF 上传至服务器，随后启动结构化解析。"}
-        {stage === "parsing" && "MinerU 正在抽取段落、图表与版式信息，通常需要 30-90 秒，复杂 PDF 可能更久。完成后将自动进入智能分析。"}
-        {stage !== "uploading" && stage !== "parsing" && "解析完成，正在生成 4 层结构化分析。"}
+      {/* Helpful tip — explains what's happening behind the scenes */}
+      {tip && (
+        <div className="text-[10px] text-muted-foreground/60 leading-relaxed border-t border-slate-200/60 dark:border-slate-800/60 pt-2">
+          {tip}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Legacy alias kept for any external importers (unused now, but
+// removing it would force a search-and-replace across the codebase). ──
+const MineruLoadingIndicator = PipelineLoadingIndicator;
+
+// ── Section detail card ───────────────────────────────────────────────────
+// Renders the `detail` markdown of a standard section (问题与背景 / 创新性 /
+// 局限与机会) with a card-style layout that matches the visual language of
+// 论证主线 — colored accent bar on the left, soft tinted background, and
+// typography tuned for academic reading (12.5px body, 1.75 line-height).
+//
+// The accent color, soft tint and border color are all derived from the
+// section's color palette (defined in SECTIONS above) so each section gets
+// its own hue family — same convention as the figure-chain layer list.
+//
+// Markdown features supported (via ReactMarkdown + remarkGfm + rehypeRaw):
+//   - **bold** / *italic*
+//   - <sup>/<sub> HTML tags (for scientific notation like CD11b<sup>+</sup>)
+//   - Bullet lists (-) and numbered lists (1.)
+//   - Headings (## / ###) — rendered with subtle accent color
+//   - Inline `code`
+//   - Paragraphs
+
+function SectionDetail({
+  detail,
+  accentColor,
+  softColor,
+  borderColor,
+}: {
+  detail: string;
+  accentColor: string;
+  softColor: string;
+  borderColor: string;
+}) {
+  return (
+    <div
+      className="rounded-md border overflow-hidden shadow-sm"
+      style={{
+        borderColor: borderColor,
+        background: `linear-gradient(180deg, ${softColor} 0%, transparent 60%)`,
+      }}
+    >
+      {/* Accent bar — thin colored stripe on top to anchor the section */}
+      <div
+        className="h-0.5 w-full"
+        style={{ background: accentColor }}
+        aria-hidden
+      />
+      {/* Body — markdown rendered with custom element styling so it matches
+          the figure-chain typography rather than the default chat-markdown. */}
+      <div
+        className="px-3 py-2.5 text-[12.5px] leading-[1.75] text-foreground/85 chat-markdown"
+        style={{
+          // CSS variable consumed by chat-markdown custom heading styles below
+          ["--section-accent" as any]: accentColor,
+        }}
+      >
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw]}
+          components={{
+            // Headings — small accent-colored bars (don't let LLM-emitted
+            // headings dominate the layout; this is a card body, not a page)
+            h1: ({ children }) => (
+              <div
+                className="text-[12.5px] font-semibold mt-2 mb-1.5 flex items-center gap-1.5"
+                style={{ color: accentColor }}
+              >
+                <span
+                  className="inline-block w-1 h-3 rounded-sm"
+                  style={{ background: accentColor }}
+                />
+                {children}
+              </div>
+            ),
+            h2: ({ children }) => (
+              <div
+                className="text-[12.5px] font-semibold mt-2 mb-1.5 flex items-center gap-1.5"
+                style={{ color: accentColor }}
+              >
+                <span
+                  className="inline-block w-1 h-3 rounded-sm"
+                  style={{ background: accentColor }}
+                />
+                {children}
+              </div>
+            ),
+            h3: ({ children }) => (
+              <div
+                className="text-[11.5px] font-medium mt-1.5 mb-1"
+                style={{ color: accentColor }}
+              >
+                {children}
+              </div>
+            ),
+            // Paragraphs — generous spacing between them
+            p: ({ children }) => (
+              <p className="my-1.5 whitespace-pre-wrap break-words">{children}</p>
+            ),
+            // Lists — tighter spacing, accent-colored bullets
+            ul: ({ children }) => (
+              <ul className="my-1.5 space-y-1 pl-1">{children}</ul>
+            ),
+            ol: ({ children }) => (
+              <ol className="my-1.5 space-y-1 pl-1 list-decimal ml-3">{children}</ol>
+            ),
+            li: ({ children, ...props }) => {
+              // Render unordered list items with a colored dot prefix
+              const isOrdered = (props as any).className?.includes("list-decimal") || false;
+              if (isOrdered) {
+                return <li className="text-[12px] leading-relaxed pl-1">{children}</li>;
+              }
+              return (
+                <li className="text-[12px] leading-relaxed flex items-start gap-1.5 list-none">
+                  <span
+                    className="flex-shrink-0 w-1 h-1 rounded-full mt-[7px]"
+                    style={{ background: accentColor }}
+                    aria-hidden
+                  />
+                  <span className="flex-1">{children}</span>
+                </li>
+              );
+            },
+            // Strong / em — keep the accent color for bold for emphasis
+            strong: ({ children }) => (
+              <strong className="font-semibold text-foreground">{children}</strong>
+            ),
+            // Inline code — small monospace pill
+            code: ({ children }) => (
+              <code
+                className="px-1 py-0.5 rounded text-[11px] font-mono"
+                style={{
+                  background: `${accentColor}15`,
+                  color: accentColor,
+                }}
+              >
+                {children}
+              </code>
+            ),
+            // Blockquote — pull-quote style with left accent bar
+            blockquote: ({ children }) => (
+              <blockquote
+                className="my-2 pl-2.5 py-1 italic text-foreground/75"
+                style={{
+                  borderLeft: `3px solid ${accentColor}`,
+                  background: `${accentColor}08`,
+                }}
+              >
+                {children}
+              </blockquote>
+            ),
+          }}
+        >
+          {detail}
+        </ReactMarkdown>
       </div>
     </div>
   );

@@ -199,6 +199,91 @@ export function extractFiguresFromBlocks(
   };
 
   /**
+   * Walk FORWARD from a caption's start block, merging subsequent text
+   * blocks into the caption until we hit a stop condition. This fixes the
+   * "only title is captured" issue where MinerU emits the figure caption
+   * across multiple text blocks:
+   *   Block N:   "Figure 1. Short title here"
+   *   Block N+1: "Detailed experimental description spanning many lines..."
+   *   Block N+2: "Statistical analysis and quantification..."
+   *
+   * Without this merge, only Block N is captured → user sees only the title.
+   *
+   * Stop conditions (any one stops the walk):
+   *   - Next "Figure N" / "Fig. N" / "Supplementary Figure" pattern
+   *   - H1/H2 heading (text_level === 1 or 2)
+   *   - Image / chart / table block (next figure's content)
+   *   - Page break (page_idx changes by more than 1 — the caption rarely
+   *     spans more than one page; this avoids swallowing unrelated body
+   *     text from later pages)
+   *   - Length cap: stop after accumulating 4000 chars (safety net)
+   *   - Block count cap: stop after 20 blocks (safety net)
+   *
+   * The merged caption is joined with "\n" to preserve paragraph breaks
+   * for downstream markdown rendering.
+   */
+  const extendCaptionForward = (
+    startIdx: number,
+    initialCaption: string,
+    pageIdx: number
+  ): string => {
+    const parts: string[] = [initialCaption];
+    let totalLen = initialCaption.length;
+    const MAX_BLOCKS = 20;
+    const MAX_TOTAL_LEN = 4000;
+    const startPage = pageIdx;
+
+    for (let j = startIdx + 1; j <= Math.min(blocks.length - 1, startIdx + MAX_BLOCKS); j++) {
+      const nb = blocks[j];
+      if (!nb) break;
+
+      // Stop on next figure / image / chart / table block
+      if (nb.type === "image" || nb.type === "chart" || nb.type === "table") break;
+
+      // Stop on headings — they mark a new section, not caption continuation
+      if (typeof nb.text_level === "number" && nb.text_level <= 2) break;
+
+      // Only merge text blocks (skip footers, page numbers, etc.)
+      if (nb.type !== "text") break;
+
+      // Stop on page break (caption rarely spans pages)
+      const nbPage = nb.page_idx ?? startPage;
+      if (nbPage > startPage + 1) break;
+
+      const nbText = (typeof nb.text === "string" ? nb.text : "").trim();
+      if (!nbText) continue;
+
+      // Stop on next "Figure N" / "Fig. N" / "Figure S1" / "Extended Data" pattern
+      if (/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(nbText)) break;
+      if (/^\s*(?:Fig(?:ure|\.)?)\s*S\d+/i.test(nbText)) break;
+      if (/^\s*Extended\s+Data\s+Fig/i.test(nbText)) break;
+      if (/^\s*Supplementary\s+Fig/i.test(nbText)) break;
+      if (/^\s*Table\s+\d+/i.test(nbText)) break;
+
+      // Stop on URL-only lines (often TOC / citation noise)
+      if (/^https?:\/\//i.test(nbText)) break;
+
+      // Stop if the line looks like a new section heading even without
+      // text_level (short, all-caps or title-case, ends with no period)
+      // — these typically mark a new paragraph in the body, not caption text.
+      // Heuristic: short line (<=40 chars) with no terminal punctuation.
+      if (nbText.length <= 40 && !/[.,;:!?]$/.test(nbText) && /^[A-Z]/.test(nbText)) {
+        // Could be either a panel label like "(A) UMAP plot" or a section
+        // heading. Check: if it starts with a panel pattern (a), (b), etc.,
+        // it's still caption text — keep it. Otherwise stop.
+        if (!/^\(\s*[a-zA-Z]\s*\)/.test(nbText)) break;
+      }
+
+      // Looks like caption continuation — merge it.
+      parts.push(nbText);
+      totalLen += nbText.length + 1;
+      if (totalLen >= MAX_TOTAL_LEN) break;
+    }
+
+    return parts.join("\n");
+  };
+
+  /**
    * Pull the longest "Figure N" caption out of a chart_caption / image_caption
    * array. Returns { caption, block } so we know which block holds the image
    * that matches the caption (we'll use that block's img_path).
@@ -356,14 +441,14 @@ export function extractFiguresFromBlocks(
   for (const cand of candidates) {
     // 2a: try caption from the LAST block (most common — caption attaches
     // to the last panel of a multi-panel figure).
-    let bestMatch: { caption: string; block: MinerUBlock } | null = null;
+    let bestMatch: { caption: string; block: MinerUBlock; blockIdx: number } | null = null;
 
     // Search from last block backwards — usually the caption is on the last
     // panel, but fall back to earlier blocks if the last one has no caption.
     for (let k = cand.blocks.length - 1; k >= 0; k--) {
       const m = extractCaptionFromBlock(cand.blocks[k]);
       if (m) {
-        bestMatch = m;
+        bestMatch = { ...m, blockIdx: cand.startIdx + k };
         break;
       }
     }
@@ -373,13 +458,20 @@ export function extractFiguresFromBlocks(
       // Use the LARGEST image block (full figure), not the caption-bearing
       // block (which might be just one panel).
       const displayBlock = pickBestImageBlock(cand) || bestMatch.block;
-      upsert(label, bestMatch.caption, displayBlock, cand.pageIndex);
+      // Walk forward from the caption's text block to merge any continuation
+      // text blocks (MinerU often splits a caption's body across blocks).
+      const startPage = bestMatch.block.page_idx ?? cand.pageIndex - 1;
+      const mergedCaption = extendCaptionForward(bestMatch.blockIdx, bestMatch.caption, startPage);
+      upsert(label, mergedCaption, displayBlock, cand.pageIndex);
       continue; // candidate handled
     }
 
     // 2b: Strategy B fallback — look at the next 1-2 blocks AFTER this
     // candidate. If a text block starts with "Figure N", use it as the
     // caption and pair with the LARGEST image block of this candidate.
+    // Then walk FORWARD from there, merging subsequent text blocks into
+    // the caption (fixes the "only title captured" issue — MinerU often
+    // splits a caption's body across multiple text blocks).
     const largestBlock = pickBestImageBlock(cand);
     if (!largestBlock) {
       // No usable image block at all — skip this candidate.
@@ -394,7 +486,10 @@ export function extractFiguresFromBlocks(
       if (/https?:\/\//i.test(rawCap)) continue;
       const label = normaliseFigureLabel(rawCap);
       if (label) {
-        upsert(label, rawCap, largestBlock, cand.pageIndex);
+        // Found the caption's starting block. Walk forward to merge any
+        // continuation text blocks into one complete caption string.
+        const mergedCaption = extendCaptionForward(j, rawCap, nb.page_idx ?? cand.pageIndex - 1);
+        upsert(label, mergedCaption, largestBlock, cand.pageIndex);
         break;
       }
     }
@@ -419,9 +514,14 @@ export function extractFiguresFromBlocks(
     const label = normaliseFigureLabel(rawCap);
     if (!label) continue;
 
+    // Merge subsequent caption continuation blocks BEFORE comparing to
+    // the existing entry — otherwise a "title-only" caption would always
+    // lose to an existing entry, even though the merged version is longer.
+    const mergedCap = extendCaptionForward(i, rawCap, b.page_idx ?? 0);
+
     // If we already have this label with a caption at least as long, skip.
     const existing = byLabel.get(label);
-    if (existing && existing.caption.length >= rawCap.length) continue;
+    if (existing && existing.caption.length >= mergedCap.length) continue;
 
     // Look BACKWARD (up to 5 blocks) for the nearest image/chart block.
     let imgBlock: MinerUBlock | null = null;
@@ -449,7 +549,7 @@ export function extractFiguresFromBlocks(
       }
     }
 
-    upsert(label, rawCap, imgBlock, (b.page_idx ?? 0) + 1);
+    upsert(label, mergedCap, imgBlock, (b.page_idx ?? 0) + 1);
   }
 
   // ────────────────────────────────────────────────────────────────────────
