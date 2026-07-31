@@ -1320,3 +1320,70 @@ Stage Summary:
 - PDF 导入显示问题：根因可能是 (1) 大 PDF 被 4MB 默认 bodySizeLimit 拒；(2) polling 静默超时；(3) MinerU 失败 pdfjs 兜底但用户不知道。三者都已加固
 - 关键文件：lib/utils.ts (新增 stripMarkdownInline)、mindmap-view.tsx、outline-panel.tsx、figure-chain.tsx、api/upload/route.ts、app/app/page.tsx、block-reader.tsx
 - 编译通过，dev server 已重启
+
+---
+
+## Task ID: f8-subsections-and-share
+**Agent:** main (continuing session)
+**Task:** 用户两个需求 — (1) 把 questionBackground / novelty / limitsOpportunities 也像 argumentSpine 一样做成多级折叠形式（提示词结构化 + 表达框）；(2) 修复分享给别人时 PDF 渲染不对的问题
+
+### Work Log
+- 查看现有 outline-panel.tsx 中 FigureChain 的多级折叠结构作为参考模板（vertical line + dot + numbered badge + chevron + 可展开 body）
+- 查看现有 /api/analyze/route.ts 中的 3 个 prompt（PROMPT_QUESTION_BACKGROUND / PROMPT_NOVELTY / PROMPT_LIMITS_OPPORTUNITIES）和 callOnePart helper
+- 修改 3 个 prompt，要求 LLM 返回 `subsections: [{heading, body, bullets}]` 结构化数组：
+  * PROMPT_QUESTION_BACKGROUND → 3 个子模块（核心科学问题 / 问题由来 / 已有不足）
+  * PROMPT_NOVELTY → 2-4 个子模块（每个创新点一个，含类型/判断 bullets）
+  * PROMPT_LIMITS_OPPORTUNITIES → 2-4 个子模块（每个局限一个，含机会/维度 bullets），并保留 pairs 字段
+- callOnePart helper 升级：
+  * 返回类型从 {summary, detail} 改为 {summary, detail, subsections}
+  * 兼容老格式：如果 LLM 没返回 subsections，subsections 为空数组
+  * 如果没有 detail 但有 subsections，自动合成 markdown detail 用于导出/兜底渲染
+  * system prompt 增加约束「subsections 字段必须存在且为数组」
+- limitsOpportunities 的独立 inline 调用同步升级，也解析 subsections 字段
+- 类型更新：
+  * lib/analyze-stage2.ts: 新增 Subsection type，questionBackground / novelty / limitsOpportunities 的 type 都加上 `subsections?: Subsection[]`
+  * components/outline-panel.tsx: 同步 AnalysisJson type
+- 新增 SubsectionChain 组件（outline-panel.tsx 内）：
+  * 模仿 FigureChain 的视觉语言：左侧竖线 + 每个子模块一个 dot + 卡片
+  * 卡片 header（始终可见）：编号 badge + heading + body preview (80 字截断) + bullets chip preview
+  * 点击展开：完整 body 段落 + bullets 列表（彩色圆点）
+  * 默认展开第一个子模块，其余折叠（类似 FigureChain 的 expandedLabel 互斥展开）
+  * 使用 section 自己的 accent color（4 个 section 4 个 hue）
+- outline-panel.tsx 渲染逻辑更新：
+  * 标准三个 section 优先用 SubsectionChain 渲染（如果 subsections 存在且非空）
+  * 兜底：如果只有 detail 没有 subsections（老缓存），仍用 SectionDetail 单卡片渲染
+  * limitsOpportunities 的 pairs 卡片网格只在「没有 subsections」时显示（避免重复）
+- export-utils.ts 更新（Markdown + HTML 思维导图都支持 subsections）：
+  * Markdown 导出：优先用 subsections 输出 ### 子标题 + 段落 + bullets，否则回退到 detail markdown
+  * HTML 思维导图：新增 renderSubsections helper 生成 .subsec-chain 卡片链 + 完整 CSS（.subsec-card / .subsec-header / .subsec-idx / .subsec-heading / .subsec-body / .subsec-bullets / .bullet-dot）
+  * 4 个 section 都接入 renderSubsections（limitsOpportunities 在没有 subsections 时仍回退到 pairs 卡片）
+- 修复 /api/paper/[id]/pdf 路由（新建）：
+  * 用 readFile 读取 paper.filePath 的 PDF 二进制
+  * 返回 Content-Type: application/pdf + Content-Disposition: inline
+  * Buffer 转 BodyInit 用 `as unknown as BodyInit` 绕过 TS 严格类型
+  * 5 分钟浏览器缓存 + immutable
+- page.tsx 新增 shared-paper URL loader：
+  * mount 时读 URL ?paperId=xxx 或 ?p=xxx
+  * 依次 fetch /api/paper/[id] (元数据+解析) + /api/paper/[id]/pdf (二进制) + /api/analyze?paperId=xxx (分析) + /api/figures?paperId=xxx (图表)
+  * 把 PDF ArrayBuffer 喂给 setFileData，PdfViewer 即可渲染
+  * citations 直接从 /api/paper/[id] 的 citations 字段拿（已 parsed）
+  * 用 sharedLoadRanRef 防止重复执行
+  * 加载中显示「正在加载分享的论文…」+「正在加载分析结果…」状态
+- 新增「分享」按钮（page.tsx 工具栏，导入 PDF 和下载按钮之间）：
+  * 点击后用 navigator.clipboard.writeText 复制 `${origin}/app?paperId=${paperId}` 到剪贴板
+  * 老浏览器 fallback：document.execCommand('copy') + 最后兜底 window.prompt
+  * 复制成功后按钮变 Check + 「已复制」2 秒，然后恢复
+  * paperId 为空时按钮 disabled
+- 验证：
+  * npx tsc --noEmit 无 src/ 新增错误（pre-existing block-reader 353/354 / skills 与本次无关）
+  * curl /api/paper/[id]/pdf 实测：HTTP 200, 11MB PDF 文件正常返回，file 命令验证是有效 PDF
+  * curl /api/analyze?part=questionBackground POST 重试：LLM 正确返回 3 个 subsections（核心科学问题 / 问题由来 / 已有不足）
+  * dev server 全程热更新无报错（没重启 server，没杀进程）
+
+### Stage Summary
+- 多级折叠排版：3 个标准 section（问题与背景 / 创新性 / 局限与机会）现在和论证主线一样，左侧竖线 + 卡片链 + 编号 badge + 子模块可独立展开/折叠
+- 提示词结构化：callOnePart 强制要求 subsections 字段，并自动合成 detail 用于导出/兜底
+- 导出兼容：Markdown 和 HTML 思维导图都新增 subsections 渲染，老格式（只有 detail）继续工作
+- PDF 分享问题修复：新增 /api/paper/[id]/pdf 二进制下载 + page.tsx 读取 URL paperId + 分享按钮（复制链接到剪贴板）
+- 用户操作：用户点「分享」→ 链接复制到剪贴板 → 别人打开链接 → 自动加载 PDF + 分析 + 图表（左侧 4 层框架 + 中间 PDF 渲染 + 右侧 chat 都能用）
+- 老缓存兼容：已分析过的 paper 不会有 subsections，UI 自动回退到 SectionDetail 单卡片渲染；用户点「重试」即可生成新格式

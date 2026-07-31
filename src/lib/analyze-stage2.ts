@@ -29,14 +29,29 @@
 import { db } from "@/lib/db";
 import { callLLM, parseJsonLoose, type LLMConfig } from "@/lib/llm";
 
+export type Subsection = {
+  heading: string;
+  body: string;
+  bullets: string[];
+};
+
 export type AnalysisJson = {
   title: string;
-  questionBackground: { summary: string; detail: string } | null;
+  questionBackground: {
+    summary: string;
+    detail: string;
+    subsections?: Subsection[];
+  } | null;
   argumentSpine: { summary: string; linchpinFigure: string | null } | null;
-  novelty: { summary: string; detail: string } | null;
+  novelty: {
+    summary: string;
+    detail: string;
+    subsections?: Subsection[];
+  } | null;
   limitsOpportunities: {
     summary: string;
     detail: string;
+    subsections?: Subsection[];
     pairs: Array<{ limitation: string; opportunity: string }>;
   } | null;
   failedParts: string[];

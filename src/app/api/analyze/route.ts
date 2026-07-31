@@ -50,10 +50,10 @@ export const maxDuration = 300;
 // ---------------------------------------------------------------------------
 
 const PROMPT_QUESTION_BACKGROUND = `请基于以下论文全文，针对「问题与背景」做深入分析。
-必须回答以下子问题，每个子问题写出 1-2 段实质内容（不要空话）：
-1. 这篇论文要回答的核心科学问题是什么？用一句话精确表述。
-2. 这个科学问题是如何从领域空白或临床现象中产生的？用自己的话解释其来龙去脉，不要直接引用英文原文。
-3. 研究背景是什么？已有研究有什么不足？为什么这个问题值得研究？
+必须按 3 个子模块组织内容，每个子模块独立成段：
+1. 核心科学问题 —— 这篇论文要回答的核心科学问题是什么？用一句话精确表述，再用 1-2 句解释其科学价值。
+2. 问题由来 —— 这个科学问题是如何从领域空白或临床现象中产生的？用自己的话解释其来龙去脉。
+3. 已有不足 —— 已有研究有什么不足？为什么这个问题值得现在研究？
 
 ⚠️ 重要要求：
 - 用中文回答，所有内容必须是你的概括与解释，不要直接复制粘贴论文英文原文。
@@ -61,25 +61,63 @@ const PROMPT_QUESTION_BACKGROUND = `请基于以下论文全文，针对「问�
 - 输出要专业、清晰、易读，让医学研究者快速理解。
 
 输出严格 JSON（不要 markdown 代码块，不要任何额外文字）：
-{"summary":"60-120字概括","detail":"Markdown 200-400字 结构化分析，含小标题与加粗"}`;
+{
+  "summary": "60-120字概括",
+  "subsections": [
+    {
+      "heading": "核心科学问题",
+      "body": "80-180字段落说明",
+      "bullets": ["可选 1-3 条要点，每条 10-30 字"]
+    },
+    {
+      "heading": "问题由来",
+      "body": "80-180字段落说明",
+      "bullets": ["可选 1-3 条要点"]
+    },
+    {
+      "heading": "已有不足",
+      "body": "80-180字段落说明",
+      "bullets": ["可选 1-3 条要点"]
+    }
+  ]
+}`;
 
 const PROMPT_NOVELTY = `请基于以下论文全文，针对「创新性」做深入分析。
-必须回答以下子问题：
-1. 论文的核心创新点是什么？最多列 3 条，按重要性排序。
-2. 每条创新属于：问题新 / 方法新 / 证据新 / 视角新？
-3. 这些创新是渐进式（incremental）还是范式级（paradigm-shifting）？说明判断依据。
-4. 与已有工作相比，新在哪里？一句话总结。
+必须按 2-4 个子模块组织内容（每条创新点为一个子模块，按重要性排序）：
+- 每个子模块的 heading 形如：「创新点 1：xxx」
+- body：80-180 字说明该创新点的具体内容、与已有工作的差异
+- bullets：必含 2 条 ——
+    · "类型：问题新 / 方法新 / 证据新 / 视角新"（择一）
+    · "判断：渐进式 / 范式级 —— 简短理由"
 
 ⚠️ 重要要求：
 - 用中文回答，所有内容必须是你的概括与解释，不要直接复制粘贴论文英文原文。
 - 关键术语可在括号中附英文，但不要整句引用原文。
 
 输出严格 JSON（不要 markdown 代码块，不要任何额外文字）：
-{"summary":"60-120字概括","detail":"Markdown 200-400字 结构化分析，含加粗关键词"}`;
+{
+  "summary": "60-120字概括",
+  "subsections": [
+    {
+      "heading": "创新点 1：xxx",
+      "body": "80-180字段落说明",
+      "bullets": ["类型：方法新", "判断：渐进式 —— 简短理由"]
+    },
+    {
+      "heading": "创新点 2：xxx",
+      "body": "80-180字段落说明",
+      "bullets": ["类型：证据新", "判断：范式级 —— 简短理由"]
+    }
+  ]
+}`;
 
 const PROMPT_LIMITS_OPPORTUNITIES = `请基于以下论文全文，针对「局限与机会」做深入分析。
-必须列出 2-4 条局限，每条局限必须配对一个可由它衍生的可探究课题。
-局限维度可参考：样本量、模型选择、实验设计、数据解读、统计方法、外推性等。
+必须列出 2-4 条局限，每条局限独立成一个子模块（subsection）：
+- 每个子模块的 heading 就是该局限的简短描述（10-25 字）
+- body：80-180 字详细说明该局限的具体表现与影响
+- bullets：必含 1-2 条 ——
+    · "机会：xxx"（10-30 字，由该局限衍生的可探究课题）
+    · 可选 "维度：样本量/模型选择/实验设计/数据解读/统计方法/外推性"（择一）
 
 ⚠️ 重要要求：
 - 用中文回答，所有内容必须是你的概括与解释，不要直接复制粘贴论文英文原文。
@@ -87,11 +125,24 @@ const PROMPT_LIMITS_OPPORTUNITIES = `请基于以下论文全文，针对「局�
 输出严格 JSON（不要 markdown 代码块，不要任何额外文字）：
 {
   "summary": "60-120字概括",
-  "detail": "Markdown 200-400字 列表形式，每条局限下一行用 ↳ 开头写配对机会",
+  "subsections": [
+    {
+      "heading": "样本量不足",
+      "body": "80-180字段落说明该局限",
+      "bullets": ["机会：扩展到多中心队列验证", "维度：样本量"]
+    },
+    {
+      "heading": "xxx",
+      "body": "80-180字段落说明",
+      "bullets": ["机会：xxx"]
+    }
+  ],
   "pairs": [
     {"limitation":"10-30字","opportunity":"10-30字 可探究课题"}
   ]
-}`;
+}
+
+注意：pairs 字段仍需保留（用于限制/机会对照表导出），内容可与 subsections 互相呼应。`;
 
 // ---------------------------------------------------------------------------
 // Per-part call helper
@@ -105,7 +156,11 @@ async function callOnePart(
   userId: string | null,
   paperId: string | null,
   action: string
-): Promise<{ summary: string; detail: string } | null> {
+): Promise<{
+  summary: string;
+  detail: string;
+  subsections: Array<{ heading: string; body: string; bullets: string[] }>;
+} | null> {
   try {
     const truncated =
       paperBody.length > 20000 ? paperBody.slice(0, 20000) + "\n...[truncated]" : paperBody;
@@ -119,7 +174,8 @@ async function callOnePart(
             systemPrompt.split("，针对「")[1]?.split("」")[0] +
             "」分析。你的输出必须是合法 JSON，不能有任何额外文字、不能有 markdown 代码块标记。" +
             "你必须用自己的话概括与解释论文内容，不要直接复制粘贴论文原文的整句或整段。" +
-            "如果需要提及关键概念（如疾病名、分子名、技术名），可在括号中附上英文术语，但不要大段引用英文原文。",
+            "如果需要提及关键概念（如疾病名、分子名、技术名），可在括号中附上英文术语，但不要大段引用英文原文。" +
+            "subsections 字段必须存在且为数组，每个元素含 heading（字符串）、body（字符串）、bullets（字符串数组，可为空数组）。",
         },
         {
           role: "user",
@@ -138,10 +194,32 @@ async function callOnePart(
       }
     );
     const parsed = parseJsonLoose(raw) as any;
-    return {
-      summary: typeof parsed?.summary === "string" ? parsed.summary.slice(0, 200) : "",
-      detail: typeof parsed?.detail === "string" ? parsed.detail.slice(0, 8000) : "",
-    };
+    const summary = typeof parsed?.summary === "string" ? parsed.summary.slice(0, 200) : "";
+    // 兼容老格式：如果 LLM 没返回 subsections，从 detail 拆出 markdown ## 标题段
+    let subsections: Array<{ heading: string; body: string; bullets: string[] }> = [];
+    if (Array.isArray(parsed?.subsections)) {
+      subsections = parsed.subsections
+        .filter((s: any) => s && typeof s.heading === "string" && typeof s.body === "string")
+        .slice(0, 6)
+        .map((s: any) => ({
+          heading: String(s.heading).slice(0, 100),
+          body: String(s.body).slice(0, 1200),
+          bullets: Array.isArray(s.bullets)
+            ? s.bullets.filter((b: any) => typeof b === "string").slice(0, 5).map((b: any) => String(b).slice(0, 200))
+            : [],
+        }));
+    }
+    let detail = typeof parsed?.detail === "string" ? parsed.detail.slice(0, 8000) : "";
+    // 如果没有 detail 但有 subsections，自动合成一份 markdown detail 用于导出/兜底渲染
+    if (!detail && subsections.length > 0) {
+      detail = subsections
+        .map((s) => `### ${s.heading}\n\n${s.body}${s.bullets.length > 0 ? "\n\n- " + s.bullets.join("\n- ") : ""}`)
+        .join("\n\n");
+    }
+    if (!summary && subsections.length === 0 && !detail) {
+      throw new Error("Empty LLM response");
+    }
+    return { summary, detail, subsections };
   } catch (e) {
     console.warn(`[analyze] ${action} failed:`, e);
     return null;
@@ -348,9 +426,31 @@ export async function POST(req: NextRequest) {
             );
             const parsed = parseJsonLoose(raw) as any;
             if (parsed && typeof parsed.summary === "string") {
+              // Parse subsections array (new structured format)
+              let subsections: Array<{ heading: string; body: string; bullets: string[] }> = [];
+              if (Array.isArray(parsed.subsections)) {
+                subsections = parsed.subsections
+                  .filter((s: any) => s && typeof s.heading === "string" && typeof s.body === "string")
+                  .slice(0, 6)
+                  .map((s: any) => ({
+                    heading: String(s.heading).slice(0, 100),
+                    body: String(s.body).slice(0, 1200),
+                    bullets: Array.isArray(s.bullets)
+                      ? s.bullets.filter((b: any) => typeof b === "string").slice(0, 5).map((b: any) => String(b).slice(0, 200))
+                      : [],
+                  }));
+              }
+              let detail = (typeof parsed.detail === "string" ? parsed.detail : "").slice(0, 8000);
+              // 如果没有 detail 但有 subsections，自动合成 markdown detail 用于导出/兜底
+              if (!detail && subsections.length > 0) {
+                detail = subsections
+                  .map((s) => `### ${s.heading}\n\n${s.body}${s.bullets.length > 0 ? "\n\n- " + s.bullets.join("\n- ") : ""}`)
+                  .join("\n\n");
+              }
               analysis.limitsOpportunities = {
                 summary: parsed.summary.slice(0, 200),
-                detail: (typeof parsed.detail === "string" ? parsed.detail : "").slice(0, 8000),
+                detail,
+                subsections,
                 pairs: Array.isArray(parsed.pairs)
                   ? parsed.pairs
                       .filter(

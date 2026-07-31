@@ -44,6 +44,8 @@ import {
   Download,
   ChevronDown,
   FileCode2,
+  Share2,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
 import { exportAnalysisMarkdown, exportMindmapHtml } from "@/lib/export-utils";
@@ -134,6 +136,39 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
 
+  // ── Share button state ─────────────────────────────────────────────────
+  // When the user clicks "分享", we generate a URL with ?paperId=xxx and
+  // copy it to the clipboard. The checkmark icon shows for 2s to confirm.
+  const [shareCopied, setShareCopied] = useState(false);
+  const handleShare = useCallback(async () => {
+    if (!paperId) return;
+    try {
+      const url = `${window.location.origin}/app?paperId=${paperId}`;
+      // Try the modern clipboard API first; fall back to a hidden textarea
+      // for older browsers / non-secure contexts.
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    } catch (e) {
+      console.warn("[share] copy failed:", e);
+      // Fallback: open a prompt with the URL so the user can copy manually
+      const url = `${window.location.origin}/app?paperId=${paperId}`;
+      window.prompt("复制分享链接：", url);
+    }
+  }, [paperId]);
+
+
   // On mount, check if the user previously dismissed the banner.
   useEffect(() => {
     try {
@@ -178,6 +213,128 @@ export default function Home() {
     window.addEventListener("medreader:analysis-updated", handler);
     return () => window.removeEventListener("medreader:analysis-updated", handler);
   }, [paperId]);
+
+  // ── Shared-paper URL loader ────────────────────────────────────────────
+  // When the URL contains ?paperId=xxx (or ?p=xxx), treat it as a shared
+  // paper: load the PDF binary + parsed content + analysis from the server
+  // so the recipient can view everything without re-uploading.
+  //
+  // User request: "我分享给别人现在其他功能都是正常的就pdf渲染还是不对"
+  // — when sharing, all features work EXCEPT the PDF preview, because the
+  //   PdfViewer needs an ArrayBuffer that only the original uploader had.
+  //   This loader fetches the PDF from /api/paper/[id]/pdf and feeds it to
+  //   PdfViewer, restoring the PDF preview for shared-paper recipients.
+  //
+  // This runs once on mount. If the user later uploads their own PDF, the
+  // normal onFile() flow takes over and overwrites the shared state.
+  const sharedLoadRanRef = useRef(false);
+  useEffect(() => {
+    if (sharedLoadRanRef.current) return;
+    sharedLoadRanRef.current = true;
+
+    // Only run in the browser — server-side this is a no-op.
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const sharedId = params.get("paperId") || params.get("p");
+    if (!sharedId) return;
+
+    // Mark as "loading a shared paper" so the UI shows progress
+    setUploadStage("parsing");
+    setMineruStatus("正在加载分享的论文…");
+    setOutlineCollapsed(false);
+
+    (async () => {
+      try {
+        // 1. Fetch paper metadata + parsed content
+        const paperRes = await fetch(`/api/paper/${sharedId}`);
+        if (!paperRes.ok) {
+          throw new Error(`Paper fetch failed: HTTP ${paperRes.status}`);
+        }
+        const paperData = await paperRes.json();
+
+        // 2. Fetch PDF binary (for PdfViewer)
+        let pdfBuf: ArrayBuffer | null = null;
+        try {
+          const pdfRes = await fetch(`/api/paper/${sharedId}/pdf`);
+          if (pdfRes.ok) {
+            pdfBuf = await pdfRes.arrayBuffer();
+          }
+        } catch (e) {
+          console.warn("[shared] PDF binary fetch failed:", e);
+        }
+
+        // 3. Apply state — similar to onFile's post-upload state
+        setPaperId(sharedId);
+        setFileName(paperData.title || "shared-paper.pdf");
+        setPaperText(paperData.parsedText || "");
+        setPaperMarkdown(paperData.markdown || null);
+        setPaperBlocks(paperData.blocks || null);
+        setPaperImagesDir(paperData.imagesDir || null);
+        // Citations are returned by /api/paper/[id] as `citations` (already
+        // parsed from citationsJson). Set them here so the figure chain can
+        // use them for panel-chip click jumps.
+        if (Array.isArray(paperData.citations)) {
+          setCitations(paperData.citations as Citation[]);
+        }
+        if (pdfBuf) {
+          setFileData(pdfBuf);
+        }
+        // Default to PDF view if we have the binary; otherwise blocks view
+        if (pdfBuf) {
+          setActiveView("pdf");
+        } else if (paperData.blocks || paperData.markdown) {
+          setActiveView("blocks");
+        }
+        setUploadStage("analyzing");
+        setMineruStatus("正在加载分析结果…");
+
+        // 4. Fetch the analysis outline
+        try {
+          const analyzeRes = await fetch(`/api/analyze?paperId=${sharedId}`);
+          if (analyzeRes.ok) {
+            const analyzeData = await analyzeRes.json();
+            if (analyzeData.outline) {
+              setOutline(analyzeData.outline as Outline);
+            }
+          }
+        } catch (e) {
+          console.warn("[shared] analyze fetch failed:", e);
+        }
+
+        // 5. Fetch figures (Call A result) — if figures exist, mark status as done
+        try {
+          const figRes = await fetch(`/api/figures?paperId=${sharedId}`);
+          if (figRes.ok) {
+            const figData = await figRes.json();
+            if (Array.isArray(figData.figures)) {
+              setFigures(figData.figures);
+              if (figData.figures.length > 0) {
+                setFiguresStatus("done");
+              } else {
+                setFiguresStatus("idle");
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("[shared] figures fetch failed:", e);
+        }
+
+        setUploadStage("done");
+        setMineruStatus("");
+      } catch (e) {
+        console.error("[shared] load failed:", e);
+        setOutlineError(
+          e instanceof Error
+            ? `加载分享的论文失败：${e.message}`
+            : "加载分享的论文失败"
+        );
+        setUploadStage("idle");
+        setMineruStatus("");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const dismissLlmBanner = useCallback(() => {
     setLlmBannerDismissed(true);
@@ -658,6 +815,28 @@ export default function Home() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Share button — generates a URL with ?paperId=xxx that the
+            recipient can open to view the same paper + analysis + PDF.
+            Disabled until a paper is loaded (paperId is set).
+            User request: "我分享给别人现在其他功能都是正常的就pdf渲染还是不对"
+            — this button + the /api/paper/[id]/pdf route together restore
+            the PDF preview for shared-paper recipients. */}
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 gap-1.5"
+          disabled={!paperId}
+          onClick={handleShare}
+          title={paperId ? "复制分享链接" : "需先导入或加载一份论文"}
+        >
+          {shareCopied ? (
+            <Check className="h-3.5 w-3.5 text-emerald-600" />
+          ) : (
+            <Share2 className="h-3.5 w-3.5" />
+          )}
+          {shareCopied ? "已复制" : "分享"}
+        </Button>
 
         {/* Auth area */}
         {status === "loading" ? (

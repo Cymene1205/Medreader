@@ -30,14 +30,29 @@ import FigureChain, {
 
 // ── Types: new 4-layer analysis JSON shape (matches lib/analyze-stage2.ts) ──
 
+export type Subsection = {
+  heading: string;
+  body: string;
+  bullets: string[];
+};
+
 export type AnalysisJson = {
   title: string;
-  questionBackground: { summary: string; detail: string } | null;
+  questionBackground: {
+    summary: string;
+    detail: string;
+    subsections?: Subsection[];
+  } | null;
   argumentSpine: { summary: string; linchpinFigure: string | null } | null;
-  novelty: { summary: string; detail: string } | null;
+  novelty: {
+    summary: string;
+    detail: string;
+    subsections?: Subsection[];
+  } | null;
   limitsOpportunities: {
     summary: string;
     detail: string;
+    subsections?: Subsection[];
     pairs: Array<{ limitation: string; opportunity: string }>;
   } | null;
   failedParts: string[];
@@ -157,6 +172,12 @@ const SECTIONS: Array<{
   { key: "limitsOpportunities", index: 4, title: "局限与机会",   color: "#5F8B7B", soft: "#E9F2EE", border: "#C4D9D0" },  // sage green (neutral-warm)
 ];
 
+// Shared pixel-size helper — kept at module scope so standalone helper
+// components (SubsectionChain, PipelineLoadingIndicator, etc.) can use it
+// without needing it passed as a prop.
+const fs = (px: number) => `${px}px`;
+
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function OutlinePanel({
@@ -206,8 +227,6 @@ export default function OutlinePanel({
       });
     }
   }, [outline?.title]);
-
-  const fs = (px: number) => `${px}px`;
 
   // Retry a failed part
   const retryPart = useCallback(
@@ -483,11 +502,23 @@ export default function OutlinePanel({
                           )}
 
                           {/* Standard sections (问题与背景 / 创新性 / 局限与机会):
-                              render with a nicer card-style layout that
-                              matches the visual language of 论证主线.
-                              User request: "问题背景,创新性,限制性能不能也
-                              把内容像论证主线一样排版选个好看一点的排版方式" */}
-                          {sec.key !== "argumentSpine" && part && (part as any).detail && (
+                              Multi-level collapsible cards — mimics the
+                              figure-chain layer list visual language.
+                              User request: "把背景还有创新性,限制性也根据自己
+                              的内容做成多级折叠的形式,不像现在全都扑在一块儿" */}
+                          {sec.key !== "argumentSpine" && part && (part as any).subsections && (part as any).subsections.length > 0 && (
+                            <SubsectionChain
+                              subsections={(part as any).subsections}
+                              accentColor={sec.color}
+                              softColor={sec.soft}
+                              borderColor={sec.border}
+                            />
+                          )}
+
+                          {/* Fallback: if no subsections, but `detail` markdown
+                              exists (old/cached analyses), render with the
+                              single-card SectionDetail layout. */}
+                          {sec.key !== "argumentSpine" && part && !(part as any).subsections?.length && (part as any).detail && (
                             <SectionDetail
                               detail={(part as any).detail}
                               accentColor={sec.color}
@@ -498,8 +529,11 @@ export default function OutlinePanel({
 
                           {/* LimitsOpportunities: render pairs as two-column
                               限制 / 机会 cards with arrow connectors — same
-                              visual language as the figure-chain layer list. */}
+                              visual language as the figure-chain layer list.
+                              Only render when no subsections (subsections
+                              already include opportunities inline). */}
                           {sec.key === "limitsOpportunities" &&
+                            !outline.limitsOpportunities?.subsections?.length &&
                             outline.limitsOpportunities?.pairs &&
                             outline.limitsOpportunities.pairs.length > 0 && (
                               <div className="space-y-1.5 mt-2">
@@ -837,6 +871,184 @@ function PipelineLoadingIndicator({
 // ── Legacy alias kept for any external importers (unused now, but
 // removing it would force a search-and-replace across the codebase). ──
 const MineruLoadingIndicator = PipelineLoadingIndicator;
+
+// ── Subsection chain ──────────────────────────────────────────────────────
+// Multi-level collapsible cards for the 3 standard sections (问题与背景 /
+// 创新性 / 局限与机会). Mimics the figure-chain layer list visual language:
+//   - Vertical line on the left
+//   - Each subsection = one card sitting on the line with a colored dot
+//   - Card header (always visible): numbered badge + heading + body preview
+//   - Click to expand: full body paragraph + bullet list with colored dots
+//
+// User request: "把背景还有创新性,限制性也根据自己的内容做成多级折叠的形式,
+// 不像现在全都扑在一块儿,可能需要处理好提示词结构化回复,完了写好表达框长啥样,
+// 可以模仿论证主线的主体排版"
+//
+// Default state: first subsection expanded, others collapsed — gives the
+// reader a glimpse of the content immediately without overwhelming them.
+
+function SubsectionChain({
+  subsections,
+  accentColor,
+  softColor,
+  borderColor,
+}: {
+  subsections: Subsection[];
+  accentColor: string;
+  softColor: string;
+  borderColor: string;
+}) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(0);
+
+  if (!subsections || subsections.length === 0) return null;
+
+  return (
+    <div className="relative pl-5 pr-1 py-1.5">
+      {/* Vertical line on the left — same visual idiom as FigureChain */}
+      <div
+        className="absolute left-[6px] top-3 bottom-3 w-[2px]"
+        style={{ background: `${accentColor}40` }}
+        aria-hidden
+      />
+
+      <div className="space-y-1.5">
+        {subsections.map((sub, idx) => {
+          const isExpanded = expandedIdx === idx;
+          // Brief preview: first ~80 chars of body, single line, ellipsis
+          const bodyPreview = (sub.body || "").replace(/\s+/g, " ").trim().slice(0, 80);
+          const hasBullets = sub.bullets && sub.bullets.length > 0;
+
+          return (
+            <div key={idx} className="relative">
+              {/* Dot on the line */}
+              <div
+                className="absolute left-[-18px] top-3 w-[10px] h-[10px] rounded-full border-2 border-background"
+                style={{ background: accentColor }}
+                aria-hidden
+              />
+
+              {/* Card */}
+              <div
+                className={cn(
+                  "rounded-md border bg-card shadow-sm transition-all overflow-hidden",
+                  isExpanded ? "shadow-md" : "hover:shadow-sm"
+                )}
+                style={{
+                  borderColor: isExpanded ? `${accentColor}80` : borderColor,
+                }}
+              >
+                {/* Header (always visible) — click to toggle expand */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedIdx(isExpanded ? null : idx)}
+                  aria-expanded={isExpanded}
+                  className="w-full text-left px-2.5 py-2 flex items-start gap-2 transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
+                >
+                  {/* Numbered badge — colored block with the subsection index */}
+                  <span
+                    className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5"
+                    style={{ background: accentColor }}
+                  >
+                    {idx + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {/* Heading row */}
+                    <div
+                      className="font-medium leading-snug"
+                      style={{ fontSize: fs(12), color: accentColor }}
+                    >
+                      {stripMarkdownInline(sub.heading)}
+                    </div>
+                    {/* Body preview — only when collapsed (avoid duplication) */}
+                    {!isExpanded && bodyPreview && (
+                      <div
+                        className="text-muted-foreground/80 mt-0.5 leading-snug line-clamp-2"
+                        style={{ fontSize: fs(11) }}
+                      >
+                        {bodyPreview}
+                        {sub.body.length > 80 ? "…" : ""}
+                      </div>
+                    )}
+                    {/* Bullet preview — show first bullet as a chip when collapsed */}
+                    {!isExpanded && hasBullets && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {sub.bullets.slice(0, 2).map((b, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 px-1.5 py-px rounded text-[9.5px] leading-tight"
+                            style={{
+                              background: `${accentColor}12`,
+                              color: accentColor,
+                            }}
+                          >
+                            {stripMarkdownInline(b).slice(0, 40)}
+                            {b.length > 40 ? "…" : ""}
+                          </span>
+                        ))}
+                        {sub.bullets.length > 2 && (
+                          <span
+                            className="text-[9.5px] text-muted-foreground/60 px-1"
+                          >
+                            +{sub.bullets.length - 2}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <ChevronRight
+                    className={cn(
+                      "h-3.5 w-3.5 flex-shrink-0 mt-1 transition-transform",
+                      isExpanded && "rotate-90"
+                    )}
+                    style={{ color: accentColor }}
+                  />
+                </button>
+
+                {/* Expanded body */}
+                {isExpanded && (
+                  <div
+                    className="px-2.5 pb-2.5 pt-0 space-y-2 border-t"
+                    style={{ borderColor: `${accentColor}30` }}
+                  >
+                    {/* Body paragraph — full text */}
+                    {sub.body && (
+                      <div
+                        className="text-[11.5px] leading-[1.75] text-foreground/85 whitespace-pre-wrap break-words pt-2"
+                      >
+                        {stripMarkdownInline(sub.body)}
+                      </div>
+                    )}
+
+                    {/* Bullets — colored dots, similar to figure-chain layer list */}
+                    {hasBullets && (
+                      <ul className="space-y-1 pt-0.5">
+                        {sub.bullets.map((b, i) => (
+                          <li
+                            key={i}
+                            className="text-[11px] leading-relaxed flex items-start gap-1.5 list-none"
+                          >
+                            <span
+                              className="flex-shrink-0 w-1.5 h-1.5 rounded-full mt-[7px]"
+                              style={{ background: accentColor }}
+                              aria-hidden
+                            />
+                            <span className="flex-1 text-foreground/80 whitespace-pre-wrap break-words">
+                              {stripMarkdownInline(b)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ── Section detail card ───────────────────────────────────────────────────
 // Renders the `detail` markdown of a standard section (问题与背景 / 创新性 /

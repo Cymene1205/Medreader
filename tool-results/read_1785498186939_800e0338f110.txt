@@ -1,0 +1,995 @@
+     1→"use client";
+     2→
+     3→import { useState, useEffect, useCallback, useRef } from "react";
+     4→import {
+     5→  Dialog,
+     6→  DialogContent,
+     7→  DialogHeader,
+     8→  DialogTitle,
+     9→} from "@/components/ui/dialog";
+    10→import { Button } from "@/components/ui/button";
+    11→import { Badge } from "@/components/ui/badge";
+    12→import {
+    13→  Loader2,
+    14→  LayoutGrid,
+    15→  FileSearch,
+    16→  AlertCircle,
+    17→  RefreshCw,
+    18→  ChevronDown,
+    19→  ChevronRight,
+    20→} from "lucide-react";
+    21→import ReactMarkdown from "react-markdown";
+    22→import rehypeRaw from "rehype-raw";
+    23→import remarkGfm from "remark-gfm";
+    24→import { cn, stripMarkdownInline } from "@/lib/utils";
+    25→import FigureChain, {
+    26→  type Figure,
+    27→  type FigureDetail,
+    28→  type Citation,
+    29→} from "@/components/figure-chain";
+    30→
+    31→// ── Types: new 4-layer analysis JSON shape (matches lib/analyze-stage2.ts) ──
+    32→
+    33→export type AnalysisJson = {
+    34→  title: string;
+    35→  questionBackground: { summary: string; detail: string } | null;
+    36→  argumentSpine: { summary: string; linchpinFigure: string | null } | null;
+    37→  novelty: { summary: string; detail: string } | null;
+    38→  limitsOpportunities: {
+    39→    summary: string;
+    40→    detail: string;
+    41→    pairs: Array<{ limitation: string; opportunity: string }>;
+    42→  } | null;
+    43→  failedParts: string[];
+    44→};
+    45→
+    46→// ── Legacy types preserved for backward compat with page.tsx ──────────────
+    47→// page.tsx imports OutlineChild/OutlineSection/StructuredHeading from this
+    48→// file — we keep them so the import doesn't break. They're unused by the
+    49→// new rendering code but still referenced by the old onChildClick signature.
+    50→
+    51→export type OutlineChild = {
+    52→  id: string;
+    53→  title: string;
+    54→  summary?: string;
+    55→  keywords?: string[];
+    56→  quote?: string;
+    57→};
+    58→
+    59→export type OutlineSection = {
+    60→  id: string;
+    61→  title: string;
+    62→  summary?: string;
+    63→  detail?: string;
+    64→  keyPoints?: string[];
+    65→  quote?: string;
+    66→  children: OutlineChild[];
+    67→};
+    68→
+    69→export type PaperHeading = {
+    70→  level: number;
+    71→  text: string;
+    72→  origText?: string;
+    73→};
+    74→
+    75→export type StructuredHeadingChild = {
+    76→  title: string;
+    77→  origTitle: string;
+    78→};
+    79→
+    80→export type StructuredHeading = {
+    81→  title: string;
+    82→  origTitle: string;
+    83→  kind: "major" | "metadata";
+    84→  children: StructuredHeadingChild[];
+    85→};
+    86→
+    87→export type Outline = AnalysisJson & {
+    88→  // Legacy fields (kept for backward compat; new code ignores them)
+    89→  sections?: OutlineSection[];
+    90→  structuredHeadings?: StructuredHeading[];
+    91→};
+    92→
+    93→// ── Props ──────────────────────────────────────────────────────────────────
+    94→
+    95→type Props = {
+    96→  outline: Outline | null;
+    97→  loading: boolean;
+    98→  /** Legacy — kept because page.tsx still passes it. Unused in new render. */
+    99→  onChildClick?: (child: OutlineChild, section: OutlineSection) => void;
+   100→  activeChildId?: string;
+   101→  collapsed?: boolean;
+   102→  onCollapsedChange?: (collapsed: boolean) => void;
+   103→
+   104→  /** New: paperId — needed to fetch figures + retry failed parts. */
+   105→  paperId?: string | null;
+   106→  /** New: figures list (passed from parent, which polls /api/figures) */
+   107→  figures?: Figure[];
+   108→  /** New: citations list (passed from parent) */
+   109→  citations?: Citation[];
+   110→  /** New: callbacks for figure interactions */
+   111→  onPanelChipClick?: (quote: string, pageIndex: number) => void;
+   112→  onJumpToPage?: (pageIndex: number) => void;
+   113→  /**
+   114→   * Stage 2 progress signal from the parent. Indicates where the figures /
+   115→   * argumentSpine pipeline currently is so we can show a progress indicator
+   116→   * in the 论证主线 section. Possible values:
+   117→   *   - "idle"        : no paper loaded
+   118→   *   - "extracting"  : MinerU figure extraction done, Call A not yet triggered
+   119→   *   - "call-a"      : Call A LLM (batch analyse all figures) in flight
+   120→   *   - "spine"       : Call A done, argumentSpine generation in flight
+   121→   *   - "done"        : Stage 2 complete — figures + spine both ready
+   122→   *   - "error"       : Call A or spine failed
+   123→   */
+   124→  figuresStatus?: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+   125→
+   126→  /**
+   127→   * Upload-stage signal from the parent — drives the "MinerU 正在加载"
+   128→   * indicator shown in the left panel BEFORE the LLM analysis starts.
+   129→   *   - "idle"      : no paper yet (show the empty placeholder)
+   130→   *   - "uploading" : PDF upload in flight
+   131→   *   - "parsing"   : MinerU 解析中（30-90s，最长的等待阶段）
+   132→   *   - "analyzing" : Stage 1 LLM 分析中（此时 outlineLoading 也为 true）
+   133→   *   - "done"      : 全部完成
+   134→   */
+   135→  uploadStage?: "idle" | "uploading" | "parsing" | "analyzing" | "done";
+   136→  /** Human-readable status text from the parent (e.g. "MinerU 解析中（30-90 秒）…"). */
+   137→  mineruStatus?: string;
+   138→};
+   139→
+   140→// ── Section config: which parts exist + their display metadata ────────────
+   141→
+   142→type SectionKey = "questionBackground" | "argumentSpine" | "novelty" | "limitsOpportunities";
+   143→
+   144→// Low-saturation, multi-hue palette — cool/warm balance, no single-color wash.
+   145→// Each section gets its own hue family with matched tint & border.
+   146→const SECTIONS: Array<{
+   147→  key: SectionKey;
+   148→  index: number;
+   149→  title: string;
+   150→  color: string;
+   151→  soft: string;
+   152→  border: string;
+   153→}> = [
+   154→  { key: "questionBackground", index: 1, title: "问题与背景", color: "#5B7C99", soft: "#EAF0F5", border: "#C7D5E0" },  // slate-blue (cool)
+   155→  { key: "argumentSpine",     index: 2, title: "论证主线",     color: "#B8845C", soft: "#F7EFE7", border: "#E0CBB4" },  // warm tan (warm)
+   156→  { key: "novelty",           index: 3, title: "创新性",       color: "#7B6BA8", soft: "#EFEAF5", border: "#D5CCE6" },  // muted violet (cool-purple)
+   157→  { key: "limitsOpportunities", index: 4, title: "局限与机会",   color: "#5F8B7B", soft: "#E9F2EE", border: "#C4D9D0" },  // sage green (neutral-warm)
+   158→];
+   159→
+   160→// ── Main component ─────────────────────────────────────────────────────────
+   161→
+   162→export default function OutlinePanel({
+   163→  outline,
+   164→  loading,
+   165→  collapsed = false,
+   166→  onCollapsedChange,
+   167→  paperId,
+   168→  figures = [],
+   169→  citations = [],
+   170→  onPanelChipClick,
+   171→  onJumpToPage,
+   172→  figuresStatus = "idle",
+   173→  uploadStage = "idle",
+   174→  mineruStatus = "",
+   175→}: Props) {
+   176→  const [retrying, setRetrying] = useState<string | null>(null);
+   177→
+   178→  // ── Per-section fold state ────────────────────────────────────────────
+   179→  // User request: "开始的时候就展开成这样就可以了,不用把所有的内容都展开"
+   180→  // → only ONE section expanded by default (问题与背景), the other three
+   181→  //   collapsed. User can click any header to expand it.
+   182→  // The state is keyed by SectionKey. We initialize lazily so a freshly
+   183→  // loaded outline starts in the right fold state regardless of when its
+   184→  // content arrives.
+   185→  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
+   186→    questionBackground: true,   // 默认展开第一个
+   187→    argumentSpine: false,
+   188→    novelty: false,
+   189→    limitsOpportunities: false,
+   190→  });
+   191→  const toggleSection = useCallback((key: SectionKey) => {
+   192→    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+   193→  }, []);
+   194→
+   195→  // 当一个全新的 outline 到达时，重置回默认折叠态（仅 questionBackground 展开）。
+   196→  // 否则切换论文时上一份的展开状态会残留。
+   197→  const outlineTitleRef = useRef<string | null>(null);
+   198→  useEffect(() => {
+   199→    if (outline?.title && outlineTitleRef.current !== outline.title) {
+   200→      outlineTitleRef.current = outline.title;
+   201→      setOpenSections({
+   202→        questionBackground: true,
+   203→        argumentSpine: false,
+   204→        novelty: false,
+   205→        limitsOpportunities: false,
+   206→      });
+   207→    }
+   208→  }, [outline?.title]);
+   209→
+   210→  const fs = (px: number) => `${px}px`;
+   211→
+   212→  // Retry a failed part
+   213→  const retryPart = useCallback(
+   214→    async (part: string) => {
+   215→      if (!paperId) return;
+   216→      setRetrying(part);
+   217→      try {
+   218→        const res = await fetch(`/api/analyze?part=${part}`, {
+   219→          method: "POST",
+   220→          headers: { "Content-Type": "application/json" },
+   221→          body: JSON.stringify({ paperId }),
+   222→        });
+   223→        if (!res.ok) {
+   224→          const d = await res.json().catch(() => ({}));
+   225→          throw new Error(d.error || `HTTP ${res.status}`);
+   226→        }
+   227→        // Trigger parent refresh — parent will re-fetch analysisJson
+   228→        window.dispatchEvent(new CustomEvent("medreader:analysis-updated"));
+   229→      } catch (e) {
+   230→        console.warn(`[outline-panel] retry ${part} failed:`, e);
+   231→      } finally {
+   232→        setRetrying(null);
+   233→      }
+   234→    },
+   235→    [paperId]
+   236→  );
+   237→
+   238→  // ── Header (always rendered) ────────────────────────────────────────────
+   239→  // Determine whether we're in the upload + parse + analyze pipeline.
+   240→  // User request: "刚开始现在不是有minerU解析框我很喜欢,可以吧agent分析
+   241→  // 的那个进程也放在那里显示一致一点,进度条拉长一点儿把agent分析也放进去"
+   242→  // → unify the MinerU loading indicator and the Agent analysis indicator
+   243→  //   into a single 4-step progress bar (上传 PDF → MinerU 解析 → 图表提取
+   244→  //   → 智能分析). Show the same component for both phases so the user sees
+   245→  //   one continuous progress flow on the left side.
+   246→  const isMineruLoading =
+   247→    !outline && (uploadStage === "uploading" || uploadStage === "parsing");
+   248→  // True while Stage 1 LLM analysis is running (after MinerU finished).
+   249→  const isAnalyzing =
+   250→    loading && !outline && uploadStage === "analyzing";
+   251→  // True once Stage 2 (figure extraction + Call A + spine) is in flight
+   252→  // AND the outline isn't ready yet — adds a "图表提取" sub-step to the bar.
+   253→  const isExtractingFigures =
+   254→    !outline && (figuresStatus === "extracting" || figuresStatus === "call-a");
+   255→
+   256→  return (
+   257→    <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
+   258→      {/* Panel header — always visible, click to collapse/expand the whole panel.
+   259→          Restored per user request: "我还是喜欢之前的那种排版方式,右上方展开栏".
+   260→          The outer `collapsed` prop controls the panel-level collapse (whole
+   261→          panel hidden except header); individual sections inside have their
+   262→          own per-section fold state (see openSections above). */}
+   263→      <button
+   264→        type="button"
+   265→        onClick={() => onCollapsedChange?.(!collapsed)}
+   266→        className={cn(
+   267→          "w-full px-3 py-2 flex items-center gap-2 text-left flex-shrink-0 transition-colors",
+   268→          "hover:bg-slate-100/60 dark:hover:bg-slate-800/40",
+   269→          "border-b border-slate-200/70 dark:border-slate-800/60",
+   270→          "bg-gradient-to-r from-slate-50/80 to-slate-100/40 dark:from-slate-900/60 dark:to-slate-900/30"
+   271→        )}
+   272→        title={collapsed ? "展开全文框架" : "折叠全文框架"}
+   273→        aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
+   274→        aria-expanded={!collapsed}
+   275→      >
+   276→        <LayoutGrid className="h-3.5 w-3.5 text-slate-600 dark:text-slate-400 flex-shrink-0" />
+   277→        <span className="text-[12px] font-semibold flex-1 text-slate-700 dark:text-slate-300">
+   278→          全文框架
+   279→        </span>
+   280→        {outline && (
+   281→          <Badge
+   282→            variant="secondary"
+   283→            className="text-[10px] h-4 px-1.5 bg-slate-200/70 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300"
+   284→          >
+   285→            4 层
+   286→          </Badge>
+   287→        )}
+   288→        {/* 右上方展开/折叠按钮 — restores the previous layout's panel-level toggle */}
+   289→        <ChevronRight
+   290→          className={cn(
+   291→            "h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0",
+   292→            !collapsed && "rotate-90"
+   293→          )}
+   294→        />
+   295→      </button>
+   296→
+   297→      {!collapsed && (
+   298→        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+   299→          <div className="p-2">
+   300→            {/* Unified loading indicator — shown for the ENTIRE upload →
+   301→                MinerU parse → figure extraction → Agent analysis pipeline.
+   302→                User request: unify so the user sees one continuous progress
+   303→                bar on the left side rather than two different loading UIs. */}
+   304→            {(isMineruLoading || isAnalyzing || isExtractingFigures) && (
+   305→              <PipelineLoadingIndicator
+   306→                uploadStage={uploadStage}
+   307→                figuresStatus={figuresStatus}
+   308→                figuresCount={figures.length}
+   309→                statusMessage={mineruStatus}
+   310→              />
+   311→            )}
+   312→
+   313→            {/* 完全空闲：还没传 PDF */}
+   314→            {!loading && !outline && uploadStage === "idle" && (
+   315→              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground/70 gap-2 px-4 text-center">
+   316→                <FileSearch className="h-6 w-6 opacity-40" />
+   317→                <p className="text-xs">导入 PDF 后，Agent 将自动生成分析</p>
+   318→                <p className="text-[10px]">
+   319→                  4 层结构：问题与背景 · 论证主线 · 创新性 · 局限与机会
+   320→                </p>
+   321→              </div>
+   322→            )}
+   323→
+   324→            {outline && (
+   325→              <div className="space-y-1.5">
+   326→                {SECTIONS.map((sec) => {
+   327→                  const part = outline[sec.key];
+   328→                  // Per-section fold state — defaults set above
+   329→                  // (argumentSpine collapsed, others expanded).
+   330→                  const isOpen = openSections[sec.key];
+   331→                  const isFailed = outline.failedParts?.includes(sec.key);
+   332→                  const isRetrying = retrying === sec.key;
+   333→
+   334→                  // Determine if section has content
+   335→                  const hasContent = (() => {
+   336→                    if (sec.key === "argumentSpine") {
+   337→                      return outline.argumentSpine?.summary || figures.length > 0;
+   338→                    }
+   339→                    if (sec.key === "limitsOpportunities") {
+   340→                      return outline.limitsOpportunities?.summary;
+   341→                    }
+   342→                    return part && (part as any).summary;
+   343→                  })();
+   344→
+   345→                  return (
+   346→                    <div
+   347→                      key={sec.key}
+   348→                      className={cn(
+   349→                        "rounded-md border bg-card shadow-sm transition-all"
+   350→                      )}
+   351→                      style={{
+   352→                        borderLeft: `3px solid ${sec.color}`,
+   353→                        borderColor: sec.border,
+   354→                      }}
+   355→                    >
+   356→                      {/* Header — clickable to fold/unfold the section.
+   357→                          Main sections (Q&A, Novelty, Limits) start expanded;
+   358→                          ArgumentSpine starts collapsed (per user request:
+   359→                          "大标题默认展开, 论证主线默认缩起来"). */}
+   360→                      <button
+   361→                        type="button"
+   362→                        onClick={() => toggleSection(sec.key)}
+   363→                        aria-expanded={isOpen}
+   364→                        className={cn(
+   365→                          "w-full text-left px-2.5 py-2 flex items-start gap-2",
+   366→                          "rounded-t-md transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]",
+   367→                          "focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40",
+   368→                          !isOpen && "rounded-b-md"
+   369→                        )}
+   370→                        style={{ background: sec.soft }}
+   371→                      >
+   372→                        {/* Chevron fold indicator */}
+   373→                        <span className="flex-shrink-0 w-3 mt-0.5 flex items-center justify-center">
+   374→                          {isOpen ? (
+   375→                            <ChevronDown
+   376→                              className="h-3 w-3"
+   377→                              style={{ color: sec.color }}
+   378→                            />
+   379→                          ) : (
+   380→                            <ChevronRight
+   381→                              className="h-3 w-3"
+   382→                              style={{ color: sec.color }}
+   383→                            />
+   384→                          )}
+   385→                        </span>
+   386→                        <span
+   387→                          className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5"
+   388→                          style={{ background: sec.color }}
+   389→                        >
+   390→                          {sec.index}
+   391→                        </span>
+   392→                        <div className="flex-1 min-w-0">
+   393→                          <div
+   394→                            className="font-medium leading-snug"
+   395→                            style={{ fontSize: fs(13), color: sec.color }}
+   396→                          >
+   397→                            {sec.title}
+   398→                          </div>
+   399→                          {hasContent && (part as any)?.summary && (
+   400→                            <div
+   401→                              className={cn(
+   402→                                "text-muted-foreground mt-0.5 whitespace-pre-wrap break-words",
+   403→                                // 旧版折叠态会 line-clamp-2 截断 summary，
+   404→                                // 用户反馈「希望展示完整」——现在无论开合都完整展示。
+   405→                                "line-clamp-none"
+   406→                              )}
+   407→                              style={{ fontSize: fs(11) }}
+   408→                            >
+   409→                              {stripMarkdownInline((part as any).summary)}
+   410→                            </div>
+   411→                          )}
+   412→                          {!hasContent && !isFailed && sec.key !== "argumentSpine" && (
+   413→                            <div
+   414→                              className="text-muted-foreground/60 mt-0.5 italic"
+   415→                              style={{ fontSize: fs(11) }}
+   416→                            >
+   417→                              正在生成…
+   418→                            </div>
+   419→                          )}
+   420→                          {!hasContent && !isFailed && sec.key === "argumentSpine" && (
+   421→                            <ArgumentSpineProgress
+   422→                              figuresStatus={figuresStatus}
+   423→                              figuresCount={figures.length}
+   424→                              hasSpine={!!outline.argumentSpine?.summary}
+   425→                            />
+   426→                          )}
+   427→                          {isFailed && (
+   428→                            <div className="mt-1 flex items-center gap-1.5">
+   429→                              <span className="text-[10px] text-amber-600 flex items-center gap-1">
+   430→                                <AlertCircle className="h-3 w-3" />
+   431→                                生成失败
+   432→                              </span>
+   433→                              <Button
+   434→                                size="sm"
+   435→                                variant="outline"
+   436→                                className="h-5 text-[9px] px-1.5 py-0"
+   437→                                disabled={isRetrying}
+   438→                                onClick={(e) => {
+   439→                                  e.stopPropagation();
+   440→                                  retryPart(sec.key);
+   441→                                }}
+   442→                              >
+   443→                                {isRetrying ? (
+   444→                                  <Loader2 className="h-2.5 w-2.5 animate-spin mr-0.5" />
+   445→                                ) : (
+   446→                                  <RefreshCw className="h-2.5 w-2.5 mr-0.5" />
+   447→                                )}
+   448→                                重试
+   449→                              </Button>
+   450→                            </div>
+   451→                          )}
+   452→                        </div>
+   453→                      </button>
+   454→
+   455→                      {/* Body — only rendered when the section is open.
+   456→                          When closed, the button gets rounded-b-md so the
+   457→                          section header looks like a tidy collapsed chip. */}
+   458→                      {isOpen && (
+   459→                        <div className="px-2.5 pb-2.5 pt-0 space-y-2">
+   460→                          {/* ArgumentSpine: summary is already shown in the
+   461→                              section header (always visible whether open or
+   462→                              collapsed). Per user request, do NOT repeat it
+   463→                              here in the expanded body — only show the figure
+   464→                              chain. */}
+   465→                          {sec.key === "argumentSpine" && (
+   466→                            <>
+   467→                              {figures.length > 0 ? (
+   468→                                <FigureChain
+   469→                                  paperId={paperId || null}
+   470→                                  figures={figures}
+   471→                                  citations={citations}
+   472→                                  onPanelChipClick={onPanelChipClick || (() => {})}
+   473→                                  onJumpToPage={onJumpToPage || (() => {})}
+   474→                                />
+   475→                              ) : (
+   476→                                <div className="text-center py-3 text-[10px] text-muted-foreground/60">
+   477→                                  {loading
+   478→                                    ? "图表分析中…"
+   479→                                    : "（无图表数据 — 当前解析模式不支持）"}
+   480→                                </div>
+   481→                              )}
+   482→                            </>
+   483→                          )}
+   484→
+   485→                          {/* Standard sections (问题与背景 / 创新性 / 局限与机会):
+   486→                              render with a nicer card-style layout that
+   487→                              matches the visual language of 论证主线.
+   488→                              User request: "问题背景,创新性,限制性能不能也
+   489→                              把内容像论证主线一样排版选个好看一点的排版方式" */}
+   490→                          {sec.key !== "argumentSpine" && part && (part as any).detail && (
+   491→                            <SectionDetail
+   492→                              detail={(part as any).detail}
+   493→                              accentColor={sec.color}
+   494→                              softColor={sec.soft}
+   495→                              borderColor={sec.border}
+   496→                            />
+   497→                          )}
+   498→
+   499→                          {/* LimitsOpportunities: render pairs as two-column
+   500→                              限制 / 机会 cards with arrow connectors — same
+   501→                              visual language as the figure-chain layer list. */}
+   502→                          {sec.key === "limitsOpportunities" &&
+   503→                            outline.limitsOpportunities?.pairs &&
+   504→                            outline.limitsOpportunities.pairs.length > 0 && (
+   505→                              <div className="space-y-1.5 mt-2">
+   506→                                {outline.limitsOpportunities.pairs.map((p, i) => (
+   507→                                  <div
+   508→                                    key={i}
+   509→                                    className="rounded-md border bg-card overflow-hidden shadow-sm"
+   510→                                    style={{ borderColor: sec.border }}
+   511→                                  >
+   512→                                    {/* Pair header: index badge */}
+   513→                                    <div
+   514→                                      className="px-2 py-1 flex items-center gap-1.5"
+   515→                                      style={{ background: sec.soft }}
+   516→                                    >
+   517→                                      <span
+   518→                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-bold text-white flex items-center justify-center"
+   519→                                        style={{ background: sec.color }}
+   520→                                      >
+   521→                                        {i + 1}
+   522→                                      </span>
+   523→                                      <span
+   524→                                        className="text-[10px] font-medium uppercase tracking-wide"
+   525→                                        style={{ color: sec.color }}
+   526→                                      >
+   527→                                        局限 → 机会
+   528→                                      </span>
+   529→                                    </div>
+   530→                                    {/* Limitation row */}
+   531→                                    <div className="px-2 py-1.5 flex items-start gap-1.5 border-b border-dashed" style={{ borderColor: sec.border }}>
+   532→                                      <span
+   533→                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-mono font-bold text-white flex items-center justify-center mt-0.5"
+   534→                                        style={{ background: "#C8556C" }}
+   535→                                      >
+   536→                                        L
+   537→                                      </span>
+   538→                                      <span className="flex-1 text-[11px] leading-relaxed text-foreground/85 whitespace-pre-wrap break-words">
+   539→                                        {stripMarkdownInline(p.limitation)}
+   540→                                      </span>
+   541→                                    </div>
+   542→                                    {/* Opportunity row */}
+   543→                                    <div className="px-2 py-1.5 flex items-start gap-1.5 bg-muted/20">
+   544→                                      <span
+   545→                                        className="flex-shrink-0 w-4 h-4 rounded text-[9px] font-mono font-bold text-white flex items-center justify-center mt-0.5"
+   546→                                        style={{ background: sec.color }}
+   547→                                      >
+   548→                                        O
+   549→                                      </span>
+   550→                                      <span className="flex-1 text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
+   551→                                        {stripMarkdownInline(p.opportunity)}
+   552→                                      </span>
+   553→                                    </div>
+   554→                                  </div>
+   555→                                ))}
+   556→                              </div>
+   557→                            )}
+   558→                        </div>
+   559→                      )}
+   560→                    </div>
+   561→                  );
+   562→                })}
+   563→
+   564→                {/* Footer note */}
+   565→                <div className="text-[10px] text-muted-foreground/50 text-center py-2 px-2">
+   566→                  AI 概括生成 · 点击图表可跳转原文核验
+   567→                </div>
+   568→              </div>
+   569→            )}
+   570→          </div>
+   571→        </div>
+   572→      )}
+   573→    </div>
+   574→  );
+   575→}
+   576→
+   577→// ── ArgumentSpine progress indicator ──────────────────────────────────────
+   578→// Shows the current Stage 2 sub-step inside the 论证主线 card header so the
+   579→// user can see why it's "still loading" — figure extraction / Call A / spine
+   580→// generation each have their own message and progress dot.
+   581→
+   582→function ArgumentSpineProgress({
+   583→  figuresStatus,
+   584→  figuresCount,
+   585→  hasSpine,
+   586→}: {
+   587→  figuresStatus: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+   588→  figuresCount: number;
+   589→  hasSpine: boolean;
+   590→}) {
+   591→  // Steps: 1) 提取图表  2) Call A 批量分析  3) 生成论证主线
+   592→  // Each step is one of: done / active / pending
+   593→  type StepState = "done" | "active" | "pending";
+   594→  const steps: Array<{ key: string; label: string; state: StepState }> = (() => {
+   595→    if (figuresStatus === "error") {
+   596→      return [
+   597→        { key: "extract", label: "提取图表", state: figuresCount > 0 ? "done" : "active" },
+   598→        { key: "calla", label: "Call A 分析", state: "pending" },
+   599→        { key: "spine", label: "生成主线", state: "pending" },
+   600→      ];
+   601→    }
+   602→    if (hasSpine && figuresStatus === "done") {
+   603→      return [
+   604→        { key: "extract", label: "提取图表", state: "done" },
+   605→        { key: "calla", label: "Call A 分析", state: "done" },
+   606→        { key: "spine", label: "生成主线", state: "done" },
+   607→      ];
+   608→    }
+   609→    if (figuresStatus === "spine") {
+   610→      return [
+   611→        { key: "extract", label: "提取图表", state: "done" },
+   612→        { key: "calla", label: "Call A 分析", state: "done" },
+   613→        { key: "spine", label: "生成主线", state: "active" },
+   614→      ];
+   615→    }
+   616→    if (figuresStatus === "call-a") {
+   617→      return [
+   618→        { key: "extract", label: "提取图表", state: "done" },
+   619→        { key: "calla", label: "Call A 分析", state: "active" },
+   620→        { key: "spine", label: "生成主线", state: "pending" },
+   621→      ];
+   622→    }
+   623→    // idle / extracting
+   624→    return [
+   625→      { key: "extract", label: "提取图表", state: figuresStatus === "extracting" ? "active" : "pending" },
+   626→      { key: "calla", label: "Call A 分析", state: "pending" },
+   627→      { key: "spine", label: "生成主线", state: "pending" },
+   628→    ];
+   629→  })();
+   630→
+   631→  const currentLabel = (() => {
+   632→    const active = steps.find((s) => s.state === "active");
+   633→    if (active) return active.label + "中…";
+   634→    if (figuresStatus === "error") return "生成失败";
+   635→    if (steps.every((s) => s.state === "done")) return "完成";
+   636→    return "等待中…";
+   637→  })();
+   638→
+   639→  return (
+   640→    <div className="mt-1.5 space-y-1">
+   641→      {/* Step dots */}
+   642→      <div className="flex items-center gap-1">
+   643→        {steps.map((s, i) => (
+   644→          <div key={s.key} className="flex items-center gap-1 flex-1">
+   645→            <div
+   646→              className={cn(
+   647→                "h-1.5 w-1.5 rounded-full flex-shrink-0",
+   648→                s.state === "done" && "bg-emerald-500",
+   649→                s.state === "active" && "bg-teal-500 animate-pulse",
+   650→                s.state === "pending" && "bg-muted-foreground/30"
+   651→              )}
+   652→            />
+   653→            <span
+   654→              className={cn(
+   655→                "text-[9.5px] truncate",
+   656→                s.state === "done" && "text-emerald-600 dark:text-emerald-400",
+   657→                s.state === "active" && "text-teal-600 dark:text-teal-400 font-medium",
+   658→                s.state === "pending" && "text-muted-foreground/60"
+   659→              )}
+   660→            >
+   661→              {s.label}
+   662→            </span>
+   663→            {i < steps.length - 1 && (
+   664→              <div
+   665→                className={cn(
+   666→                  "flex-1 h-px",
+   667→                  s.state === "done" ? "bg-emerald-500/40" : "bg-border"
+   668→                )}
+   669→              />
+   670→            )}
+   671→          </div>
+   672→        ))}
+   673→      </div>
+   674→      {/* Status text */}
+   675→      <div className="text-[10.5px] text-muted-foreground/70 italic">
+   676→        {currentLabel}
+   677→        {figuresCount > 0 && figuresStatus !== "done" && (
+   678→          <span className="ml-1.5 text-muted-foreground/50">
+   679→            · 已提取 {figuresCount} 张主图
+   680→          </span>
+   681→        )}
+   682→      </div>
+   683→    </div>
+   684→  );
+   685→}
+   686→
+   687→// ── Pipeline loading indicator ────────────────────────────────────────────
+   688→// Unified progress bar covering the ENTIRE pre-outline pipeline:
+   689→//   Step 1: 上传 PDF            (uploadStage: uploading)
+   690→//   Step 2: MinerU 解析          (uploadStage: parsing)
+   691→//   Step 3: 图表提取             (figuresStatus: extracting → call-a)
+   692→//   Step 4: 智能分析             (uploadStage: analyzing, or figuresStatus: spine)
+   693→//
+   694→// User request: "刚开始现在不是有minerU解析框我很喜欢,可以吧agent分析的那个
+   695→// 进程也放在那里显示一致一点,进度条拉长一点儿把agent分析也放进去"
+   696→// → one indicator, four steps, longer bar, consistent visuals across phases.
+   697→
+   698→function PipelineLoadingIndicator({
+   699→  uploadStage,
+   700→  figuresStatus,
+   701→  figuresCount,
+   702→  statusMessage,
+   703→}: {
+   704→  uploadStage: "uploading" | "parsing" | "analyzing" | "idle" | "done";
+   705→  figuresStatus: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+   706→  figuresCount: number;
+   707→  statusMessage?: string;
+   708→}) {
+   709→  // Four-step progress — wider bar, distinct sub-status for each phase.
+   710→  type StepState = "done" | "active" | "pending";
+   711→  const steps: Array<{ key: string; label: string; state: StepState }> = (() => {
+   712→    // Upload phase
+   713→    if (uploadStage === "uploading") {
+   714→      return [
+   715→        { key: "upload",  label: "上传 PDF",     state: "active" },
+   716→        { key: "parse",   label: "MinerU 解析",  state: "pending" },
+   717→        { key: "extract", label: "图表提取",     state: "pending" },
+   718→        { key: "analyze", label: "智能分析",     state: "pending" },
+   719→      ];
+   720→    }
+   721→    // MinerU parsing phase
+   722→    if (uploadStage === "parsing") {
+   723→      return [
+   724→        { key: "upload",  label: "上传 PDF",     state: "done" },
+   725→        { key: "parse",   label: "MinerU 解析",  state: "active" },
+   726→        { key: "extract", label: "图表提取",     state: "pending" },
+   727→        { key: "analyze", label: "智能分析",     state: "pending" },
+   728→      ];
+   729→    }
+   730→    // Figure extraction phase (after MinerU done, Call A in flight)
+   731→    if (figuresStatus === "extracting" || figuresStatus === "call-a") {
+   732→      return [
+   733→        { key: "upload",  label: "上传 PDF",     state: "done" },
+   734→        { key: "parse",   label: "MinerU 解析",  state: "done" },
+   735→        { key: "extract", label: "图表提取",     state: "active" },
+   736→        { key: "analyze", label: "智能分析",     state: "pending" },
+   737→      ];
+   738→    }
+   739→    // Agent analysis phase (Stage 1 LLM call in flight, or Stage 2 spine)
+   740→    if (uploadStage === "analyzing" || figuresStatus === "spine") {
+   741→      return [
+   742→        { key: "upload",  label: "上传 PDF",     state: "done" },
+   743→        { key: "parse",   label: "MinerU 解析",  state: "done" },
+   744→        { key: "extract", label: "图表提取",     state: figuresCount > 0 ? "done" : "active" },
+   745→        { key: "analyze", label: "智能分析",     state: "active" },
+   746→      ];
+   747→    }
+   748→    return [
+   749→      { key: "upload",  label: "上传 PDF",     state: "pending" },
+   750→      { key: "parse",   label: "MinerU 解析",  state: "pending" },
+   751→      { key: "extract", label: "图表提取",     state: "pending" },
+   752→      { key: "analyze", label: "智能分析",     state: "pending" },
+   753→    ];
+   754→  })();
+   755→
+   756→  const headline =
+   757→    uploadStage === "uploading" ? "正在上传 PDF…"
+   758→    : uploadStage === "parsing"  ? "MinerU 正在解析 PDF…"
+   759→    : figuresStatus === "extracting" || figuresStatus === "call-a"
+   760→      ? "正在提取图表并生成层级化分析…"
+   761→      : uploadStage === "analyzing" || figuresStatus === "spine"
+   762→        ? "Agent 正在生成 4 层结构化分析…"
+   763→        : "等待中…";
+   764→
+   765→  // Per-stage tip — gives the user context about what's happening behind
+   766→  // the scenes at each step so they don't think the page is frozen.
+   767→  const tip =
+   768→    uploadStage === "uploading" ? "正在将 PDF 上传至服务器，随后启动结构化解析。"
+   769→    : uploadStage === "parsing" ? "MinerU 正在抽取段落、图表与版式信息，通常需要 30-90 秒，复杂 PDF 可能更久。"
+   770→    : figuresStatus === "extracting" || figuresStatus === "call-a"
+   771→      ? "MinerU 完成解析，正在批量分析所有主图（Call A），用于构建论证主线。"
+   772→      : uploadStage === "analyzing" || figuresStatus === "spine"
+   773→        ? "正在生成 4 层结构化分析（问题与背景 · 论证主线 · 创新性 · 局限与机会），约 15-30 秒。"
+   774→        : "";
+   775→
+   776→  return (
+   777→    <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-gradient-to-b from-slate-50 to-slate-50/40 dark:from-slate-900/40 dark:to-slate-900/20 p-3 space-y-2.5">
+   778→      {/* Headline */}
+   779→      <div className="flex items-center gap-2">
+   780→        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-600 dark:text-slate-400 flex-shrink-0" />
+   781→        <span className="text-[12px] font-medium text-slate-700 dark:text-slate-300">
+   782→          {headline}
+   783→        </span>
+   784→      </div>
+   785→
+   786→      {/* 4-step progress dots — wider bar, equal-width columns */}
+   787→      <div className="flex items-stretch gap-0.5">
+   788→        {steps.map((s, i) => (
+   789→          <div key={s.key} className="flex items-center gap-1 flex-1 min-w-0">
+   790→            <div
+   791→              className={cn(
+   792→                "h-1.5 w-1.5 rounded-full flex-shrink-0",
+   793→                s.state === "done" && "bg-emerald-500",
+   794→                s.state === "active" && "bg-slate-600 dark:bg-slate-300 animate-pulse",
+   795→                s.state === "pending" && "bg-muted-foreground/25"
+   796→              )}
+   797→            />
+   798→            <span
+   799→              className={cn(
+   800→                "text-[9.5px] truncate leading-tight",
+   801→                s.state === "done" && "text-emerald-600 dark:text-emerald-400",
+   802→                s.state === "active" && "text-slate-700 dark:text-slate-200 font-medium",
+   803→                s.state === "pending" && "text-muted-foreground/60"
+   804→              )}
+   805→            >
+   806→              {s.label}
+   807→            </span>
+   808→            {i < steps.length - 1 && (
+   809→              <div
+   810→                className={cn(
+   811→                  "flex-1 h-px min-w-[4px] mx-0.5",
+   812→                  s.state === "done" ? "bg-emerald-500/40" : "bg-border"
+   813→                )}
+   814→              />
+   815→            )}
+   816→          </div>
+   817→        ))}
+   818→      </div>
+   819→
+   820→      {/* Live status message from parent (e.g. "MinerU 解析中…（已等 60s）") */}
+   821→      {statusMessage && (
+   822→        <div className="text-[10.5px] text-muted-foreground/70 italic leading-relaxed break-words">
+   823→          {statusMessage}
+   824→        </div>
+   825→      )}
+   826→
+   827→      {/* Helpful tip — explains what's happening behind the scenes */}
+   828→      {tip && (
+   829→        <div className="text-[10px] text-muted-foreground/60 leading-relaxed border-t border-slate-200/60 dark:border-slate-800/60 pt-2">
+   830→          {tip}
+   831→        </div>
+   832→      )}
+   833→    </div>
+   834→  );
+   835→}
+   836→
+   837→// ── Legacy alias kept for any external importers (unused now, but
+   838→// removing it would force a search-and-replace across the codebase). ──
+   839→const MineruLoadingIndicator = PipelineLoadingIndicator;
+   840→
+   841→// ── Section detail card ───────────────────────────────────────────────────
+   842→// Renders the `detail` markdown of a standard section (问题与背景 / 创新性 /
+   843→// 局限与机会) with a card-style layout that matches the visual language of
+   844→// 论证主线 — colored accent bar on the left, soft tinted background, and
+   845→// typography tuned for academic reading (12.5px body, 1.75 line-height).
+   846→//
+   847→// The accent color, soft tint and border color are all derived from the
+   848→// section's color palette (defined in SECTIONS above) so each section gets
+   849→// its own hue family — same convention as the figure-chain layer list.
+   850→//
+   851→// Markdown features supported (via ReactMarkdown + remarkGfm + rehypeRaw):
+   852→//   - **bold** / *italic*
+   853→//   - <sup>/<sub> HTML tags (for scientific notation like CD11b<sup>+</sup>)
+   854→//   - Bullet lists (-) and numbered lists (1.)
+   855→//   - Headings (## / ###) — rendered with subtle accent color
+   856→//   - Inline `code`
+   857→//   - Paragraphs
+   858→
+   859→function SectionDetail({
+   860→  detail,
+   861→  accentColor,
+   862→  softColor,
+   863→  borderColor,
+   864→}: {
+   865→  detail: string;
+   866→  accentColor: string;
+   867→  softColor: string;
+   868→  borderColor: string;
+   869→}) {
+   870→  return (
+   871→    <div
+   872→      className="rounded-md border overflow-hidden shadow-sm"
+   873→      style={{
+   874→        borderColor: borderColor,
+   875→        background: `linear-gradient(180deg, ${softColor} 0%, transparent 60%)`,
+   876→      }}
+   877→    >
+   878→      {/* Accent bar — thin colored stripe on top to anchor the section */}
+   879→      <div
+   880→        className="h-0.5 w-full"
+   881→        style={{ background: accentColor }}
+   882→        aria-hidden
+   883→      />
+   884→      {/* Body — markdown rendered with custom element styling so it matches
+   885→          the figure-chain typography rather than the default chat-markdown. */}
+   886→      <div
+   887→        className="px-3 py-2.5 text-[12.5px] leading-[1.75] text-foreground/85 chat-markdown"
+   888→        style={{
+   889→          // CSS variable consumed by chat-markdown custom heading styles below
+   890→          ["--section-accent" as any]: accentColor,
+   891→        }}
+   892→      >
+   893→        <ReactMarkdown
+   894→          remarkPlugins={[remarkGfm]}
+   895→          rehypePlugins={[rehypeRaw]}
+   896→          components={{
+   897→            // Headings — small accent-colored bars (don't let LLM-emitted
+   898→            // headings dominate the layout; this is a card body, not a page)
+   899→            h1: ({ children }) => (
+   900→              <div
+   901→                className="text-[12.5px] font-semibold mt-2 mb-1.5 flex items-center gap-1.5"
+   902→                style={{ color: accentColor }}
+   903→              >
+   904→                <span
+   905→                  className="inline-block w-1 h-3 rounded-sm"
+   906→                  style={{ background: accentColor }}
+   907→                />
+   908→                {children}
+   909→              </div>
+   910→            ),
+   911→            h2: ({ children }) => (
+   912→              <div
+   913→                className="text-[12.5px] font-semibold mt-2 mb-1.5 flex items-center gap-1.5"
+   914→                style={{ color: accentColor }}
+   915→              >
+   916→                <span
+   917→                  className="inline-block w-1 h-3 rounded-sm"
+   918→                  style={{ background: accentColor }}
+   919→                />
+   920→                {children}
+   921→              </div>
+   922→            ),
+   923→            h3: ({ children }) => (
+   924→              <div
+   925→                className="text-[11.5px] font-medium mt-1.5 mb-1"
+   926→                style={{ color: accentColor }}
+   927→              >
+   928→                {children}
+   929→              </div>
+   930→            ),
+   931→            // Paragraphs — generous spacing between them
+   932→            p: ({ children }) => (
+   933→              <p className="my-1.5 whitespace-pre-wrap break-words">{children}</p>
+   934→            ),
+   935→            // Lists — tighter spacing, accent-colored bullets
+   936→            ul: ({ children }) => (
+   937→              <ul className="my-1.5 space-y-1 pl-1">{children}</ul>
+   938→            ),
+   939→            ol: ({ children }) => (
+   940→              <ol className="my-1.5 space-y-1 pl-1 list-decimal ml-3">{children}</ol>
+   941→            ),
+   942→            li: ({ children, ...props }) => {
+   943→              // Render unordered list items with a colored dot prefix
+   944→              const isOrdered = (props as any).className?.includes("list-decimal") || false;
+   945→              if (isOrdered) {
+   946→                return <li className="text-[12px] leading-relaxed pl-1">{children}</li>;
+   947→              }
+   948→              return (
+   949→                <li className="text-[12px] leading-relaxed flex items-start gap-1.5 list-none">
+   950→                  <span
+   951→                    className="flex-shrink-0 w-1 h-1 rounded-full mt-[7px]"
+   952→                    style={{ background: accentColor }}
+   953→                    aria-hidden
+   954→                  />
+   955→                  <span className="flex-1">{children}</span>
+   956→                </li>
+   957→              );
+   958→            },
+   959→            // Strong / em — keep the accent color for bold for emphasis
+   960→            strong: ({ children }) => (
+   961→              <strong className="font-semibold text-foreground">{children}</strong>
+   962→            ),
+   963→            // Inline code — small monospace pill
+   964→            code: ({ children }) => (
+   965→              <code
+   966→                className="px-1 py-0.5 rounded text-[11px] font-mono"
+   967→                style={{
+   968→                  background: `${accentColor}15`,
+   969→                  color: accentColor,
+   970→                }}
+   971→              >
+   972→                {children}
+   973→              </code>
+   974→            ),
+   975→            // Blockquote — pull-quote style with left accent bar
+   976→            blockquote: ({ children }) => (
+   977→              <blockquote
+   978→                className="my-2 pl-2.5 py-1 italic text-foreground/75"
+   979→                style={{
+   980→                  borderLeft: `3px solid ${accentColor}`,
+   981→                  background: `${accentColor}08`,
+   982→                }}
+   983→              >
+   984→                {children}
+   985→              </blockquote>
+   986→            ),
+   987→          }}
+   988→        >
+   989→          {detail}
+   990→        </ReactMarkdown>
+   991→      </div>
+   992→    </div>
+   993→  );
+   994→}
+   995→

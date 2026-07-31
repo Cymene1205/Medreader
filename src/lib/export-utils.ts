@@ -116,7 +116,23 @@ export function exportAnalysisMarkdown(
       lines.push(`> ${stripMd(outline.questionBackground.summary)}`);
       lines.push("");
     }
-    if (outline.questionBackground.detail) {
+    // Prefer structured subsections (new format) over flat detail markdown
+    if (outline.questionBackground.subsections && outline.questionBackground.subsections.length > 0) {
+      outline.questionBackground.subsections.forEach((sub, i) => {
+        lines.push(`### ${i + 1}. ${stripMd(sub.heading)}`);
+        lines.push("");
+        if (sub.body) {
+          lines.push(sub.body);
+          lines.push("");
+        }
+        if (sub.bullets && sub.bullets.length > 0) {
+          sub.bullets.forEach((b) => {
+            lines.push(`- ${stripMd(b)}`);
+          });
+          lines.push("");
+        }
+      });
+    } else if (outline.questionBackground.detail) {
       lines.push(outline.questionBackground.detail);
       lines.push("");
     }
@@ -166,7 +182,22 @@ export function exportAnalysisMarkdown(
       lines.push(`> ${stripMd(outline.novelty.summary)}`);
       lines.push("");
     }
-    if (outline.novelty.detail) {
+    if (outline.novelty.subsections && outline.novelty.subsections.length > 0) {
+      outline.novelty.subsections.forEach((sub, i) => {
+        lines.push(`### ${i + 1}. ${stripMd(sub.heading)}`);
+        lines.push("");
+        if (sub.body) {
+          lines.push(sub.body);
+          lines.push("");
+        }
+        if (sub.bullets && sub.bullets.length > 0) {
+          sub.bullets.forEach((b) => {
+            lines.push(`- ${stripMd(b)}`);
+          });
+          lines.push("");
+        }
+      });
+    } else if (outline.novelty.detail) {
       lines.push(outline.novelty.detail);
       lines.push("");
     }
@@ -180,7 +211,22 @@ export function exportAnalysisMarkdown(
       lines.push(`> ${stripMd(outline.limitsOpportunities.summary)}`);
       lines.push("");
     }
-    if (outline.limitsOpportunities.detail) {
+    if (outline.limitsOpportunities.subsections && outline.limitsOpportunities.subsections.length > 0) {
+      outline.limitsOpportunities.subsections.forEach((sub, i) => {
+        lines.push(`### ${i + 1}. ${stripMd(sub.heading)}`);
+        lines.push("");
+        if (sub.body) {
+          lines.push(sub.body);
+          lines.push("");
+        }
+        if (sub.bullets && sub.bullets.length > 0) {
+          sub.bullets.forEach((b) => {
+            lines.push(`- ${stripMd(b)}`);
+          });
+          lines.push("");
+        }
+      });
+    } else if (outline.limitsOpportunities.detail) {
       lines.push(outline.limitsOpportunities.detail);
       lines.push("");
     }
@@ -247,13 +293,55 @@ export function exportMindmapHtml(
     bodyHtml: string;
   }> = [];
 
+  // Helper: render subsections array as a chain of cards (mirror the
+  // SubsectionChain UI in outline-panel.tsx). Falls back to mdToHtml(detail)
+  // when subsections is missing (old/cached analyses).
+  const renderSubsections = (
+    subs: Array<{ heading: string; body: string; bullets: string[] }> | undefined,
+    detail: string,
+    color: string,
+    soft: string,
+    border: string
+  ): string => {
+    if (!subs || subs.length === 0) {
+      return mdToHtml(detail || "");
+    }
+    return `<div class="subsec-chain">${subs
+      .map((s, i) => {
+        const bulletsHtml =
+          s.bullets && s.bullets.length > 0
+            ? `<ul class="subsec-bullets">${s.bullets
+                .map((b) => `<li><span class="bullet-dot" style="background:${color}"></span><span>${escapeHtml(stripMd(b))}</span></li>`)
+                .join("")}</ul>`
+            : "";
+        return `
+        <div class="subsec-card" style="border-color:${border}">
+          <div class="subsec-header" style="background:${soft}">
+            <span class="subsec-idx" style="background:${color}">${i + 1}</span>
+            <span class="subsec-heading" style="color:${color}">${escapeHtml(stripMd(s.heading))}</span>
+          </div>
+          <div class="subsec-body">
+            ${mdToHtml(s.body || "")}
+            ${bulletsHtml}
+          </div>
+        </div>`;
+      })
+      .join("")}</div>`;
+  };
+
   if (outline.questionBackground) {
     sections.push({
       index: 1,
       title: "问题与背景",
       ...SECTION_PALETTE[0],
       summary: stripMd(outline.questionBackground.summary || ""),
-      bodyHtml: mdToHtml(outline.questionBackground.detail || ""),
+      bodyHtml: renderSubsections(
+        outline.questionBackground.subsections,
+        outline.questionBackground.detail || "",
+        SECTION_PALETTE[0].color,
+        SECTION_PALETTE[0].soft,
+        SECTION_PALETTE[0].border
+      ),
     });
   }
   if (outline.argumentSpine) {
@@ -299,36 +387,57 @@ export function exportMindmapHtml(
       title: "创新性",
       ...SECTION_PALETTE[2],
       summary: stripMd(outline.novelty.summary || ""),
-      bodyHtml: mdToHtml(outline.novelty.detail || ""),
+      bodyHtml: renderSubsections(
+        outline.novelty.subsections,
+        outline.novelty.detail || "",
+        SECTION_PALETTE[2].color,
+        SECTION_PALETTE[2].soft,
+        SECTION_PALETTE[2].border
+      ),
     });
   }
   if (outline.limitsOpportunities) {
-    const pairsHtml = (outline.limitsOpportunities.pairs || [])
-      .map(
-        (p, i) => `
-        <div class="pair-card" style="border-color:${SECTION_PALETTE[3].border}">
-          <div class="pair-header" style="background:${SECTION_PALETTE[3].soft};color:${SECTION_PALETTE[3].color}">
-            <span class="pair-idx">${i + 1}</span>
-            <span class="pair-label">局限 → 机会</span>
-          </div>
-          <div class="pair-row limit">
-            <span class="pair-badge" style="background:#C8556C">L</span>
-            <span>${escapeHtml(stripMd(p.limitation))}</span>
-          </div>
-          <div class="pair-row opp">
-            <span class="pair-badge" style="background:${SECTION_PALETTE[3].color}">O</span>
-            <span>${escapeHtml(stripMd(p.opportunity))}</span>
-          </div>
-        </div>`
-      )
-      .join("");
+    // Prefer subsections rendering; fall back to pairs table if no subsections
+    const hasSubs =
+      outline.limitsOpportunities.subsections &&
+      outline.limitsOpportunities.subsections.length > 0;
+    const bodyHtml = hasSubs
+      ? renderSubsections(
+          outline.limitsOpportunities.subsections,
+          outline.limitsOpportunities.detail || "",
+          SECTION_PALETTE[3].color,
+          SECTION_PALETTE[3].soft,
+          SECTION_PALETTE[3].border
+        )
+      : (() => {
+          const pairsHtml = (outline.limitsOpportunities.pairs || [])
+            .map(
+              (p, i) => `
+            <div class="pair-card" style="border-color:${SECTION_PALETTE[3].border}">
+              <div class="pair-header" style="background:${SECTION_PALETTE[3].soft};color:${SECTION_PALETTE[3].color}">
+                <span class="pair-idx">${i + 1}</span>
+                <span class="pair-label">局限 → 机会</span>
+              </div>
+              <div class="pair-row limit">
+                <span class="pair-badge" style="background:#C8556C">L</span>
+                <span>${escapeHtml(stripMd(p.limitation))}</span>
+              </div>
+              <div class="pair-row opp">
+                <span class="pair-badge" style="background:${SECTION_PALETTE[3].color}">O</span>
+                <span>${escapeHtml(stripMd(p.opportunity))}</span>
+              </div>
+            </div>`
+            )
+            .join("");
+          return pairsHtml || mdToHtml(outline.limitsOpportunities.detail || "");
+        })();
 
     sections.push({
       index: 4,
       title: "局限与机会",
       ...SECTION_PALETTE[3],
       summary: stripMd(outline.limitsOpportunities.summary || ""),
-      bodyHtml: pairsHtml || mdToHtml(outline.limitsOpportunities.detail || ""),
+      bodyHtml,
     });
   }
 
@@ -520,6 +629,73 @@ export function exportMindmapHtml(
     font-weight: 700;
     flex-shrink: 0;
     margin-top: 1px;
+  }
+  /* Subsection chain — multi-level collapsible cards rendered as static
+     stacked cards in the exported HTML. Mirrors the in-app SubsectionChain
+     UI so the exported mindmap looks identical to what the user sees. */
+  .subsec-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .subsec-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .subsec-header {
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .subsec-idx {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .subsec-heading {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .subsec-body {
+    padding: 10px 14px;
+    font-size: 12.5px;
+    color: #334155;
+    line-height: 1.7;
+  }
+  .subsec-body p { margin: 6px 0; }
+  .subsec-body strong { color: #0f172a; }
+  .subsec-body sup, .subsec-body sub { font-size: 0.75em; }
+  .subsec-bullets {
+    list-style: none;
+    padding: 4px 0 2px;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .subsec-bullets li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+    color: #475569;
+  }
+  .bullet-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 7px;
+    flex-shrink: 0;
   }
   .footer {
     text-align: center;
