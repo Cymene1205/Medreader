@@ -20,6 +20,13 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "50mb",
     },
   },
+  // Next.js 16 breaking change: middleware now caps request body at 10 MB
+  // by default (was unlimited in 15.x). Our auth middleware matches
+  // /api/upload, so PDFs > 10 MB were silently truncated to 10 MB before
+  // reaching the route handler, breaking `request.formData()` with
+  // "Failed to parse body as FormData".
+  // Bump to 50 MB to match serverActions.bodySizeLimit and MAX_UPLOAD_BYTES.
+  middlewareClientMaxBodySize: "50mb",
 };
 
 export default nextConfig;
