@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookMarked, Github, ExternalLink } from "lucide-react";
+import { useSession } from "next-auth/react";
+import Link from "next/link";
+import { BookMarked, Github, ExternalLink, LogIn, ArrowRight } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "概览", en: "Overview", href: "#overview" },
@@ -14,6 +16,7 @@ const NAV_ITEMS = [
 ];
 
 export function SiteHeader() {
+  const { data: session, status } = useSession();
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -75,13 +78,32 @@ export function SiteHeader() {
               <Github className="w-3.5 h-3.5" />
               GitHub
             </a>
-            <a
-              href="/register"
-              className="inline-flex items-center gap-1.5 px-4 py-2 font-sans-ui text-[11px] tracking-[0.1em] uppercase bg-[var(--burgundy)] text-[var(--paper)] rounded-sm hover:bg-[var(--burgundy-deep)] transition-colors shadow-sm"
-            >
-              开始体验
-              <ExternalLink className="w-3 h-3" />
-            </a>
+            {status === "loading" ? null : session?.user ? (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-1.5 px-4 py-2 font-sans-ui text-[11px] tracking-[0.1em] uppercase bg-[var(--burgundy)] text-[var(--paper)] rounded-sm hover:bg-[var(--burgundy-deep)] transition-colors shadow-sm"
+              >
+                进入工作台
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 font-sans-ui text-[11px] tracking-[0.08em] uppercase text-[var(--ink-soft)] hover:text-[var(--burgundy)] transition-colors"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  登录
+                </Link>
+                <Link
+                  href="/register"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 font-sans-ui text-[11px] tracking-[0.1em] uppercase bg-[var(--burgundy)] text-[var(--paper)] rounded-sm hover:bg-[var(--burgundy-deep)] transition-colors shadow-sm"
+                >
+                  开始体验
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              </>
+            )}
             <button
               onClick={() => setMobileOpen((v) => !v)}
               className="lg:hidden p-2 text-[var(--ink)]"

@@ -1,8 +1,13 @@
 "use client";
 
+import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { ArrowRight, Github, Server, FileText } from "lucide-react";
 
 export function CTA() {
+  const { data: session, status } = useSession();
+  const primaryHref = status === "loading" ? "/register" : session?.user ? "/app" : "/register";
+  const primaryLabel = session?.user ? "进入工作台" : "立即开始阅读";
   return (
     <section
       id="cta"
@@ -45,15 +50,15 @@ export function CTA() {
 
           <div className="col-span-12 lg:col-span-5">
             <div className="space-y-3">
-              <a
-                href="/register"
+              <Link
+                href={primaryHref}
                 className="group flex items-center justify-between gap-4 px-6 py-5 bg-[var(--paper)] text-[var(--burgundy-deep)] rounded-sm hover:bg-[var(--gold)] hover:text-[var(--burgundy-deep)] transition-colors shadow-lg"
               >
                 <div className="flex items-center gap-3">
                   <FileText className="w-5 h-5" />
                   <div>
                     <div className="font-sans-ui text-sm tracking-[0.1em] uppercase font-semibold">
-                      立即开始阅读
+                      {primaryLabel}
                     </div>
                     <div className="font-serif-en italic text-xs opacity-70">
                       Try the live demo
@@ -61,7 +66,7 @@ export function CTA() {
                   </div>
                 </div>
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </a>
+              </Link>
 
               <a
                 href="https://github.com"

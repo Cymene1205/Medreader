@@ -1,8 +1,13 @@
 "use client";
 
+import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { ArrowRight, FileText, Sparkles, MessageSquareQuote } from "lucide-react";
 
 export function Hero() {
+  const { data: session, status } = useSession();
+  const primaryHref = status === "loading" ? "/register" : session?.user ? "/app" : "/register";
+  const primaryLabel = session?.user ? "进入工作台" : "立即开始阅读";
   return (
     <section
       id="top"
@@ -55,13 +60,13 @@ export function Hero() {
 
             {/* CTA */}
             <div className="flex flex-wrap items-center gap-3 mt-10">
-              <a
-                href="/register"
+              <Link
+                href={primaryHref}
                 className="group inline-flex items-center gap-2 px-6 py-3.5 bg-[var(--burgundy)] text-[var(--paper)] font-sans-ui text-sm tracking-[0.08em] uppercase rounded-sm hover:bg-[var(--burgundy-deep)] transition-all shadow-md hover:shadow-lg"
               >
-                立即开始阅读
+                {primaryLabel}
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </a>
+              </Link>
               <a
                 href="#features"
                 className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent text-[var(--ink)] font-sans-ui text-sm tracking-[0.08em] uppercase border border-[var(--ink)] rounded-sm hover:bg-[var(--ink)] hover:text-[var(--paper)] transition-all"
