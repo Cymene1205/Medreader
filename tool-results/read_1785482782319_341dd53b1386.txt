@@ -1,0 +1,830 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→     4→import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+     5→     5→import { useSession, signOut } from "next-auth/react";
+     6→     6→import PdfViewer from "@/components/pdf-viewer";
+     7→     7→import OutlinePanel, {
+     8→     8→  type Outline,
+     9→     9→  type OutlineChild,
+    10→    10→  type OutlineSection,
+    11→    11→} from "@/components/outline-panel";
+    12→    12→import type { Figure, Citation } from "@/components/figure-chain";
+    13→    13→import TranslationPanel from "@/components/translation-panel";
+    14→    14→import ChatPanel from "@/components/chat-panel";
+    15→    15→import MindmapView from "@/components/mindmap-view";
+    16→    16→import BlockReader, { type MinerUBlock, type BlockReaderHandle } from "@/components/block-reader";
+    17→    17→import LLMSettingsDialog, {
+    18→    18→  refreshLLMHeaders,
+    19→    19→  hasUserLLMConfig,
+    20→    20→} from "@/components/llm-settings-dialog";
+    21→    21→import { Button } from "@/components/ui/button";
+    22→    22→import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+    23→    23→import { cn } from "@/lib/utils";
+    24→    24→import {
+    25→    25→  Upload,
+    26→    26→  Loader2,
+    27→    27→  BookOpen,
+    28→    28→  Info,
+    29→    29→  LogOut,
+    30→    30→  LogIn,
+    31→    31→  Shield,
+    32→    32→  FileText,
+    33→    33→  Network,
+    34→    34→  LayoutGrid,
+    35→    35→  Settings2,
+    36→    36→  AlertTriangle,
+    37→    37→  X,
+    38→    38→} from "lucide-react";
+    39→    39→import Link from "next/link";
+    40→    40→
+    41→    41→type HighlightToken = {
+    42→    42→  quote: string;
+    43→    43→  keywords: string[];
+    44→    44→  nonce: number;
+    45→    45→};
+    46→    46→
+    47→    47→type UploadStage = "idle" | "uploading" | "parsing" | "analyzing" | "done";
+    48→    48→
+    49→    49→export default function Home() {
+    50→    50→  const { data: session, status } = useSession();
+    51→    51→
+    52→    52→  const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
+    53→    53→  const [fileName, setFileName] = useState<string>("");
+    54→    54→  const [paperText, setPaperText] = useState<string>("");
+    55→    55→  const [paperMarkdown, setPaperMarkdown] = useState<string | null>(null);
+    56→    56→  const [paperBlocks, setPaperBlocks] = useState<MinerUBlock[] | null>(null);
+    57→    57→  const [paperImagesDir, setPaperImagesDir] = useState<string | null>(null);
+    58→    58→  const [paperId, setPaperId] = useState<string | null>(null);
+    59→    59→
+    60→    60→  const [outline, setOutline] = useState<Outline | null>(null);
+    61→    61→  const [outlineLoading, setOutlineLoading] = useState(false);
+    62→    62→  const [outlineError, setOutlineError] = useState<string | null>(null);
+    63→    63→  const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
+    64→    64→  const [mineruStatus, setMineruStatus] = useState<string>("");
+    65→    65→
+    66→    66→  const [selectedText, setSelectedText] = useState<string>("");
+    67→    67→  const [selectedBlockIdx, setSelectedBlockIdx] = useState<number | null>(null);
+    68→    68→  const [selectionNonce, setSelectionNonce] = useState(0);
+    69→    69→
+    70→    70→  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+    71→    71→  const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
+    72→    72→  const [activeChildId, setActiveChildId] = useState<string | undefined>();
+    73→    73→  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("pdf");
+    74→    74→
+    75→    75→  // New 4-layer pipeline state: figures + citations + spine polling
+    76→    76→  const [figures, setFigures] = useState<Figure[]>([]);
+    77→    77→  const [citations, setCitations] = useState<Citation[]>([]);
+    78→    78→  const [figuresLoading, setFiguresLoading] = useState(false);
+    79→    79→  /**
+    80→    80→   * Stage 2 progress state machine — drives the progress indicator inside
+    81→    81→   * OutlinePanel's 论证主线 card.
+    82→    82→   *
+    83→    83→   * Lifecycle:
+    84→    84→   *   idle      → (paper uploaded, MinerU figure extraction done)
+    85→    85→   *   extracting→ (Call A POST fired, waiting for first figures poll)
+    86→    86→   *   call-a    → (figures exist but at least one has no `question` yet)
+    87→    87→   *   spine     → (all figures have questions, argumentSpine still null)
+    88→    88→   *   done      → (argumentSpine present)
+    89→    89→   *   error     → (Call A POST returned non-2xx, or polling exhausted)
+    90→    90→   */
+    91→    91→  const [figuresStatus, setFiguresStatus] = useState<
+    92→    92→    "idle" | "extracting" | "call-a" | "spine" | "done" | "error"
+    93→    93→  >("idle");
+    94→    94→  // Tracks whether the user has manually clicked a center-tab since the
+    95→    95→  // current upload. We use this to decide whether to auto-switch from the
+    96→    96→  // PDF tab (the default initial view, shown while MinerU is parsing) to
+    97→    97→  // the 智能解析 tab once the parsed markdown/blocks are ready. If the user
+    98→    98→  // has already chosen a tab themselves, we leave them alone.
+    99→    99→  //
+   100→   100→  // Implemented as a ref rather than state because the long-running
+   101→   101→  // `onFile` callback (which has empty deps `[]`) needs to read the CURRENT
+   102→   102→  // value at the moment MinerU finishes — a state value captured in the
+   103→   103→  // closure would be stuck at `false` from the first render.
+   104→   104→  const userTouchedTabRef = useRef(false);
+   105→   105→  const markTabTouched = useCallback(() => {
+   106→   106→    userTouchedTabRef.current = true;
+   107→   107→  }, []);
+   108→   108→  const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
+   109→   109→  const [llmConfigured, setLlmConfigured] = useState(false);
+   110→   110→  // Tracks whether the user has dismissed the "default DeepSeek" warning banner.
+   111→   111→  // Persisted in localStorage so it stays dismissed across reloads. Resetting
+   112→   112→  // is implicit: opening the settings dialog and saving a new config flips
+   113→   113→  // `llmConfigured` true, which makes the banner condition false anyway.
+   114→   114→  const [llmBannerDismissed, setLlmBannerDismissed] = useState(false);
+   115→   115→  // Whether the 全文框架 panel is collapsed (only header visible). When
+   116→   116→  // collapsed, the 原文段落导航 panel above automatically expands to fill
+   117→   117→  // the freed vertical space.
+   118→   118→  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+   119→   119→  // headingCollapsed was removed along with the HeadingNavigator panel —
+   120→   120→  // paragraph navigation is now inside the 智能解析 toolbar.
+   121→   121→  const fileInputRef = useRef<HTMLInputElement>(null);
+   122→   122→  const blockReaderRef = useRef<BlockReaderHandle>(null);
+   123→   123→
+   124→   124→  // On mount, check if the user previously dismissed the banner.
+   125→   125→  useEffect(() => {
+   126→   126→    try {
+   127→   127→      setLlmBannerDismissed(localStorage.getItem("medreader.llm.bannerDismissed") === "1");
+   128→   128→    } catch {
+   129→   129→      // ignore
+   130→   130→    }
+   131→   131→  }, []);
+   132→   132→
+   133→   133→  // Re-check LLM config status whenever the dialog closes
+   134→   134→  useEffect(() => {
+   135→   135→    setLlmConfigured(hasUserLLMConfig());
+   136→   136→  }, [llmSettingsOpen]);
+   137→   137→
+   138→   138→  // Build a headers snapshot for outgoing fetches; refresh when dialog closes.
+   139→   139→  // We expose this via a ref-like state so child ChatPanel/TranslationPanel can
+   140→   140→  // pick it up. For simplicity we put headers into window-level var (the chat
+   141→   141→  // panel reads LLM headers from the latest snapshot via a custom hook).
+   142→   142→  const [llmHeaders, setLlmHeaders] = useState<Record<string, string>>({});
+   143→   143→  useEffect(() => {
+   144→   144→    setLlmHeaders(refreshLLMHeaders());
+   145→   145→  }, [llmSettingsOpen]);
+   146→   146→
+   147→   147→  // Listen for "analysis updated" events — triggered by OutlinePanel's retry
+   148→   148→  // button after a successful partial retry. We refresh the outline from the
+   149→   149→  // server so the new content shows up.
+   150→   150→  useEffect(() => {
+   151→   151→    const handler = async () => {
+   152→   152→      if (!paperId) return;
+   153→   153→      try {
+   154→   154→        const res = await fetch(`/api/analyze?paperId=${paperId}`);
+   155→   155→        if (res.ok) {
+   156→   156→          const data = await res.json();
+   157→   157→          if (data.outline) {
+   158→   158→            setOutline(data.outline as Outline);
+   159→   159→          }
+   160→   160→        }
+   161→   161→      } catch (e) {
+   162→   162→        console.warn("[analysis-updated] refresh failed:", e);
+   163→   163→      }
+   164→   164→    };
+   165→   165→    window.addEventListener("medreader:analysis-updated", handler);
+   166→   166→    return () => window.removeEventListener("medreader:analysis-updated", handler);
+   167→   167→  }, [paperId]);
+   168→   168→
+   169→   169→  const dismissLlmBanner = useCallback(() => {
+   170→   170→    setLlmBannerDismissed(true);
+   171→   171→    try {
+   172→   172→      localStorage.setItem("medreader.llm.bannerDismissed", "1");
+   173→   173→    } catch {
+   174→   174→      // ignore
+   175→   175→    }
+   176→   176→  }, []);
+   177→   177→
+   178→   178→  const onFile = useCallback(
+   179→   179→    async (file: File) => {
+   180→   180→      if (!file) return;
+   181→   181→      if (!file.name.toLowerCase().endsWith(".pdf")) {
+   182→   182→        alert("目前仅支持 PDF 格式");
+   183→   183→        return;
+   184→   184→      }
+   185→   185→      const buf = await file.arrayBuffer();
+   186→   186→      const bufForText = buf.slice(0);
+   187→   187→      setFileData(buf);
+   188→   188→      setFileName(file.name);
+   189→   189→      setOutline(null);
+   190→   190→      setOutlineError(null);
+   191→   191→      setSelectedText("");
+   192→   192→      setSelectedBlockIdx(null);
+   193→   193→      setAttachedImage(null);
+   194→   194→      setActiveChildId(undefined);
+   195→   195→      setPaperMarkdown(null);
+   196→   196→      setPaperBlocks(null);
+   197→   197→      setPaperImagesDir(null);
+   198→   198→      // Reset Stage 2 state for the new upload
+   199→   199→      setFigures([]);
+   200→   200→      setCitations([]);
+   201→   201→      setFiguresStatus("idle");
+   202→   202→      setFiguresLoading(false);
+   203→   203→      // Left panel: 全文框架 starts expanded during loading (so the user
+   204→   204→      // sees the "analyzing…" / progress indicator), then auto-collapses
+   205→   205→      // once Stage 1 results arrive. Heading panel was removed from the
+   206→   206→      // left column — paragraph navigation is now a button inside the
+   207→   207→      // 智能解析 toolbar.
+   208→   208→      setOutlineCollapsed(false);
+   209→   209→      // Default the center view to PDF while the MinerU parse runs (it takes
+   210→   210→      // 30-90s). The user sees their PDF immediately instead of a blank
+   211→   211→      // "parsing…" placeholder. When the parsed markdown/blocks arrive we
+   212→   212→      // auto-switch to 智能解析 — unless the user has already picked a tab
+   213→   213→      // themselves (in which case we respect their choice).
+   214→   214→      setActiveView("pdf");
+   215→   215→      userTouchedTabRef.current = false;
+   216→   216→      setUploadStage("uploading");
+   217→   217→      setMineruStatus("上传中…");
+   218→   218→
+   219→   219→      // Upload to server — quota is checked server-side.
+   220→   220→      let serverPaperId: string | null = null;
+   221→   221→      let serverParsedText: string | null = null;
+   222→   222→      let serverMarkdown: string | null = null;
+   223→   223→      let serverBlocks: MinerUBlock[] | null = null;
+   224→   224→      let serverImagesDir: string | null = null;
+   225→   225→      try {
+   226→   226→        const fd = new FormData();
+   227→   227→        fd.append("file", file);
+   228→   228→        const upRes = await fetch("/api/upload", { method: "POST", body: fd });
+   229→   229→        if (upRes.status === 429) {
+   230→   230→          const j = await upRes.json().catch(() => ({}));
+   231→   231→          throw new Error(j.error || "今日解析额度已用尽");
+   232→   232→        }
+   233→   233→        if (!upRes.ok) {
+   234→   234→          const j = await upRes.json().catch(() => ({}));
+   235→   235→          throw new Error(j.error || `Upload failed HTTP ${upRes.status}`);
+   236→   236→        }
+   237→   237→        const upData = await upRes.json();
+   238→   238→        serverPaperId = upData.paperId;
+   239→   239→        setPaperId(upData.paperId);
+   240→   240→        setUploadStage("parsing");
+   241→   241→        setMineruStatus("MinerU 解析中（30-90 秒）…");
+   242→   242→
+   243→   243→        // Poll for parse status
+   244→   244→        for (let i = 0; i < 120; i++) {
+   245→   245→          await new Promise((r) => setTimeout(r, 2000));
+   246→   246→          const sRes = await fetch(`/api/paper/${upData.paperId}`);
+   247→   247→          if (sRes.ok) {
+   248→   248→            const sData = await sRes.json();
+   249→   249→            if (sData.parseStatus === "done") {
+   250→   250→              serverParsedText = sData.parsedText;
+   251→   251→              serverMarkdown = sData.markdown;
+   252→   252→              serverBlocks = sData.blocks;
+   253→   253→              serverImagesDir = sData.imagesDir;
+   254→   254→              break;
+   255→   255→            }
+   256→   256→            if (sData.parseStatus === "error") {
+   257→   257→              throw new Error("MinerU 解析失败，已尝试 pdfjs 兜底");
+   258→   258→            }
+   259→   259→            if (i % 5 === 0) {
+   260→   260→              setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
+   261→   261→            }
+   262→   262→          }
+   263→   263→        }
+   264→   264→      } catch (e) {
+   265→   265→        setOutlineError(e instanceof Error ? e.message : String(e));
+   266→   266→        setUploadStage("idle");
+   267→   267→        setMineruStatus("");
+   268→   268→        return;
+   269→   269→      }
+   270→   270→
+   271→   271→      // Use server-parsed content if available; otherwise client extraction
+   272→   272→      let full = "";
+   273→   273→      if (serverParsedText) {
+   274→   274→        full = serverParsedText;
+   275→   275→      } else {
+   276→   276→        try {
+   277→   277→          const lib = await import("pdfjs-dist");
+   278→   278→          lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+   279→   279→          const doc = await lib.getDocument({ data: new Uint8Array(bufForText) }).promise;
+   280→   280→          for (let i = 1; i <= doc.numPages; i++) {
+   281→   281→            const page = await doc.getPage(i);
+   282→   282→            const tc = await page.getTextContent();
+   283→   283→            const pageText = tc.items
+   284→   284→              .map((it: any) => (typeof it.str === "string" ? it.str : ""))
+   285→   285→              .join(" ");
+   286→   286→            full += `\n[Page ${i}]\n${pageText}\n`;
+   287→   287→            page.cleanup();
+   288→   288→          }
+   289→   289→        } catch (e) {
+   290→   290→          // ignore; we'll still try analyze with empty text
+   291→   291→        }
+   292→   292→      }
+   293→   293→
+   294→   294→      // Progressive: set plain text + markdown/blocks as soon as they're available.
+   295→   295→      setPaperText(full);
+   296→   296→      setPaperMarkdown(serverMarkdown);
+   297→   297→      setPaperBlocks(serverBlocks);
+   298→   298→      setPaperImagesDir(serverImagesDir);
+   299→   299→      setMineruStatus("");
+   300→   300→
+   301→   301→      // Auto-switch from the initial PDF view to 智能解析 now that the
+   302→   302→      // parsed content is ready — but only if the user hasn't manually
+   303→   303→      // picked a different tab during the wait. If they did, we leave
+   304→   304→      // them on whatever they chose.
+   305→   305→      if (!userTouchedTabRef.current && (serverBlocks || serverMarkdown)) {
+   306→   306→        setActiveView("blocks");
+   307→   307→      }
+   308→   308→
+   309→   309→      // Trigger Stage 1 analysis (3 parallel LLM calls — questionBackground /
+   310→   310→      // novelty / limitsOpportunities). Returns immediately with the 3 parts;
+   311→   311→      // argumentSpine stays null until figures finish (Stage 2).
+   312→   312→      setUploadStage("analyzing");
+   313→   313→      setOutlineLoading(true);
+   314→   314→      try {
+   315→   315→        const res = await fetch("/api/analyze", {
+   316→   316→          method: "POST",
+   317→   317→          headers: {
+   318→   318→            "Content-Type": "application/json",
+   319→   319→            ...refreshLLMHeaders(),
+   320→   320→          },
+   321→   321→          body: JSON.stringify({
+   322→   322→            text: full,
+   323→   323→            markdown: serverMarkdown || undefined,
+   324→   324→            title: file.name,
+   325→   325→            paperId: serverPaperId,
+   326→   326→          }),
+   327→   327→        });
+   328→   328→        const data = await res.json();
+   329→   329→        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+   330→   330→        setOutline(data.outline);
+   331→   331→        setUploadStage("done");
+   332→   332→        // User request: "在产生结果之后先上下折叠" — after analysis results
+   333→   333→        // are produced, the left 全文框架 panel starts collapsed so the
+   334→   334→        // center reader gets maximum screen real estate. The user can click
+   335→   335→        // the panel header to expand.
+   336→   336→        setOutlineCollapsed(true);
+   337→   337→      } catch (e) {
+   338→   338→        setOutlineError(e instanceof Error ? e.message : String(e));
+   339→   339→        setUploadStage("idle");
+   340→   340→      } finally {
+   341→   341→        setOutlineLoading(false);
+   342→   342→      }
+   343→   343→
+   344→   344→      // ── Stage 2: trigger figure analysis (Call A) in parallel with Stage 1.
+   345→   345→      // This runs AFTER MinerU's figure extraction (which happened during
+   346→   346→      // upload). Call A is one LLM call for all figures + writes back the
+   347→   347→      // argumentSpine. We poll for completion so the UI updates as figures
+   348→   348→      // become ready.
+   349→   349→      // ─────────────────────────────────────────────────────────────────
+   350→   350→      if (serverPaperId) {
+   351→   351→        setFiguresLoading(true);
+   352→   352→        setFiguresStatus("extracting");
+   353→   353→        // Fire-and-forget the figures POST (Call A). It writes to DB on
+   354→   354→        // completion; we poll the GET endpoint for results.
+   355→   355→        fetch("/api/figures", {
+   356→   356→          method: "POST",
+   357→   357→          headers: {
+   358→   358→            "Content-Type": "application/json",
+   359→   359→            ...refreshLLMHeaders(),
+   360→   360→          },
+   361→   361→          body: JSON.stringify({ paperId: serverPaperId }),
+   362→   362→        }).catch((e) => {
+   363→   363→          console.warn("[figures] Call A trigger failed:", e);
+   364→   364→          setFiguresStatus("error");
+   365→   365→        });
+   366→   366→
+   367→   367→        // Poll for figures + updated analysisJson + citations.
+   368→   368→        // We also drive the figuresStatus state machine here so the
+   369→   369→        // OutlinePanel 论证主线 progress indicator reflects the current
+   370→   370→        // sub-step (extracting → call-a → spine → done).
+   371→   371→        let pollCount = 0;
+   372→   372→        const poll = async () => {
+   373→   373→          pollCount++;
+   374→   374→          try {
+   375→   375→            const [figRes, analysisRes, paperRes] = await Promise.all([
+   376→   376→              fetch(`/api/figures?paperId=${serverPaperId}`).then((r) => r.json()),
+   377→   377→              fetch(`/api/analyze?paperId=${serverPaperId}`).then((r) => r.json()),
+   378→   378→              fetch(`/api/paper/${serverPaperId}`).then((r) => r.json()),
+   379→   379→            ]);
+   380→   380→            if (Array.isArray(figRes.figures)) {
+   381→   381→              setFigures(figRes.figures as Figure[]);
+   382→   382→            }
+   383→   383→            // Refresh outline if analysisJson has been updated (spine filled)
+   384→   384→            if (analysisRes.outline) {
+   385→   385→              setOutline(analysisRes.outline as Outline);
+   386→   386→            }
+   387→   387→            // Load citations (for panel chip click → quote jump)
+   388→   388→            if (Array.isArray(paperRes.citations)) {
+   389→   389→              setCitations(paperRes.citations as Citation[]);
+   390→   390→            }
+   391→   391→
+   392→   392→            // ── Drive the figuresStatus state machine ──
+   393→   393→            const figs: Figure[] = Array.isArray(figRes.figures) ? figRes.figures : [];
+   394→   394→            const allHaveQuestion =
+   395→   395→              figs.length > 0 && figs.every((f) => f.question);
+   396→   396→            const spineReady = !!analysisRes.outline?.argumentSpine;
+   397→   397→
+   398→   398→            if (spineReady && allHaveQuestion) {
+   399→   399→              setFiguresStatus("done");
+   400→   400→              setFiguresLoading(false);
+   401→   401→              return; // stop polling
+   402→   402→            }
+   403→   403→            if (allHaveQuestion && !spineReady) {
+   404→   404→              setFiguresStatus("spine");
+   405→   405→            } else if (figs.length > 0 && !allHaveQuestion) {
+   406→   406→              setFiguresStatus("call-a");
+   407→   407→            } else if (pollCount > 1) {
+   408→   408→              // After 2+ polls still no figures — likely Call A still
+   409→   409→              // processing or figure extraction slow. Stay in extracting.
+   410→   410→              setFiguresStatus("extracting");
+   411→   411→            }
+   412→   412→
+   413→   413→            // Safety: stop after ~6 minutes of polling (90 iterations × 4s)
+   414→   414→            if (pollCount > 90) {
+   415→   415→              console.warn("[poll] exhausted 90 iterations, giving up");
+   416→   416→              setFiguresStatus("error");
+   417→   417→              setFiguresLoading(false);
+   418→   418→              return;
+   419→   419→            }
+   420→   420→          } catch (e) {
+   421→   421→            console.warn("[poll] figures/analyze fetch failed:", e);
+   422→   422→          }
+   423→   423→          setTimeout(poll, 4000);
+   424→   424→        };
+   425→   425→        setTimeout(poll, 3000);
+   426→   426→      }
+   427→   427→    },
+   428→   428→    []
+   429→   429→  );
+   430→   430→
+   431→   431→  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+   432→   432→    const f = e.target.files?.[0];
+   433→   433→    if (f) onFile(f);
+   434→   434→    e.target.value = "";
+   435→   435→  };
+   436→   436→
+   437→   437→  /** PDF text selection handler (legacy, for the PDF tab). */
+   438→   438→  const onTextSelect = useCallback((text: string) => {
+   439→   439→    setSelectedText(text);
+   440→   440→    setSelectedBlockIdx(null);
+   441→   441→    setSelectionNonce((n) => n + 1);
+   442→   442→  }, []);
+   443→   443→
+   444→   444→  /** BlockReader paragraph click — fires translation + marks active block. */
+   445→   445→  const onParagraphClick = useCallback((text: string, blockIdx: number) => {
+   446→   446→    setSelectedText(text);
+   447→   447→    setSelectedBlockIdx(blockIdx);
+   448→   448→    setSelectionNonce((n) => n + 1);
+   449→   449→  }, []);
+   450→   450→
+   451→   451→  const onImageSelect = useCallback((b64: string) => {
+   452→   452→    setAttachedImage(b64);
+   453→   453→  }, []);
+   454→   454→
+   455→   455→  /**
+   456→   456→   * Outline-child click — jump to the related paragraph.
+   457→   457→   * Does NOT force-switch the tab. If we're in mindmap view, switch to blocks
+   458→   458→   * (because the mindmap can't show a jump). Otherwise stay in current view.
+   459→   459→   */
+   460→   460→  const onChildClick = useCallback(
+   461→   461→    (child: OutlineChild, _section: OutlineSection) => {
+   462→   462→      setActiveChildId(child.id);
+   463→   463→      setHighlightToken({
+   464→   464→        quote: child.quote || "",
+   465→   465→        keywords: child.keywords || [],
+   466→   466→        nonce: Date.now(),
+   467→   467→      });
+   468→   468→      // Only auto-switch out of mindmap view (which can't display jumps)
+   469→   469→      if (activeView === "mindmap") {
+   470→   470→        setActiveView("blocks");
+   471→   471→      }
+   472→   472→      // Tell BlockReader imperatively too (in case it's already mounted)
+   473→   473→      setTimeout(() => {
+   474→   474→        blockReaderRef.current?.scrollToText(child.quote || "", child.keywords || []);
+   475→   475→      }, 50);
+   476→   476→    },
+   477→   477→    [activeView]
+   478→   478→  );
+   479→   479→
+   480→   480→  // Heading-navigator click handler was removed — paragraph navigation is
+   481→   481→  // now handled inside BlockReader via the side drawer (no parent wiring
+   482→   482→  // needed). activeHeadingText is kept for potential future use but no
+   483→   483→  // longer drives any UI.
+   484→   484→
+   485→   485→  const stageLabel: Record<UploadStage, string> = {
+   486→   486→    idle: "",
+   487→   487→    uploading: "上传中…",
+   488→   488→    parsing: "MinerU 解析中…",
+   489→   489→    analyzing: "AI 分析中…",
+   490→   490→    done: "分析完成",
+   491→   491→  };
+   492→   492→
+   493→   493→  const isBusy = outlineLoading || uploadStage === "uploading" || uploadStage === "parsing";
+   494→   494→
+   495→   495→  return (
+   496→   496→    <div className="h-screen w-screen flex flex-col bg-background overflow-hidden">
+   497→   497→      {/* Header */}
+   498→   498→      <header className="glass-header h-12 flex-shrink-0 flex items-center px-4 gap-3 border-b border-border/30">
+   499→   499→        <div className="flex items-center gap-2">
+   500→   500→          <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center shadow-sm">
+   501→   501→            <BookOpen className="h-4 w-4 text-primary-foreground" />
+   502→   502→          </div>
+   503→   503→          <span className="font-semibold text-sm text-background">MedReader Agent</span>
+   504→   504→          <span className="text-[10px] opacity-70 hidden sm:inline">
+   505→   505→            MinerU 驱动 · 智能解析
+   506→   506→          </span>
+   507→   507→        </div>
+   508→   508→
+   509→   509→        <div className="flex-1" />
+   510→   510→
+   511→   511→        {/* Upload stage indicator */}
+   512→   512→        {uploadStage !== "idle" && uploadStage !== "done" && (
+   513→   513→          <span className="text-[11px] opacity-90 flex items-center gap-1.5 mr-2">
+   514→   514→            <Loader2 className="h-3 w-3 animate-spin" />
+   515→   515→            {stageLabel[uploadStage]}
+   516→   516→          </span>
+   517→   517→        )}
+   518→   518→
+   519→   519→        {/* LLM settings button + warning if not configured */}
+   520→   520→        <Button
+   521→   521→          variant="ghost"
+   522→   522→          size="sm"
+   523→   523→          className={
+   524→   524→            "h-8 gap-1.5 text-background hover:bg-background/10 " +
+   525→   525→            (!llmConfigured ? "ring-1 ring-amber-300/60" : "")
+   526→   526→          }
+   527→   527→          onClick={() => setLlmSettingsOpen(true)}
+   528→   528→          title="LLM 模型设置"
+   529→   529→        >
+   530→   530→          <Settings2 className="h-3.5 w-3.5" />
+   531→   531→          <span className="text-xs hidden sm:inline">模型设置</span>
+   532→   532→          {!llmConfigured && (
+   533→   533→            <AlertTriangle className="h-3 w-3 text-amber-300" />
+   534→   534→          )}
+   535→   535→        </Button>
+   536→   536→
+   537→   537→        <input
+   538→   538→          ref={fileInputRef}
+   539→   539→          type="file"
+   540→   540→          accept=".pdf,application/pdf"
+   541→   541→          onChange={onFileInput}
+   542→   542→          className="hidden"
+   543→   543→        />
+   544→   544→        <Button
+   545→   545→          onClick={() => fileInputRef.current?.click()}
+   546→   546→          size="sm"
+   547→   547→          variant="secondary"
+   548→   548→          className="h-8 gap-1.5"
+   549→   549→          disabled={isBusy}
+   550→   550→        >
+   551→   551→          {isBusy ? (
+   552→   552→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   553→   553→          ) : (
+   554→   554→            <Upload className="h-3.5 w-3.5" />
+   555→   555→          )}
+   556→   556→          导入 PDF
+   557→   557→        </Button>
+   558→   558→
+   559→   559→        {/* Auth area */}
+   560→   560→        {status === "loading" ? (
+   561→   561→          <Loader2 className="h-4 w-4 animate-spin opacity-70" />
+   562→   562→        ) : session?.user ? (
+   563→   563→          <div className="flex items-center gap-2 ml-2">
+   564→   564→            {(session.user as any).role === "admin" && (
+   565→   565→              <Link href="/admin">
+   566→   566→                <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-background hover:bg-background/10">
+   567→   567→                  <Shield className="h-3.5 w-3.5" />
+   568→   568→                  管理
+   569→   569→                </Button>
+   570→   570→              </Link>
+   571→   571→            )}
+   572→   572→            <span className="text-xs opacity-90 max-w-[120px] truncate">
+   573→   573→              {(session.user as any).name || session.user.email}
+   574→   574→            </span>
+   575→   575→            <Button
+   576→   576→              variant="ghost"
+   577→   577→              size="sm"
+   578→   578→              className="h-8 w-8 p-0 text-background hover:bg-background/10"
+   579→   579→              onClick={() => signOut({ callbackUrl: "/" })}
+   580→   580→              title="登出"
+   581→   581→            >
+   582→   582→              <LogOut className="h-3.5 w-3.5" />
+   583→   583→            </Button>
+   584→   584→          </div>
+   585→   585→        ) : (
+   586→   586→          <Link href="/login" className="ml-2">
+   587→   587→            <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-background hover:bg-background/10">
+   588→   588→              <LogIn className="h-3.5 w-3.5" />
+   589→   589→              登录
+   590→   590→            </Button>
+   591→   591→          </Link>
+   592→   592→        )}
+   593→   593→      </header>
+   594→   594→
+   595→   595→      {/* LLM not-configured banner — dismissible */}
+   596→   596→      {!llmConfigured && !llmBannerDismissed && (
+   597→   597→        <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-[11px] px-4 py-1.5 flex items-center gap-2">
+   598→   598→          <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+   599→   599→          <span className="flex-1">
+   600→   600→            当前使用服务端默认 DeepSeek 配置。如需更换 LLM（OpenAI / 智谱 / Moonshot / 自定义 OpenAI 兼容端点），
+   601→   601→            请点击右上角「模型设置」。
+   602→   602→          </span>
+   603→   603→          <button
+   604→   604→            onClick={dismissLlmBanner}
+   605→   605→            title="不再提示"
+   606→   606→            className="flex-shrink-0 p-1 rounded hover:bg-amber-200/60 dark:hover:bg-amber-800/40 transition-colors"
+   607→   607→          >
+   608→   608→            <X className="h-3 w-3" />
+   609→   609→          </button>
+   610→   610→        </div>
+   611→   611→      )}
+   612→   612→
+   613→   613→      {/* 5-panel resizable layout */}
+   614→   614→      <div className="flex-1 min-h-0 hidden md:block">
+   615→   615→        <PanelGroup direction="horizontal" autoSaveId="medreader-h">
+   616→   616→          {/* Left: Outline Panel only (4-layer 全文框架 + Figure 链) —
+   617→   617→              HeadingNavigator was removed; paragraph navigation is now a
+   618→   618→              button inside the 智能解析 toolbar (opens a side drawer). */}
+   619→   619→          <Panel defaultSize={20} minSize={14} collapsible={false}>
+   620→   620→            <div className="h-full border-r bg-card flex flex-col">
+   621→   621→              <div
+   622→   622→                className={cn(
+   623→   623→                  "min-h-0",
+   624→   624→                  outlineCollapsed ? "flex-shrink-0" : "flex-1 overflow-hidden"
+   625→   625→                )}
+   626→   626→              >
+   627→   627→                <OutlinePanel
+   628→   628→                  outline={outline}
+   629→   629→                  loading={outlineLoading}
+   630→   630→                  onChildClick={onChildClick}
+   631→   631→                  activeChildId={activeChildId}
+   632→   632→                  collapsed={outlineCollapsed}
+   633→   633→                  onCollapsedChange={setOutlineCollapsed}
+   634→   634→                  paperId={paperId}
+   635→   635→                  figures={figures}
+   636→   636→                  citations={citations}
+   637→   637→                  figuresStatus={figuresStatus}
+   638→   638→                  onPanelChipClick={(quote, _pageIndex) => {
+   639→   639→                    // Re-use the existing quote-jump mechanism.
+   640→   640→                    setHighlightToken({
+   641→   641→                      quote,
+   642→   642→                      keywords: [],
+   643→   643→                      nonce: Date.now(),
+   644→   644→                    });
+   645→   645→                    if (activeView === "mindmap") {
+   646→   646→                      setActiveView("blocks");
+   647→   647→                    }
+   648→   648→                    setTimeout(() => {
+   649→   649→                      blockReaderRef.current?.scrollToText(quote, []);
+   650→   650→                    }, 50);
+   651→   651→                  }}
+   652→   652→                  onJumpToPage={(pageIndex) => {
+   653→   653→                    // Switch to PDF view and scroll to page
+   654→   654→                    setActiveView("pdf");
+   655→   655→                    setTimeout(() => {
+   656→   656→                      // PdfViewer doesn't expose imperative scroll, but it
+   657→   657→                      // listens to highlightToken with a page-number-ish quote.
+   658→   658→                      // For now we just switch tabs; the user can scroll.
+   659→   659→                      // TODO: add a page-jump prop to PdfViewer.
+   660→   660→                      console.log(`[onJumpToPage] jump to page ${pageIndex}`);
+   661→   661→                    }, 50);
+   662→   662→                  }}
+   663→   663→                />
+   664→   664→              </div>
+   665→   665→            </div>
+   666→   666→          </Panel>
+   667→   667→          <PanelResizeHandle className="resize-handle-h" />
+   668→   668→
+   669→   669→          {/* Center: Blocks / PDF / Mindmap tabs */}
+   670→   670→          <Panel defaultSize={50} minSize={30}>
+   671→   671→            <div className="h-full flex flex-col bg-muted/30">
+   672→   672→              <Tabs
+   673→   673→                value={activeView}
+   674→   674→                onValueChange={(v) => {
+   675→   675→                  setActiveView(v as "blocks" | "pdf" | "mindmap");
+   676→   676→                  // User has manually chosen a tab — don't auto-switch later.
+   677→   677→                  markTabTouched();
+   678→   678→                }}
+   679→   679→                className="flex-1 flex flex-col min-h-0"
+   680→   680→              >
+   681→   681→                <div className="border-b bg-background/80 backdrop-blur-sm px-3 py-1.5 flex items-center gap-2">
+   682→   682→                  <TabsList className="h-8">
+   683→   683→                    <TabsTrigger value="pdf" className="text-xs gap-1.5 h-7">
+   684→   684→                      <FileText className="h-3.5 w-3.5" />
+   685→   685→                      原文 PDF
+   686→   686→                    </TabsTrigger>
+   687→   687→                    <TabsTrigger value="blocks" className="text-xs gap-1.5 h-7">
+   688→   688→                      <LayoutGrid className="h-3.5 w-3.5" />
+   689→   689→                      智能解析
+   690→   690→                    </TabsTrigger>
+   691→   691→                    <TabsTrigger value="mindmap" className="text-xs gap-1.5 h-7">
+   692→   692→                      <Network className="h-3.5 w-3.5" />
+   693→   693→                      思维导图
+   694→   694→                    </TabsTrigger>
+   695→   695→                  </TabsList>
+   696→   696→                  {fileName && (
+   697→   697→                    <span className="text-[11px] text-muted-foreground truncate max-w-[300px]">
+   698→   698→                      {fileName}
+   699→   699→                    </span>
+   700→   700→                  )}
+   701→   701→                </div>
+   702→   702→
+   703→   703→                <TabsContent
+   704→   704→                  value="blocks"
+   705→   705→                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+   706→   706→                >
+   707→   707→                  <BlockReader
+   708→   708→                    ref={blockReaderRef}
+   709→   709→                    fallbackText={paperText}
+   710→   710→                    markdown={paperMarkdown}
+   711→   711→                    blocks={paperBlocks}
+   712→   712→                    imagesDir={paperImagesDir}
+   713→   713→                    loading={uploadStage === "parsing" || uploadStage === "uploading"}
+   714→   714→                    statusMessage={mineruStatus}
+   715→   715→                    onParagraphClick={onParagraphClick}
+   716→   716→                    highlightToken={highlightToken}
+   717→   717→                  />
+   718→   718→                </TabsContent>
+   719→   719→
+   720→   720→                <TabsContent
+   721→   721→                  value="pdf"
+   722→   722→                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+   723→   723→                >
+   724→   724→                  <PdfViewer
+   725→   725→                    fileData={fileData}
+   726→   726→                    fileName={fileName}
+   727→   727→                    onTextSelect={onTextSelect}
+   728→   728→                    onImageSelect={onImageSelect}
+   729→   729→                    highlightToken={highlightToken}
+   730→   730→                  />
+   731→   731→                </TabsContent>
+   732→   732→
+   733→   733→                <TabsContent
+   734→   734→                  value="mindmap"
+   735→   735→                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+   736→   736→                >
+   737→   737→                  <MindmapView
+   738→   738→                    outline={outline}
+   739→   739→                    figures={figures}
+   740→   740→                    onChildClick={onChildClick}
+   741→   741→                    onFigureClick={(figureLabel) => {
+   742→   742→                      // Jump back to left panel — expand that figure card.
+   743→   743→                      // For now we just switch to blocks view; the left panel
+   744→   744→                      // will show the figure card.
+   745→   745→                      // (The user can manually expand it — we'd need to add
+   746→   746→                      // imperative API to OutlinePanel for auto-expand.)
+   747→   747→                      console.log(`[onFigureClick] ${figureLabel}`);
+   748→   748→                      // Switch out of mindmap to blocks
+   749→   749→                      setActiveView("blocks");
+   750→   750→                    }}
+   751→   751→                  />
+   752→   752→                </TabsContent>
+   753→   753→
+   754→   754→              </Tabs>
+   755→   755→            </div>
+   756→   756→          </Panel>
+   757→   757→          <PanelResizeHandle className="resize-handle-h" />
+   758→   758→
+   759→   759→          {/* Right: translation + chat */}
+   760→   760→          <Panel defaultSize={30} minSize={24}>
+   761→   761→            <PanelGroup direction="vertical" autoSaveId="medreader-right-v">
+   762→   762→              <Panel defaultSize={42} minSize={20}>
+   763→   763→                <div className="h-full border-b bg-card">
+   764→   764→                  <TranslationPanel
+   765→   765→                    selectedText={selectedText}
+   766→   766→                    selectedBlockIdx={selectedBlockIdx}
+   767→   767→                    selectionNonce={selectionNonce}
+   768→   768→                    llmHeaders={llmHeaders}
+   769→   769→                  />
+   770→   770→                </div>
+   771→   771→              </Panel>
+   772→   772→              <PanelResizeHandle className="resize-handle-v" />
+   773→   773→              <Panel defaultSize={58} minSize={20}>
+   774→   774→                <div className="h-full bg-card">
+   775→   775→                  <ChatPanel
+   776→   776→                    attachedImage={attachedImage}
+   777→   777→                    onClearAttachedImage={() => setAttachedImage(null)}
+   778→   778→                    selectedText={selectedText}
+   779→   779→                    paperMarkdown={paperMarkdown || undefined}
+   780→   780→                    paperText={paperText || undefined}
+   781→   781→                    paperId={paperId}
+   782→   782→                    llmHeaders={llmHeaders}
+   783→   783→                  />
+   784→   784→                </div>
+   785→   785→              </Panel>
+   786→   786→            </PanelGroup>
+   787→   787→          </Panel>
+   788→   788→        </PanelGroup>
+   789→   789→      </div>
+   790→   790→
+   791→   791→      {/* Outline error toast */}
+   792→   792→      {outlineError && (
+   793→   793→        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[600px]">
+   794→   794→          <div className="bg-destructive/10 border border-destructive/30 text-destructive text-xs px-4 py-2.5 rounded-md shadow-lg flex items-center gap-2">
+   795→   795→            <Info className="h-3.5 w-3.5 flex-shrink-0" />
+   796→   796→            <span>{outlineError}</span>
+   797→   797→            <button
+   798→   798→              className="ml-2 underline"
+   799→   799→              onClick={() => setOutlineError(null)}
+   800→   800→            >
+   801→   801→              关闭
+   802→   802→            </button>
+   803→   803→          </div>
+   804→   804→        </div>
+   805→   805→      )}
+   806→   806→
+   807→   807→      {/* LLM settings dialog */}
+   808→   808→      <LLMSettingsDialog
+   809→   809→        open={llmSettingsOpen}
+   810→   810→        onOpenChange={setLlmSettingsOpen}
+   811→   811→        onSaved={() => {
+   812→   812→          setLlmHeaders(refreshLLMHeaders());
+   813→   813→          setLlmConfigured(hasUserLLMConfig());
+   814→   814→        }}
+   815→   815→      />
+   816→   816→
+   817→   817→      {/* Mobile / small screen warning */}
+   818→   818→      <div className="md:hidden fixed inset-0 bg-background z-50 flex items-center justify-center p-6 text-center">
+   819→   819→        <div className="space-y-3">
+   820→   820→          <BookOpen className="h-10 w-10 mx-auto text-primary" />
+   821→   821→          <p className="text-sm font-medium">请使用更大屏幕访问</p>
+   822→   822→          <p className="text-xs text-muted-foreground">
+   823→   823→            MedReader Agent 需要至少 1024px 宽度以同时显示五个面板
+   824→   824→          </p>
+   825→   825→        </div>
+   826→   826→      </div>
+   827→   827→    </div>
+   828→   828→  );
+   829→   829→}
+   830→   830→
