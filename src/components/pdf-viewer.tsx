@@ -56,48 +56,143 @@ export default function PdfViewer({
   // Load pdfjs-dist dynamically (client-only)
   useEffect(() => {
     let mounted = true;
+    let cancelled = false;
     (async () => {
-      const lib = await import("pdfjs-dist");
-      // Use a same-origin worker served by our own API route.
-      //
-      // Why not CDN: cdnjs.cloudflare.com fails behind GFW / corporate
-      // firewalls / offline networks → "PDF 渲染无法进行" for non-dev users.
-      //
-      // Why not /public/pdf.worker.js: Next.js 16 standalone server returns
-      // 404 for that path (app-router matches .js files before static
-      // serving kicks in).
-      //
-      // Why not new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url):
-      // webpack emits the chunk to /_next/static/media/pdf.worker.min.<hash>.mjs,
-      // but standalone server ALSO returns 404 for .mjs files in /static/media
-      // (only .woff2 / .svg / .png etc. work).
-      //
-      // Solution: serve the worker through /api/pdf-worker route, which reads
-      // the file from public/pdf.worker.js (always present after build) and
-      // returns it as application/javascript. We fetch it as text and wrap
-      // in a Blob URL because pdf.js's workerSrc expects a URL it can spawn
-      // a Worker from — a same-origin blob: URL works perfectly.
       try {
-        const res = await fetch("/api/pdf-worker");
-        if (res.ok) {
-          const text = await res.text();
-          const blob = new Blob([text], { type: "application/javascript" });
-          lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
-        } else {
-          throw new Error(`HTTP ${res.status}`);
+        // ── Step 1: load the pdfjs-dist library itself ──────────────────
+        // This dynamic import pulls in a large chunk (~1MB) — under slow
+        // networks / shared-host preview proxies, the chunk fetch can
+        // time out or fail. We surface the error instead of swallowing
+        // it so the user can see "library load failed" instead of a
+        // blank forever-loading screen.
+        let lib: any;
+        try {
+          lib = await import("pdfjs-dist");
+        } catch (importErr) {
+          console.error("[pdf-viewer] import('pdfjs-dist') failed:", importErr);
+          if (!cancelled) {
+            setError(
+              `pdfjs-dist 库加载失败：${importErr instanceof Error ? importErr.message : String(importErr)}。请检查网络或刷新页面重试。`
+            );
+          }
+          return;
         }
-      } catch {
-        // Last-resort fallback: CDN. Will fail offline but at least the
-        // library initializes without throwing.
-        lib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
-      }
-      if (mounted) {
-        pdfjsLibRef.current = lib;
-        setLibReady(true);
+        if (cancelled) return;
+
+        // ── Step 2: locate a worker ──────────────────────────────────────
+        // Strategy: try same-origin URLs first (fast + works behind
+        // firewalls), fall back to CDN, then to "fake worker" (main
+        // thread, slow but always works).
+        //
+        // Why prefer same-origin URLs over Blob URLs:
+        //   We used to fetch() the worker text, wrap it in a Blob, and
+        //   pass `URL.createObjectURL(blob)` as workerSrc. That works,
+        //   but it adds an extra HTTP round-trip + uses extra memory.
+        //   Directly assigning workerSrc = "/pdf.worker.js" is simpler
+        //   and lets the browser cache the worker file across sessions.
+        //
+        // Two same-origin candidates:
+        //   A. /pdf.worker.js — Next.js dev server serves /public/*.js
+        //      files directly. Works in dev. May 404 in standalone prod
+        //      (app-router matches .js before static serving).
+        //   B. /api/pdf-worker — API route that reads the file from disk
+        //      and returns it as application/javascript. Works in both
+        //      dev and standalone prod.
+        // We HEAD-check both in parallel and use whichever returns 200
+        // + application/javascript. If both fail, fall back to CDN.
+        let workerReady = false;
+
+        const sameOriginCandidates = ["/pdf.worker.js", "/api/pdf-worker"];
+        // Run HEAD checks in parallel; the first one that succeeds wins.
+        // We use `cache: "no-store"` to avoid stale 404s from a previous
+        // deploy where the file didn't exist.
+        const headResults = await Promise.all(
+          sameOriginCandidates.map(async (url) => {
+            try {
+              const res = await fetch(url, {
+                method: "GET",
+                cache: "no-store",
+                // Only read headers, but fetch() doesn't have a true HEAD
+                // for cross-method, so we do GET and let the browser drop
+                // the body when we don't consume it. Acceptable cost (~1MB)
+                // since we'll re-fetch the same URL moments later as the
+                // workerSrc.
+              });
+              if (!res.ok) return { url, ok: false, status: res.status };
+              const ct = res.headers.get("content-type") || "";
+              const len = Number(res.headers.get("content-length") || "0");
+              // Drain the body so the connection can be reused.
+              try {
+                await res.arrayBuffer();
+              } catch {
+                // ignore body-read errors
+              }
+              // Sanity check: must be JS, must be substantial.
+              const looksLikeJsWorker =
+                (ct.includes("javascript") || ct.includes("ecmascript") || ct === "") &&
+                len > 100_000;
+              return { url, ok: looksLikeJsWorker, status: res.status, len };
+            } catch (e) {
+              return { url, ok: false, status: -1, err: e };
+            }
+          })
+        );
+
+        for (const r of headResults) {
+          if (r.ok) {
+            lib.GlobalWorkerOptions.workerSrc = r.url;
+            workerReady = true;
+            console.log(`[pdf-viewer] using worker source: ${r.url} (${r.len} bytes)`);
+            break;
+          } else {
+            console.warn(
+              `[pdf-viewer] worker candidate ${r.url} not usable: HTTP ${r.status}`,
+              (r as any).err ?? ""
+            );
+          }
+        }
+
+        // B. Try CDN if no same-origin source worked.
+        if (!workerReady) {
+          try {
+            const cdnUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${lib.version}/pdf.worker.min.mjs`;
+            lib.GlobalWorkerOptions.workerSrc = cdnUrl;
+            workerReady = true;
+            console.warn(`[pdf-viewer] falling back to CDN worker: ${cdnUrl}`);
+          } catch (cdnErr) {
+            console.warn("[pdf-viewer] CDN worker setup failed:", cdnErr);
+          }
+        }
+
+        // C. If both fail, explicitly disable the worker — pdfjs will
+        //    run in fake-worker mode (main thread). Slow but functional.
+        if (!workerReady) {
+          console.warn(
+            "[pdf-viewer] all worker sources failed — using pdfjs fake-worker (main thread, slower)"
+          );
+          try {
+            lib.GlobalWorkerOptions.workerSrc = "";
+          } catch {
+            // ignore
+          }
+        }
+
+        if (mounted && !cancelled) {
+          pdfjsLibRef.current = lib;
+          setLibReady(true);
+        }
+      } catch (e) {
+        console.error("[pdf-viewer] init crashed unexpectedly:", e);
+        if (!cancelled) {
+          setError(
+            `PDF 渲染初始化失败：${e instanceof Error ? e.message : String(e)}`
+          );
+        }
       }
     })();
     return () => {
       mounted = false;
+      cancelled = true;
     };
   }, []);
 
