@@ -49,6 +49,9 @@ ZHIPU_KEY="ab99da4d58cc4f67bb858684be8e50fc.AnqgaeynbqrMTDtR"
 # DeepSeek chat LLM key provided by user
 DEEPSEEK_KEY="sk-edb16a1b2daa4982a45307247934cd91"
 
+# MinerU PDF parsing API token provided by user
+MINERU_TOKEN="sk-X5ufJB2CZjaU9OezQps3SvNbbMtY3RdeB7VrrzBWYcKYZuad"
+
 # Helper: ensure a key exists in .env.production with a specific value
 ensure_var() {
   local key="$1" val="$2"
@@ -62,6 +65,7 @@ ensure_var() {
 }
 
 ensure_var "DEEPSEEK_API_KEY" "$DEEPSEEK_KEY"
+ensure_var "MINERU_API_TOKEN" "$MINERU_TOKEN"
 ensure_var "VISION_BASE_URL"  "https://open.bigmodel.cn/api/paas/v4"
 ensure_var "VISION_API_KEY"   "$ZHIPU_KEY"
 ensure_var "VISION_MODEL"     "glm-4v-flash"
