@@ -225,6 +225,31 @@
 .block-reader-table th { font-weight: 600; }
 .block-reader-table tr:nth-child(even) { background: rgba(0,0,0,0.02); }
 
+/* ===== Inline markdown (small text for captions / footnotes) ===== */
+/* Used by block-reader figure captions, table captions/footnotes, etc.
+   Makes <sup>/<sub>/<strong>/<em> render at appropriate small sizes. */
+.prose-inline-sm {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.prose-inline-sm sup,
+.prose-inline-sm sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+.prose-inline-sm sup { vertical-align: super; }
+.prose-inline-sm sub { vertical-align: sub; }
+.prose-inline-sm strong { font-weight: 600; }
+.prose-inline-sm em { font-style: italic; }
+.prose-inline-sm code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+  background: rgba(0,0,0,0.05);
+  padding: 0.05em 0.25em;
+  border-radius: 2px;
+}
+.dark .prose-inline-sm code { background: rgba(255,255,255,0.08); }
+
 /* ===== Chat markdown rendering ===== */
 .chat-markdown > *:first-child { margin-top: 0; }
 .chat-markdown > *:last-child { margin-bottom: 0; }

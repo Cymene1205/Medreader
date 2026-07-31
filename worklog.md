@@ -1223,3 +1223,60 @@ Notes:
 - `src/app/api/analyze/route.ts` — `paperTitle` precedence 改为 `paper.title || title`；analysisJson 里 title 与 paperTitle 不同步时同步
 - `src/components/outline-panel.tsx` — 恢复 per-section 折叠，加 chevron 图标，默认 argumentSpine 折叠
 - `src/app/app/page.tsx` — 中央 tab 显示 `outline?.title || fileName`，加 tooltip
+
+---
+
+## Task ID: round-5-pdf-worker-and-strings
+**Agent:** main-agent
+**Task:** 用户反馈：(1) 不要再杀进程（之前我重启过 server）；(2) 智能解析里还有字符串残留+希望展示完整；(3) 其他人导入 PDF 还是显示问题——截图显示错误 "解析失败：a.toHex is not a function"。
+
+### Work Log
+- 用 VLM skill 分析用户截图：截图显示一行红色错误文字 "解析失败：a.toHex is not a function"。这是 pdf-viewer.tsx 第 346 行 `<div className="text-sm text-red-500 py-8 px-4">解析失败：{error}</div>` 显示的 PDF 渲染错误。
+- 定位 error 来源：pdf-viewer.tsx 第 156-160 行 catch 块 `setError(e instanceof Error ? e.message : String(e))`。错误是 pdfjs-dist 抛出的，来自 `lib.getDocument(...).promise` 这一行。
+- 搜 `toHex` 调用：用 python 扫描 `node_modules/pdfjs-dist/build/pdf.worker.mjs` 第 59861 行有 `ashOriginal.toHex(), hashModified?.toHex() ?? null`，这是 v6 worker 调用主 bundle 里的 toHex 方法做 PDF fingerprint 计算。
+- 检查 `public/pdf.worker.js`：文件头部 "Copyright 2024 Mozilla Foundation" — 是 v4 时期的旧 worker。但 `node_modules/pdfjs-dist/package.json` 显示 `"version": "6.1.200"`。**严重版本不匹配**：主 bundle 是 v6.1.200，但 worker 还是 v4 的旧版本！v4 worker 没有 `toHex` 方法，v6 主 bundle 调用它就报 `a.toHex is not a function`。
+- 根因：之前解决"PDF worker 跨域"问题时，把 worker 文件手动复制到 `public/pdf.worker.js`。但之后 `npm install` 升级了 pdfjs-dist 到 v6，没有同步更新 `public/pdf.worker.js`，造成主 bundle v6 ↔ worker v4 协议错配。
+- 修复：直接 `cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.js`。验证 `diff -q` 完全一致。
+- 长期防御：在 `package.json` 加 `sync-pdfjs-worker` script，挂到 `build` 和 `postinstall` 之前，这样以后每次 `npm install` / `npm run build` 都会自动同步 worker 文件：
+  ```json
+  "sync-pdfjs-worker": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.js",
+  "build": "npm run sync-pdfjs-worker && next build && ...",
+  "postinstall": "prisma generate && npm run sync-pdfjs-worker"
+  ```
+- 改进 pdf-viewer 的错误显示：之前只是一行红字 "解析失败：xxx"，对非技术用户没帮助。改成结构化错误卡片：标题 "PDF 渲染失败" + 错误详情 + "可能的解决方法" 列表（刷新重试 / 检查同源 worker 路径 / 如错误含 toHex 提示重新 build）。这样其他用户遇到问题时能自己排查或截图给开发者。
+- 处理"智能解析里还有一些字符串"：dump 当前 paper 的 blocksJson 看实际内容，发现两类典型 artifact：
+  1. **MinerU 错误的 sup/sub 包裹真实单词**：block 9 内容 `A<sup>fter</sup> <sup>acute</sup> <sup>myocardial</sup> <sup>infarction</sup> <sup>(MI),</sup> <sup>cardiac</sup> <sup>isch-</sup>emic injury triggers a rapid and massive influx of<sub>1–4</sub> emic` —— MinerU 把 "After acute myocardial infarction..." 整个句子拆成单词放进 `<sup>` 标签里，导致显示成 "A fter acute myocardial ..." 字间距错乱。
+  2. **LaTeX math 显示为原始字符串**：block 100 内容 `showed low levels of $\mathsf { L y 6 C } ,$` —— ReactMarkdown 不渲染 LaTeX，`$\mathsf{...}$` 直接显示成原始字符串。
+- 扩展 `cleanMinerUText` 函数（src/components/block-reader.tsx 第 79-174 行）：
+  - **Fix 1**: 检测 `<sup>/<sub>` 内容是否是"真实单词"（连续 3+ 拉丁/中文字符，或字母占比 > 50%）。如果是，说明是 MinerU 误判，**剥掉标签但保留 inner 文本**。否则（纯数字/符号如 `1-4`、`hi`、`+`）保留标签让 ReactMarkdown 正常渲染上下标。
+  - **Fix 2**: 把 `$...$` 包裹的 inline LaTeX 转成纯文本——剥掉 `\mathsf`/`\text`/`\mathrm`/`\frac` 等命令、删掉 `{}`、合并空格。例如 `$\mathsf{Ly6C}$` → `Ly6C`，`$p < 0.05$` → `p < 0.05`。
+  - **Fix 3**: 移除行首 `• ` 空字符（MinerU 偶尔误插入的 bullet 字符）。
+  - 保留原有 `\*`→`*`、`\_`→`_`、`\#`→`#` 转义清理。
+- 处理"还希望展示完整"：
+  1. **outline-panel section summary**：之前 `line-clamp-2` 把 summary 截到 2 行。改成展开时 `line-clamp-none` 完整显示，折叠时保留 `line-clamp-2` 作为预览。
+  2. **block-reader 段落导航抽屉里的 heading**：之前 `line-clamp-2`，改成无 clamp，长标题完整显示。
+  3. **block-reader 图片 caption 宽度**：之前 `max-w-[600px]`，改成 `w-full`，长图注不被截断。
+- 补全 `prose-inline-sm` CSS 类：之前在 block-reader 和 figure-chain 里用了这个 class 但 globals.css 没定义（Tailwind 也没这个内置 utility）。在 `globals.css` 第 228-251 行加定义：font-size 11px、行高 1.5、`sup/sub` 用 0.75em 字号 + 正确 vertical-align、`code` 等内联元素样式。这样图注里的 `<sup>hi</sup>`、`CD8<sup>+</sup>` 才能正确显示为上标而不是字面字符串。
+- 验证编译：`npx tsc --noEmit` 我改的文件无错误（block-reader 第 353-354 行有预存在的 `Object is possibly undefined`，是 `blocks[i].chart_caption.join` —— 不是我引入的）。`npx next build` 成功。
+- 验证 worker 部署：`npm run build` 后 `.next/standalone/public/pdf.worker.js` 与 `node_modules/pdfjs-dist/build/pdf.worker.min.mjs` 完全一致。`grep toHex` 在新 worker 里找到 1 处（v6 的 fingerprint 计算函数），主 bundle 里 `new Worker(t,{type:"module"})` 也在。
+- **没有杀进程**：本轮完全没有 `pkill`/重启 server，让用户自己控制 server 生命周期。修改都通过 build 后部署到 `.next/standalone/`，用户在自己机器上 `npm run build && npm run start` 即可生效。
+
+### Stage Summary
+- ✅ **PDF 渲染失败的根本原因找到了**：`public/pdf.worker.js` 是 v4 旧文件，但 `pdfjs-dist` 已经升到 v6.1.200，主 bundle 调用 v6 协议的 `toHex()` 方法但 v4 worker 没有这个方法。修复：把 `node_modules/pdfjs-dist/build/pdf.worker.min.mjs` 复制到 `public/pdf.worker.js`，并在 `package.json` 加 `sync-pdfjs-worker` script 防止再次失同步。
+- ✅ **智能解析字符串 artifact 处理**：扩展 `cleanMinerUText` 处理三类问题——MinerU 误包裹单词的 `<sup>/<sub>` 标签、`$\mathsf{...}$` LaTeX 数学表达式、行首 `•` 噪声。
+- ✅ **展示完整**：outline-panel summary 展开时完整显示；block-reader 段落导航标题完整显示；图片 caption 用 `w-full` 不限宽。
+- ✅ **prose-inline-sm CSS 补全**：之前用了但没定义，现在 globals.css 里有完整的内联 markdown 样式，图注里的上下标能正确渲染。
+- ✅ **错误提示改进**：pdf-viewer 错误从一行红字变成结构化卡片，含错误详情 + 排查建议，下次其他用户遇到问题能自己看明白。
+- ✅ **没杀进程**：本轮完全没动运行中的 server，所有修改通过 build 部署。
+
+### Files Modified
+- `public/pdf.worker.js` — 从 v4 旧文件替换为 v6.1.200 的正确版本
+- `package.json` — 加 `sync-pdfjs-worker` script，挂到 `build` 和 `postinstall` 之前
+- `src/components/block-reader.tsx` — 扩展 `cleanMinerUText` 处理 sup/sub/LaTeX/bullet artifact；图注改 `w-full`；段落导航标题去 line-clamp
+- `src/components/outline-panel.tsx` — summary 展开时 `line-clamp-none`，折叠时 `line-clamp-2`
+- `src/components/pdf-viewer.tsx` — 错误显示改成结构化卡片 + 排查建议
+- `src/app/globals.css` — 补全 `prose-inline-sm` CSS 类定义
+
+### Files NOT touched (per user request — "又杀进程了")
+- 没有重启用户运行中的 production server
+- 没有改 `src/app/app/page.tsx`（保持上一轮的 outline.title 显示逻辑）

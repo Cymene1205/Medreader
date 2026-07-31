@@ -335,7 +335,16 @@ export default function OutlinePanel({
                           </div>
                           {hasContent && (part as any)?.summary && (
                             <div
-                              className="text-muted-foreground mt-0.5 line-clamp-2"
+                              className={cn(
+                                "text-muted-foreground mt-0.5",
+                                // When collapsed: show 2-line preview.
+                                // When expanded: show full summary (the body
+                                // below also has the detail, but having the
+                                // full summary visible in the header is
+                                // useful when the user has scrolled down
+                                // past the section heading).
+                                isOpen ? "line-clamp-none" : "line-clamp-2"
+                              )}
                               style={{ fontSize: fs(11) }}
                             >
                               {(part as any).summary}

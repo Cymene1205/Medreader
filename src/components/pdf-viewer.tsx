@@ -343,7 +343,20 @@ export default function PdfViewer({
           </div>
         )}
         {error && (
-          <div className="text-sm text-red-500 py-8 px-4">解析失败：{error}</div>
+          <div className="py-8 px-4 max-w-[600px] mx-auto">
+            <div className="text-sm text-red-500 font-medium mb-2">
+              PDF 渲染失败
+            </div>
+            <div className="text-xs text-muted-foreground mb-3 leading-relaxed">
+              {error}
+            </div>
+            <div className="text-[11px] text-muted-foreground/80 leading-relaxed bg-muted/40 rounded px-3 py-2 border border-border/40">
+              <strong className="text-foreground">可能的解决方法：</strong>
+              <br />· 刷新页面后重新上传 PDF（worker 文件可能加载失败）
+              <br />· 检查网络是否能访问同源 <code className="text-[10px] bg-muted px-1 rounded">/api/pdf-worker</code> 路径
+              <br />· 如错误信息含 <code className="text-[10px] bg-muted px-1 rounded">toHex</code>，说明 PDF worker 版本与 pdfjs-dist 不匹配，需重新构建（<code className="text-[10px] bg-muted px-1 rounded">npm run build</code>）
+            </div>
+          </div>
         )}
         {pdfDoc &&
           Array.from({ length: numPages }).map((_, i) => (

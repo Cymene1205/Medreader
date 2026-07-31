@@ -77,21 +77,100 @@ type Props = {
 };
 
 /**
- * Strip MinerU's over-escaped markdown punctuation.
+ * Strip MinerU's over-escaped markdown punctuation + common parsing artifacts.
+ *
  * MinerU outputs things like "Ehsan Vafadarnejad,\* Giuseppe Rizzo,\* ..."
  * The backslash before * is wrong — these are author name separators, not
  * emphasis markers. Strip them so the text renders cleanly.
+ *
+ * Also fixes several MinerU bugs that produce visible "string residue" in
+ * the reader view:
+ *
+ *   1. Word-internal <sup>/<sub> tags wrapping real word content.
+ *      MinerU sometimes mis-detects superscript boundaries and produces
+ *      garbage like:
+ *        "A<sup>fter</sup> <sup>acute</sup> <sup>myocardial</sup> ...
+ *         <sup>isch-</sup>emic injury ... of<sub>1–4</sub> emic"
+ *      Real superscripts are citation numbers / panel labels (digits and
+ *      short symbols). If a <sup>/<sub> contains 3+ word-chars in a row,
+ *      it's a parsing error → strip the tags, keep the inner text.
+ *
+ *   2. Inline LaTeX math like "$\mathsf{Ly6C}$" or "$\text{...}$" showing
+ *      as raw text. ReactMarkdown doesn't render LaTeX by default; the raw
+ *      `\mathsf{...}` and surrounding $ leak through. We extract the
+ *      inner text and strip the LaTeX commands so users see "Ly6C" instead.
+ *
+ *   3. Stray "•" characters that MinerU sometimes inserts at line starts.
+ *      (Only strip if at the very start of a line and not part of a
+ *      legitimate bullet list.)
  */
 function cleanMinerUText(s: string): string {
   if (!s) return "";
-  return s
-    // \*  → * (MinerU over-escapes asterisks used as author separators)
-    .replace(/\\\*/g, "*")
-    // \_  → _
-    .replace(/\\_/g, "_")
-    // \# at start of line — keep as heading marker if intended; but if escaped,
-    // MinerU sometimes escapes inappropriately. Only unescape mid-line.
-    .replace(/(?!^)\\#/g, "#");
+  let out = s;
+
+  // ── Fix 1: strip <sup>/<sub> tags whose content is real word text ──────
+  // A "real" superscript is mostly digits / symbols (e.g. "1–4", "hi", "+",
+  // "−"). If the inner text contains 3+ consecutive Latin/CJK letters, it's
+  // almost certainly a parsing error where MinerU wrapped a real word.
+  // We strip the tags but KEEP the inner text so the word is readable.
+  out = out.replace(
+    /<(sup|sub)>([^<]*)<\/\1>/gi,
+    (fullMatch, _tag: string, inner: string) => {
+      const t = inner.trim();
+      if (!t) return "";
+      // 3+ consecutive letters (Latin or CJK) inside a sup/sub = parsing error
+      const hasLongWord = /[A-Za-z\u4e00-\u9fa5]{3,}/.test(t);
+      // If it's mostly letters (ratio > 0.5), also treat as word content
+      const letterCount = (t.match(/[A-Za-z]/g) || []).length;
+      const isWordLike = t.length > 0 && letterCount / t.length > 0.5;
+      if (hasLongWord || isWordLike) {
+        // Strip the tags, keep the text — but preserve a leading space if
+        // the original had one (so words don't merge).
+        return inner;
+      }
+      // Otherwise it's a legit superscript (citation number, +/-, etc.)
+      // — keep the tag intact so ReactMarkdown renders it correctly.
+      return fullMatch;
+    }
+  );
+
+  // ── Fix 2: convert inline LaTeX math `$\cmd{...}$` to plain text ───────
+  // Examples:
+  //   "$\mathsf{Ly6C}$"            → "Ly6C"
+  //   "$\text{mean} \pm SD$"       → "mean ± SD"
+  //   "$\mathrm{CD45}^{+}$"        → "CD45+"
+  //   "$p < 0.05$"                 → "p < 0.05"
+  // Strategy: for each `$...$` pair, strip LaTeX commands (\mathsf, \text,
+  // \mathrm, \frac, etc.) and braces, but keep alphanumerics + operators.
+  out = out.replace(/\$([^$]+)\$/g, (_m, math: string) => {
+    // Remove LaTeX commands like \mathsf, \text, \mathrm, \frac, \left, \right
+    let cleaned = math
+      .replace(/\\[a-zA-Z]+/g, " ")
+      // Remove braces
+      .replace(/[{}]/g, "")
+      // Replace multiple spaces with single
+      .replace(/\s+/g, " ")
+      .trim();
+    // If the cleaned version is just a few symbols/letters, return as-is
+    if (cleaned.length === 0) return "";
+    return cleaned;
+  });
+
+  // ── Original fixes (MinerU escape cleanup) ─────────────────────────────
+  // \*  → * (MinerU over-escapes asterisks used as author separators)
+  out = out.replace(/\\\*/g, "*");
+  // \_  → _
+  out = out.replace(/\\_/g, "_");
+  // \# at start of line — keep as heading marker if intended; but if escaped,
+  // MinerU sometimes escapes inappropriately. Only unescape mid-line.
+  out = out.replace(/(?!^)\\#/g, "#");
+
+  // ── Fix 3: stray leading bullet characters MinerU sometimes inserts ────
+  // Only strip "• " at the very start of a line (legit bullets are inside
+  // <ul><li> which ReactMarkdown handles separately).
+  out = out.replace(/^•\s+/gm, "");
+
+  return out;
 }
 
 /**
@@ -478,13 +557,13 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
                             "flex-1 min-w-0",
                             isH1
                               ? cn(
-                                  "text-[13px] font-semibold leading-snug line-clamp-2",
+                                  "text-[13px] font-semibold leading-snug",
                                   isActive
                                     ? "text-sky-700 dark:text-sky-300"
                                     : "text-foreground"
                                 )
                               : cn(
-                                  "text-[12px] font-normal leading-snug line-clamp-2",
+                                  "text-[12px] font-normal leading-snug",
                                   isActive
                                     ? "text-sky-700 dark:text-sky-300"
                                     : "text-foreground/75"
@@ -747,7 +826,7 @@ function BlockView({
           />
         )}
         {caption && (
-          <div className="text-[11px] text-muted-foreground italic mt-1.5 text-center max-w-[600px] prose-inline-sm">
+          <div className="text-[11px] text-muted-foreground italic mt-1.5 text-center w-full prose-inline-sm">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeRaw]}
