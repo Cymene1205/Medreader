@@ -9,6 +9,7 @@ import OutlinePanel, {
   type OutlineChild,
   type OutlineSection,
 } from "@/components/outline-panel";
+import type { Figure, Citation } from "@/components/figure-chain";
 import TranslationPanel from "@/components/translation-panel";
 import ChatPanel from "@/components/chat-panel";
 import MindmapView from "@/components/mindmap-view";
@@ -32,6 +33,7 @@ import {
   FileText,
   Network,
   LayoutGrid,
+  ListTree,
   Settings2,
   AlertTriangle,
   X,
@@ -71,7 +73,12 @@ export default function Home() {
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
   const [activeHeadingText, setActiveHeadingText] = useState<string | undefined>();
-  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("pdf");
+  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap" | "headings">("pdf");
+
+  // New 4-layer pipeline state: figures + citations + spine polling
+  const [figures, setFigures] = useState<Figure[]>([]);
+  const [citations, setCitations] = useState<Citation[]>([]);
+  const [figuresLoading, setFiguresLoading] = useState(false);
   // Tracks whether the user has manually clicked a center-tab since the
   // current upload. We use this to decide whether to auto-switch from the
   // PDF tab (the default initial view, shown while MinerU is parsing) to
@@ -263,7 +270,9 @@ export default function Home() {
         setActiveView("blocks");
       }
 
-      // Trigger analysis using markdown (preferred) or plain text
+      // Trigger Stage 1 analysis (3 parallel LLM calls — questionBackground /
+      // novelty / limitsOpportunities). Returns immediately with the 3 parts;
+      // argumentSpine stays null until figures finish (Stage 2).
       setUploadStage("analyzing");
       setOutlineLoading(true);
       try {
@@ -295,6 +304,65 @@ export default function Home() {
         setUploadStage("idle");
       } finally {
         setOutlineLoading(false);
+      }
+
+      // ── Stage 2: trigger figure analysis (Call A) in parallel with Stage 1.
+      // This runs AFTER MinerU's figure extraction (which happened during
+      // upload). Call A is one LLM call for all figures + writes back the
+      // argumentSpine. We poll for completion so the UI updates as figures
+      // become ready.
+      // ─────────────────────────────────────────────────────────────────
+      if (serverPaperId) {
+        setFiguresLoading(true);
+        // Fire-and-forget the figures POST (Call A). It writes to DB on
+        // completion; we poll the GET endpoint for results.
+        fetch("/api/figures", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...refreshLLMHeaders(),
+          },
+          body: JSON.stringify({ paperId: serverPaperId }),
+        }).catch((e) => {
+          console.warn("[figures] Call A trigger failed:", e);
+        });
+
+        // Poll for figures + updated analysisJson + citations.
+        const poll = async () => {
+          try {
+            const [figRes, analysisRes, paperRes] = await Promise.all([
+              fetch(`/api/figures?paperId=${serverPaperId}`).then((r) => r.json()),
+              fetch(`/api/analyze?paperId=${serverPaperId}`).then((r) => r.json()),
+              fetch(`/api/paper/${serverPaperId}`).then((r) => r.json()),
+            ]);
+            if (Array.isArray(figRes.figures)) {
+              setFigures(figRes.figures as Figure[]);
+            }
+            // Refresh outline if analysisJson has been updated (spine filled)
+            if (analysisRes.outline) {
+              setOutline(analysisRes.outline as Outline);
+            }
+            // Load citations (for panel chip click → quote jump)
+            if (Array.isArray(paperRes.citations)) {
+              setCitations(paperRes.citations as Citation[]);
+            }
+            // Stop polling when all figures have a question (Call A done)
+            const allDone =
+              Array.isArray(figRes.figures) &&
+              figRes.figures.length > 0 &&
+              figRes.figures.every((f: Figure) => f.question);
+            // Also stop when spine is present (Stage 2 complete)
+            const spineReady = !!analysisRes.outline?.argumentSpine;
+            if (allDone && spineReady) {
+              setFiguresLoading(false);
+              return;
+            }
+          } catch (e) {
+            console.warn("[poll] figures/analyze fetch failed:", e);
+          }
+          setTimeout(poll, 4000);
+        };
+        setTimeout(poll, 3000);
       }
     },
     []
@@ -557,6 +625,34 @@ export default function Home() {
                   activeChildId={activeChildId}
                   collapsed={outlineCollapsed}
                   onCollapsedChange={setOutlineCollapsed}
+                  paperId={paperId}
+                  figures={figures}
+                  citations={citations}
+                  onPanelChipClick={(quote, _pageIndex) => {
+                    // Re-use the existing quote-jump mechanism.
+                    setHighlightToken({
+                      quote,
+                      keywords: [],
+                      nonce: Date.now(),
+                    });
+                    if (activeView === "mindmap" || activeView === "headings") {
+                      setActiveView("blocks");
+                    }
+                    setTimeout(() => {
+                      blockReaderRef.current?.scrollToText(quote, []);
+                    }, 50);
+                  }}
+                  onJumpToPage={(pageIndex) => {
+                    // Switch to PDF view and scroll to page
+                    setActiveView("pdf");
+                    setTimeout(() => {
+                      // PdfViewer doesn't expose imperative scroll, but it
+                      // listens to highlightToken with a page-number-ish quote.
+                      // For now we just switch tabs; the user can scroll.
+                      // TODO: add a page-jump prop to PdfViewer.
+                      console.log(`[onJumpToPage] jump to page ${pageIndex}`);
+                    }, 50);
+                  }}
                 />
               </div>
             </div>
@@ -588,6 +684,10 @@ export default function Home() {
                     <TabsTrigger value="mindmap" className="text-xs gap-1.5 h-7">
                       <Network className="h-3.5 w-3.5" />
                       思维导图
+                    </TabsTrigger>
+                    <TabsTrigger value="headings" className="text-xs gap-1.5 h-7">
+                      <ListTree className="h-3.5 w-3.5" />
+                      段落导航
                     </TabsTrigger>
                   </TabsList>
                   {fileName && (
@@ -631,7 +731,36 @@ export default function Home() {
                   value="mindmap"
                   className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
                 >
-                  <MindmapView outline={outline} onChildClick={onChildClick} />
+                  <MindmapView
+                    outline={outline}
+                    figures={figures}
+                    onChildClick={onChildClick}
+                    onFigureClick={(figureLabel) => {
+                      // Jump back to left panel — expand that figure card.
+                      // For now we just switch to blocks view; the left panel
+                      // will show the figure card.
+                      // (The user can manually expand it — we'd need to add
+                      // imperative API to OutlinePanel for auto-expand.)
+                      console.log(`[onFigureClick] ${figureLabel}`);
+                      // Switch out of mindmap to blocks
+                      setActiveView("blocks");
+                    }}
+                  />
+                </TabsContent>
+
+                <TabsContent
+                  value="headings"
+                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
+                >
+                  <div className="h-full overflow-y-auto scrollbar-thin bg-background p-3">
+                    <HeadingNavigator
+                      structuredHeadings={outline?.structuredHeadings}
+                      activeHeadingText={activeHeadingText}
+                      onHeadingClick={onHeadingClick}
+                      collapsed={false}
+                      onCollapsedChange={() => {}}
+                    />
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>

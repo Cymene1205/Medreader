@@ -42,6 +42,7 @@ export async function GET(
         imagesDir: true,
         pageCount: true,
         createdAt: true,
+        citationsJson: true,
       },
     });
 
@@ -62,6 +63,15 @@ export async function GET(
       }
     }
 
+    let citations: unknown = null;
+    if (isDone && paper.citationsJson) {
+      try {
+        citations = JSON.parse(paper.citationsJson);
+      } catch {
+        citations = null;
+      }
+    }
+
     return NextResponse.json(
       {
         id: paper.id,
@@ -73,6 +83,7 @@ export async function GET(
         imagesDir: paper.imagesDir,
         pageCount: paper.pageCount,
         createdAt: paper.createdAt,
+        citations,
       },
       { status: 200 }
     );
