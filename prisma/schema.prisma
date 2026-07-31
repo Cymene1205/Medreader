@@ -75,6 +75,50 @@ model Paper {
   pageCount   Int?
   createdAt   DateTime @default(now())
   chatLogs    ChatLog[]
+  figures     Figure[]
+
+  // Citation alignment JSON — array of { figureLabel, panels[], sentence, pageIndex, isSupp }
+  // Built by src/lib/align-citations.ts after MinerU parse completes.
+  citationsJson String?
+
+  // Unified 4-layer analysis JSON (questionBackground / argumentSpine / novelty / limitsOpportunities)
+  // Replaces the old 6-dimension outline storage. See design doc / MedReader功能提示词_全文框架合并终版.md §4.2
+  analysisJson  String?
+}
+
+// Figure — one row per main figure extracted from a paper.
+// Built by src/lib/extract-figures.ts after MinerU parse, then enriched by
+// /api/figures (Call A: batch LLM analysis → question/method/role/isLinchpin/chainIndex)
+// and /api/figure-detail (Call B: on-demand deep panel-by-panel analysis → detailJson).
+//
+// Supplementary figures (Fig. S, Extended Data) are filtered out at extraction time
+// and never reach this table.
+model Figure {
+  id           String   @id @default(cuid())
+  paperId      String
+  paper        Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  label        String              // e.g. "Figure 2", "Fig. 3" (normalised to "Figure N")
+  caption      String              // full caption text from MinerU chart_caption
+  imagePath    String?             // absolute path to extracted image file under uploads/<base>_images/
+  pageIndex    Int      @default(0) // 0-indexed page where the figure appears
+  order        Int                 // document order — index in the blocks array when extracted
+  panelCount   Int      @default(0) // number of sub-panels (a)(b)(c)... inferred from caption
+
+  // Call A — batch LLM analysis (one call per paper, all figures in one prompt)
+  question     String?             // 20-50 char question this figure answers (reader-centric)
+  method       String?             // 5-10 char main experimental technique
+  role         String?             // "铺垫" | "关键证据" | "验证" | "延伸"
+  isLinchpin   Boolean  @default(false) // ≤2 per paper; if false, paper core conclusion still holds
+  chainIndex   Int?                // 1-indexed order in the narrative chain (by first citation)
+
+  // Call B — on-demand deep panel-level analysis (per figure, triggered by user expanding the card)
+  detailJson   String?             // JSON: { question?, closure, layers[], bridge }
+  detailStatus String   @default("none") // none | pending | done | error
+
+  createdAt    DateTime @default(now())
+
+  @@unique([paperId, label])
+  @@index([paperId, order])
 }
 
 model ChatLog {

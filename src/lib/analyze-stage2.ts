@@ -1,0 +1,182 @@
+/**
+ * analyze-stage2.ts — Stage 2 of the new 4-layer analysis pipeline.
+ *
+ * This module is responsible for the part of /api/analyze that depends on
+ * figures being available:
+ *   - argumentSpine: the narrative summary that strings figures together
+ *
+ * It's split into its own module so /api/figures can call into it after
+ * Call A completes (figures become available) without creating a circular
+ * import with /api/analyze.
+ *
+ * Flow:
+ *   1. (Stage 1) /api/analyze fires 3 parallel LLM calls
+ *      (questionBackground / novelty / limitsOpportunities) and stores
+ *      analysisJson with argumentSpine=null placeholder.
+ *   2. (Stage 2) /api/figures fires Call A (batch figure analysis)
+ *      → on success calls updateArgumentSpine() from this module.
+ *   3. updateArgumentSpine() fires a lightweight LLM call (maxTokens=500)
+ *      to generate the 80-150 char narrative summary, then patches
+ *      analysisJson.argumentSpine in place.
+ *
+ * Failure modes:
+ *   - LLM call fails → fall back to template concatenation of figure
+ *     questions in chainIndex order.
+ *   - DB read fails → return without updating (non-fatal).
+ *   - analysisJson doesn't exist yet (Stage 1 hasn't run) → no-op.
+ */
+
+import { db } from "@/lib/db";
+import { callLLM, parseJsonLoose, type LLMConfig } from "@/lib/llm";
+
+export type AnalysisJson = {
+  title: string;
+  questionBackground: { summary: string; detail: string } | null;
+  argumentSpine: { summary: string; linchpinFigure: string | null } | null;
+  novelty: { summary: string; detail: string } | null;
+  limitsOpportunities: {
+    summary: string;
+    detail: string;
+    pairs: Array<{ limitation: string; opportunity: string }>;
+  } | null;
+  failedParts: string[];
+};
+
+/**
+ * Build the argumentSpine — the 80-150 char narrative summary that strings
+ * all figures together by chainIndex order, with the linchpin figure called
+ * out by label.
+ *
+ * Two strategies:
+ *   1. LLM call (preferred): pass figure labels + questions + linchpin
+ *      marker to DeepSeek, get back a fluent one-paragraph summary.
+ *   2. Template fallback (if LLM fails or figures have no questions):
+ *      concatenate questions in order: "本文先通过 Fig 1 发现…，进而 Fig 2
+ *      证实…，命门在 Fig 3…".
+ *
+ * Either way, the result is written into Paper.analysisJson.argumentSpine,
+ * preserving the other 3 parts.
+ */
+export async function updateArgumentSpine(
+  paperId: string,
+  cfg: LLMConfig,
+  userId: string | null
+): Promise<void> {
+  // Load paper + figures
+  const paper = await db.paper.findUnique({
+    where: { id: paperId },
+    select: { analysisJson: true, title: true, figures: { orderBy: { order: "asc" } } },
+  });
+  if (!paper) return;
+
+  // Parse existing analysisJson (if Stage 1 hasn't run, this is a no-op)
+  let analysis: AnalysisJson;
+  if (paper.analysisJson) {
+    try {
+      analysis = JSON.parse(paper.analysisJson) as AnalysisJson;
+    } catch {
+      // Corrupt JSON — start fresh with a minimal stub
+      analysis = {
+        title: paper.title,
+        questionBackground: null,
+        argumentSpine: null,
+        novelty: null,
+        limitsOpportunities: null,
+        failedParts: [],
+      };
+    }
+  } else {
+    // Stage 1 hasn't run yet — can't write spine without analysisJson.
+    // (Stage 2 normally only fires after Stage 1, but defensive.)
+    return;
+  }
+
+  // Sort figures by chainIndex (nulls last, preserving original order for ties)
+  const sortedFigs = [...paper.figures].sort((a, b) => {
+    if (a.chainIndex == null && b.chainIndex == null) return a.order - b.order;
+    if (a.chainIndex == null) return 1;
+    if (b.chainIndex == null) return -1;
+    return a.chainIndex - b.chainIndex;
+  });
+
+  const linchpinFig = sortedFigs.find((f) => f.isLinchpin) || null;
+  const figsWithQ = sortedFigs.filter((f) => f.question);
+
+  // If no figures have questions, we can't build a spine — leave it null.
+  if (figsWithQ.length === 0) {
+    return;
+  }
+
+  let summary = "";
+  let llmSucceeded = false;
+
+  // Try LLM first
+  try {
+    const systemPrompt =
+      "你是科研论文论证主线总结助手。请根据论文每张主图回答的科学问题，生成一段 80-150 字的论证主线。" +
+      "格式参考：'本文先通过 Fig 1 发现…，进而 Fig 2 证实…，命门在 Fig 3…'。" +
+      "命门图（isLinchpin=true）必须在文中明确点出，并在该句末尾用【】标记图号。\n" +
+      "只输出主线一段话，不要任何额外文字、不要换行。";
+
+    const figContext = figsWithQ
+      .map(
+        (f) =>
+          `${f.label}（${f.role || "未分类"}${f.isLinchpin ? "，命门" : ""}）：${f.question}`
+      )
+      .join("\n");
+
+    const raw = await callLLM(
+      cfg,
+      [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: `论文标题：${paper.title}\n\n各图问句：\n${figContext}`,
+        },
+      ],
+      {
+        temperature: 0.3,
+        maxTokens: 500,
+        usage: {
+          userId,
+          action: "argument_spine",
+          paperId,
+        },
+      }
+    );
+    summary = raw.trim().slice(0, 300);
+    if (summary.length >= 20) llmSucceeded = true;
+  } catch (e) {
+    console.warn("[analyze-stage2] spine LLM failed, falling back to template:", e);
+  }
+
+  // Template fallback
+  if (!llmSucceeded) {
+    const parts: string[] = [];
+    figsWithQ.forEach((f, i) => {
+      const short = (f.question || "").slice(0, 40);
+      const connector =
+        i === 0
+          ? `本文先通过 ${f.label} 发现`
+          : i === figsWithQ.length - 1 && figsWithQ.length > 1
+          ? `，最终 ${f.label} 证实`
+          : `，进而 ${f.label} 证实`;
+      parts.push(`${connector}${short}`);
+      if (f.isLinchpin) {
+        parts.push(`（命门在 ${f.label}）`);
+      }
+    });
+    summary = parts.join("") + "。";
+  }
+
+  // Write back
+  analysis.argumentSpine = {
+    summary,
+    linchpinFigure: linchpinFig?.label || null,
+  };
+
+  await db.paper.update({
+    where: { id: paperId },
+    data: { analysisJson: JSON.stringify(analysis) },
+  });
+}
