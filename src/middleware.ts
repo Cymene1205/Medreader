@@ -65,9 +65,12 @@ export const config = {
   // Match everything EXCEPT:
   //   login | register | landing   — public auth/landing pages
   //   api/auth                     — NextAuth endpoints
+  //   api/upload                   — 大文件上传，绕过 middleware 避免被 Next.js 16
+  //                                  默认 10MB body 限制截断（route 内部用
+  //                                  getServerSession 做真正的认证）
   //   _next                        — Next.js static assets
   //   favicon.ico                  — browser favicon
   // Root `/` is matched by this regex too, but the middleware function
   // short-circuits it (see above).
-  matcher: ["/((?!login|register|landing|api/auth|_next|favicon.ico).*)"],
+  matcher: ["/((?!login|register|landing|api/auth|api/upload|_next|favicon.ico).*)"],
 };
