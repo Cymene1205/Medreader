@@ -90,13 +90,22 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
 # Prisma needs its schema + generated client at runtime for `db push`.
-# Also copy the `prisma` CLI itself so `npx prisma` doesn't have to
-# download it on every container start (which would require network
-# access and slow down cold starts).
+# Also copy the `prisma` CLI itself so we don't have to download it on
+# every container start (which would require network access and slow
+# down cold starts).
+#
+# We copy BOTH:
+#   - node_modules/prisma        the actual CLI package (build/index.js)
+#   - node_modules/.bin/prisma   the symlink that makes `prisma` work on PATH
+#
+# Without the .bin symlink, `npx prisma` and bare `prisma` both fail with
+# `sh: prisma: not found`, because Next.js standalone's node_modules
+# tracing does NOT include the prisma CLI (only @prisma/client).
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
 # Data directories — mounted as volumes in docker-compose, but we create
 # them here so the image is also runnable standalone without mounting.
@@ -109,6 +118,9 @@ EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
 
 # Run migrations on container start, then start the standalone server.
+#   - We call `node node_modules/prisma/build/index.js` directly instead
+#     of `npx prisma` / bare `prisma`, to avoid PATH resolution issues
+#     in the minimal runner image (no shell lookup needed).
 #   - `prisma db push` is idempotent: if schema is in sync it does
 #     nothing; if there are new models it applies them.
 #   - We deliberately do NOT pass `--accept-data-loss` (fix #4):
@@ -117,4 +129,4 @@ ENTRYPOINT ["/sbin/tini", "--"]
 #     silently wipe the production database.
 #   - `exec node server.js` replaces the sh process so signals reach
 #     Next.js directly.
-CMD ["sh", "-c", "npx prisma db push && exec node server.js"]
+CMD ["sh", "-c", "node node_modules/prisma/build/index.js db push && exec node server.js"]
