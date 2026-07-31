@@ -1,0 +1,637 @@
+     1→/**
+     2→ * Figure extraction — runs once after MinerU parse completes.
+     3→ *
+     4→ * Walks the MinerU content_list.json (blocks) and pulls out every "main"
+     5→ * figure caption, then pairs each caption with the nearest image/chart
+     6→ * block so we can show the actual image.
+     7→ *
+     8→ * ⚠️ Caption-anchored strategy (the OLD image-block-anchored strategy failed
+     9→ *    because MinerU vlm mode does NOT populate chart_caption on image blocks
+    10→ *    — captions are emitted as SEPARATE text blocks immediately after the
+    11→ *    image/chart blocks they describe).
+    12→ *
+    13→ * Algorithm:
+    14→ *   1. Walk all blocks looking for text blocks whose content starts with
+    15→ *      "Figure N" / "Fig. N" (excluding supplementary / Extended Data).
+    16→ *   2. Skip TOC-like entries (caption shorter than 30 chars, or containing
+    17→ *      URLs — these are paper-front-matter "Figure 1: Neutrophils alone:
+    18→ *      https://infection-atlas.org/..." index entries, not real captions).
+    19→ *   3. For each surviving caption, look BACKWARDS up to 5 blocks for the
+    20→ *      nearest image/chart block. If found, pair them. If a backward walk
+    21→ *      hits another caption or an H1 heading, stop (the caption likely has
+    22→ *      no associated image — keep the caption-only record).
+    23→ *   4. If no image found backward, look FORWARD up to 2 blocks as a
+    24→ *      fallback (some papers put caption above the figure).
+    25→ *   5. Even if no image block is found, the caption-only record is kept —
+    26→ *      Call A can still analyse the figure from caption + citing sentences.
+    27→ *
+    28→ * For each main figure, writes one row to the Figure table:
+    29→ *   { label, caption, imagePath, pageIndex, order, panelCount }
+    30→ *
+    31→ * label is normalised to "Figure N" form (e.g. "Fig. 3" → "Figure 3").
+    32→ *
+    33→ * This is a pure-code step — no LLM calls. The LLM enrichment happens later
+    34→ * in /api/figures (Call A: question / method / role / isLinchpin / chainIndex).
+    35→ *
+    36→ * Public entry point: extractAndStoreFigures(paperId)
+    37→ *   - Reads Paper.blocksJson from DB
+    38→ *   - Filters main-figure blocks
+    39→ *   - Deletes any existing Figure rows for this paper (idempotent re-runs)
+    40→ *   - Inserts one Figure row per main figure
+    41→ */
+    42→
+    43→import { db } from "@/lib/db";
+    44→import type { MinerUBlock } from "@/lib/mineru";
+    45→
+    46→export type ExtractedFigure = {
+    47→  label: string; // "Figure 3"
+    48→  caption: string;
+    49→  imagePath: string | null;
+    50→  pageIndex: number;
+    51→  order: number;
+    52→  panelCount: number;
+    53→};
+    54→
+    55→/**
+    56→ * Regex to identify a main-figure caption at the START of a text block.
+    57→ * Matches "Figure 1", "Fig. 2", "Fig 3", "Figure 1A", "Figure 1:" — but NOT
+    58→ * "Fig. S1", "Figure S1", "Extended Data Figure 1", "Supplementary Figure 1".
+    59→ *
+    60→ * Captures the number so we can normalise the label.
+    61→ *
+    62→ * Note: this is anchored to the start (^\s*) — we don't want to pick up
+    63→ * in-text references like "...as shown in Figure 3, the cells...".
+    64→ */
+    65→const MAIN_FIGURE_RE = /^\s*(?!.*(?:Supplementary|Extended\s+Data|\bS\d))(?:Fig(?:ure|\.)?)\s*(\d+)/i;
+    66→
+    67→/**
+    68→ * Normalise a label like "Fig. 3" / "Figure 3A" / "Fig 3" → "Figure 3".
+    69→ * Returns null if the input doesn't look like a main figure.
+    70→ */
+    71→export function normaliseFigureLabel(rawCaption: string): string | null {
+    72→  if (!rawCaption) return null;
+    73→  const m = rawCaption.match(MAIN_FIGURE_RE);
+    74→  if (!m) return null;
+    75→  const num = m[1];
+    76→  if (!num) return null;
+    77→  return `Figure ${num}`;
+    78→}
+    79→
+    80→/**
+    81→ * Count sub-panels by scanning the caption for (a) (b) (c) patterns.
+    82→ * Looks for both parenthesised "(a)" and bare "a," "a." patterns at
+    83→ * panel-list positions. Returns 0 if can't infer (rare — most multi-panel
+    84→ * figures have a panel enumeration in the caption).
+    85→ */
+    86→export function countPanels(caption: string): number {
+    87→  if (!caption) return 0;
+    88→  // Strategy 1: explicit "(a) ... (b) ... (c)" enumeration
+    89→  const paren = caption.match(/\(\s*([a-z])\s*\)/gi);
+    90→  if (paren && paren.length >= 2) {
+    91→    // Take the highest letter mentioned
+    92→    const letters = paren
+    93→      .map((p) => p.replace(/[()]/g, "").trim().toLowerCase())
+    94→      .filter((c) => /^[a-z]$/.test(c));
+    95→    if (letters.length > 0) {
+    96→      const max = letters.reduce((m, c) => Math.max(m, c.charCodeAt(0) - 96), 0);
+    97→      return max;
+    98→    }
+    99→  }
+   100→  // Strategy 2: "(A–D)" / "(A-D)" range
+   101→  const range = caption.match(/\(\s*([A-Z])\s*[–\-—]\s*([A-Z])\s*\)/);
+   102→  if (range) {
+   103→    const start = range[1].charCodeAt(0) - 64;
+   104→    const end = range[2].charCodeAt(0) - 64;
+   105→    if (start > 0 && end >= start) return end;
+   106→  }
+   107→  // Strategy 3: "(a,b)" or "(a, b, c)" comma list
+   108→  const comma = caption.match(/\(\s*([a-z](?:\s*,\s*[a-z])*)\s*\)/i);
+   109→  if (comma) {
+   110→    const letters = comma[1].split(",").map((s) => s.trim().toLowerCase());
+   111→    if (letters.length >= 2 && letters.every((c) => /^[a-z]$/.test(c))) {
+   112→      return letters.reduce((m, c) => Math.max(m, c.charCodeAt(0) - 96), 0);
+   113→    }
+   114→  }
+   115→  return 0;
+   116→}
+   117→
+   118→/**
+   119→ * Pull all main-figure captions out of the MinerU blocks array and pair each
+   120→ * one with the nearest image/chart block (or group of blocks).
+   121→ *
+   122→ * Pure function — no DB. Returns the figures in document order.
+   123→ *
+   124→ * ⚠️ MINERU REALITY — figures come in THREE shapes:
+   125→ *
+   126→ *   Shape 1 — ONE chart/image block holds the WHOLE figure (multi-panel composite).
+   127→ *     The block's chart_caption / image_caption field has the full caption.
+   128→ *     Most common case.
+   129→ *
+   130→ *   Shape 2 — N adjacent image/chart blocks (each is one panel) share ONE caption
+   131→ *     that's attached to the LAST block's caption field (or to a separate text
+   132→ *     block right after the last image). MinerU splits the figure visually but
+   133→ *     the caption refers to all panels together. We MUST merge these into ONE
+   134→ *     figure row, otherwise we'd show N broken half-figures.
+   135→ *
+   136→ *   Shape 3 — caption is a separate text block, image blocks have empty caption
+   137→ *     fields. Rare. We pair the text caption with the nearest preceding image block.
+   138→ *
+   139→ * ALGORITHM:
+   140→ *   1. Walk blocks, group CONSECUTIVE image/chart blocks on the SAME page into
+   141→ *      "figure candidates". A text block (esp. caption or H1) breaks the run.
+   142→ *   2. For each candidate, look for a caption in:
+   143→ *        a) The LAST image/chart block's chart_caption / image_caption arrays
+   144→ *           (the caption usually attaches to the last panel).
+   145→ *        b) The FIRST chart/image block's caption arrays (sometimes attached
+   146→ *           to the first panel).
+   147→ *        c) The next text block immediately after the candidate (Strategy B
+   148→ *           fallback for Shape 3).
+   149→ *   3. Pick the longest "Figure N" caption found across all sources.
+   150→ *   4. The imagePath comes from the block whose caption array contained the
+   151→ *      matched "Figure N" item — that's the most representative panel.
+   152→ *      If none of the blocks had a caption (rare), use the FIRST block's
+   153→ *      img_path so we at least show something.
+   154→ *   5. caption-only records (no paired image) are still kept.
+   155→ *
+   156→ * Both `chart_caption` and `image_caption` are ARRAYS of strings in MinerU vlm
+   157→ * output — the real caption is the array item that starts with "Figure N",
+   158→ * earlier items are panel labels (A, B, G, ...).
+   159→ */
+   160→export function extractFiguresFromBlocks(
+   161→  blocks: MinerUBlock[],
+   162→  imagesDir: string | null
+   163→): ExtractedFigure[] {
+   164→  // Intermediate map keyed by label — lets us dedup across candidates.
+   165→  const byLabel = new Map<string, ExtractedFigure & { _imgBlock?: MinerUBlock | null }>();
+   166→  let order = 0;
+   167→
+   168→  const upsert = (
+   169→    label: string,
+   170→    caption: string,
+   171→    imgBlock: MinerUBlock | null,
+   172→    pageIndex: number
+   173→  ) => {
+   174→    const existing = byLabel.get(label);
+   175→    if (existing) {
+   176→      // Prefer the longer caption (more info for Call A).
+   177→      if (caption.length > existing.caption.length) {
+   178→        existing.caption = caption;
+   179→        existing.panelCount = countPanels(caption);
+   180→      }
+   181→      // Prefer the entry that actually has an image block paired.
+   182→      if (!existing._imgBlock?.img_path && imgBlock?.img_path) {
+   183→        existing._imgBlock = imgBlock;
+   184→      }
+   185→      // Prefer the smaller page index (caption usually appears on the page
+   186→      // where the figure STARTS, not ends — for multi-page spreads).
+   187→      if (pageIndex < existing.pageIndex) existing.pageIndex = pageIndex;
+   188→      return;
+   189→    }
+   190→    byLabel.set(label, {
+   191→      label,
+   192→      caption,
+   193→      imagePath: null, // resolved below from _imgBlock
+   194→      pageIndex,
+   195→      order: order++,
+   196→      panelCount: countPanels(caption),
+   197→      _imgBlock: imgBlock,
+   198→    });
+   199→  };
+   200→
+   201→  /**
+   202→   * Walk FORWARD from a caption's start block, merging subsequent text
+   203→   * blocks into the caption until we hit a stop condition. This fixes the
+   204→   * "only title is captured" issue where MinerU emits the figure caption
+   205→   * across multiple text blocks:
+   206→   *   Block N:   "Figure 1. Short title here"
+   207→   *   Block N+1: "Detailed experimental description spanning many lines..."
+   208→   *   Block N+2: "Statistical analysis and quantification..."
+   209→   *
+   210→   * Without this merge, only Block N is captured → user sees only the title.
+   211→   *
+   212→   * Stop conditions (any one stops the walk):
+   213→   *   - Next "Figure N" / "Fig. N" / "Supplementary Figure" pattern
+   214→   *   - H1/H2 heading (text_level === 1 or 2)
+   215→   *   - Image / chart / table block (next figure's content)
+   216→   *   - Page break (page_idx changes by more than 1 — the caption rarely
+   217→   *     spans more than one page; this avoids swallowing unrelated body
+   218→   *     text from later pages)
+   219→   *   - Length cap: stop after accumulating 4000 chars (safety net)
+   220→   *   - Block count cap: stop after 20 blocks (safety net)
+   221→   *
+   222→   * The merged caption is joined with "\n" to preserve paragraph breaks
+   223→   * for downstream markdown rendering.
+   224→   */
+   225→  const extendCaptionForward = (
+   226→    startIdx: number,
+   227→    initialCaption: string,
+   228→    pageIdx: number
+   229→  ): string => {
+   230→    const parts: string[] = [initialCaption];
+   231→    let totalLen = initialCaption.length;
+   232→    const MAX_BLOCKS = 20;
+   233→    const MAX_TOTAL_LEN = 4000;
+   234→    const startPage = pageIdx;
+   235→
+   236→    for (let j = startIdx + 1; j <= Math.min(blocks.length - 1, startIdx + MAX_BLOCKS); j++) {
+   237→      const nb = blocks[j];
+   238→      if (!nb) break;
+   239→
+   240→      // Stop on next figure / image / chart / table block
+   241→      if (nb.type === "image" || nb.type === "chart" || nb.type === "table") break;
+   242→
+   243→      // Stop on headings — they mark a new section, not caption continuation
+   244→      if (typeof nb.text_level === "number" && nb.text_level <= 2) break;
+   245→
+   246→      // Only merge text blocks (skip footers, page numbers, etc.)
+   247→      if (nb.type !== "text") break;
+   248→
+   249→      // Stop on page break (caption rarely spans pages)
+   250→      const nbPage = nb.page_idx ?? startPage;
+   251→      if (nbPage > startPage + 1) break;
+   252→
+   253→      const nbText = (typeof nb.text === "string" ? nb.text : "").trim();
+   254→      if (!nbText) continue;
+   255→
+   256→      // Stop on next "Figure N" / "Fig. N" / "Figure S1" / "Extended Data" pattern
+   257→      if (/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(nbText)) break;
+   258→      if (/^\s*(?:Fig(?:ure|\.)?)\s*S\d+/i.test(nbText)) break;
+   259→      if (/^\s*Extended\s+Data\s+Fig/i.test(nbText)) break;
+   260→      if (/^\s*Supplementary\s+Fig/i.test(nbText)) break;
+   261→      if (/^\s*Table\s+\d+/i.test(nbText)) break;
+   262→
+   263→      // Stop on URL-only lines (often TOC / citation noise)
+   264→      if (/^https?:\/\//i.test(nbText)) break;
+   265→
+   266→      // Stop if the line looks like a new section heading even without
+   267→      // text_level (short, all-caps or title-case, ends with no period)
+   268→      // — these typically mark a new paragraph in the body, not caption text.
+   269→      // Heuristic: short line (<=40 chars) with no terminal punctuation.
+   270→      if (nbText.length <= 40 && !/[.,;:!?]$/.test(nbText) && /^[A-Z]/.test(nbText)) {
+   271→        // Could be either a panel label like "(A) UMAP plot" or a section
+   272→        // heading. Check: if it starts with a panel pattern (a), (b), etc.,
+   273→        // it's still caption text — keep it. Otherwise stop.
+   274→        if (!/^\(\s*[a-zA-Z]\s*\)/.test(nbText)) break;
+   275→      }
+   276→
+   277→      // Looks like caption continuation — merge it.
+   278→      parts.push(nbText);
+   279→      totalLen += nbText.length + 1;
+   280→      if (totalLen >= MAX_TOTAL_LEN) break;
+   281→    }
+   282→
+   283→    return parts.join("\n");
+   284→  };
+   285→
+   286→  /**
+   287→   * Pull the longest "Figure N" caption out of a chart_caption / image_caption
+   288→   * array. Returns { caption, block } so we know which block holds the image
+   289→   * that matches the caption (we'll use that block's img_path).
+   290→   */
+   291→  const extractCaptionFromBlock = (
+   292→    b: MinerUBlock
+   293→  ): { caption: string; block: MinerUBlock } | null => {
+   294→    const captionArrays: string[][] = [];
+   295→    if (Array.isArray(b.chart_caption) && b.chart_caption.length > 0) {
+   296→      captionArrays.push(b.chart_caption);
+   297→    }
+   298→    if (Array.isArray(b.image_caption) && b.image_caption.length > 0) {
+   299→      captionArrays.push(b.image_caption);
+   300→    }
+   301→    if (captionArrays.length === 0) return null;
+   302→
+   303→    let bestCaption: string | null = null;
+   304→    for (const arr of captionArrays) {
+   305→      for (const capItem of arr) {
+   306→        if (typeof capItem !== "string") continue;
+   307→        const trimmed = capItem.trim();
+   308→        if (trimmed.length < 30) continue; // skip panel labels like "G", "A, B, C"
+   309→        if (/https?:\/\//i.test(trimmed)) continue; // skip TOC entries
+   310→        const label = normaliseFigureLabel(trimmed);
+   311→        if (!label) continue;
+   312→        // Among multiple "Figure N" matches (rare), keep the longest caption.
+   313→        if (!bestCaption || trimmed.length > bestCaption.length) {
+   314→          bestCaption = trimmed;
+   315→        }
+   316→      }
+   317→    }
+   318→    if (!bestCaption) return null;
+   319→    return { caption: bestCaption, block: b };
+   320→  };
+   321→
+   322→  // ────────────────────────────────────────────────────────────────────────
+   323→  // Phase 1: walk blocks, group consecutive image/chart blocks on the same
+   324→  // page into "figure candidates". A text block (caption / heading) or a
+   325→  // page change breaks the run.
+   326→  // ────────────────────────────────────────────────────────────────────────
+   327→  type FigureCandidate = {
+   328→    blocks: MinerUBlock[]; // 1+ consecutive image/chart blocks (same page)
+   329→    pageIndex: number; // 1-indexed
+   330→    startIdx: number; // first block idx in `blocks`
+   331→    endIdx: number; // last block idx in `blocks`
+   332→  };
+   333→
+   334→  const candidates: FigureCandidate[] = [];
+   335→  let curRun: MinerUBlock[] = [];
+   336→  let curRunPage: number | null = null;
+   337→  let curRunStart = -1;
+   338→
+   339→  const flushRun = () => {
+   340→    if (curRun.length > 0 && curRunPage !== null) {
+   341→      candidates.push({
+   342→        blocks: curRun,
+   343→        pageIndex: curRunPage + 1, // 1-indexed
+   344→        startIdx: curRunStart,
+   345→        endIdx: curRunStart + curRun.length - 1,
+   346→      });
+   347→    }
+   348→    curRun = [];
+   349→    curRunPage = null;
+   350→    curRunStart = -1;
+   351→  };
+   352→
+   353→  for (let i = 0; i < blocks.length; i++) {
+   354→    const b = blocks[i];
+   355→    const isImg = b.type === "image" || b.type === "chart";
+   356→    const page = b.page_idx ?? 0;
+   357→
+   358→    if (isImg) {
+   359→      // Continue the run if same page; otherwise flush and start a new run.
+   360→      if (curRunPage !== null && curRunPage !== page) {
+   361→        flushRun();
+   362→      }
+   363→      if (curRun.length === 0) curRunStart = i;
+   364→      curRun.push(b);
+   365→      curRunPage = page;
+   366→    } else {
+   367→      // Non-image block — decide whether to flush or keep the run going.
+   368→      const rawText = (typeof b.text === "string" ? b.text : "").trim();
+   369→
+   370→      // Determine if this text block is a "Figure N" caption — those
+   371→      // mark the START of a new figure and SHOULD flush.
+   372→      const isFigureCaption =
+   373→        rawText.length >= 30 &&
+   374→        /^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(rawText) &&
+   375→        !/https?:\/\//i.test(rawText);
+   376→
+   377→      if (isFigureCaption) {
+   378→        // This is a new figure's caption — flush the previous run.
+   379→        flushRun();
+   380→      } else {
+   381→        // Otherwise it's a panel label / axis label / short description /
+   382→        // footnote — all of these are INTRA-figure noise that MinerU
+   383→        // sometimes emits between image blocks of the SAME figure.
+   384→        //
+   385→        // Critical: do NOT flush. This is what was causing "拆分小图"
+   386→        // (one Figure split into N candidates → N duplicate half-figures).
+   387→        //
+   388→        // EXCEPTION: if the page changed (curRunPage !== page) we still
+   389→        // need to flush — different page means different figure.
+   390→        if (curRunPage !== null && curRunPage !== page) {
+   391→          flushRun();
+   392→        }
+   393→        // Otherwise: skip this text block, keep growing the current run.
+   394→      }
+   395→    }
+   396→  }
+   397→  flushRun();
+   398→
+   399→  // ────────────────────────────────────────────────────────────────────────
+   400→  // Phase 2: for each candidate, find the best caption + representative
+   401→  // image block. Emit one ExtractedFigure per candidate.
+   402→  //
+   403→  // IMPORTANT: when a candidate has multiple image blocks (multi-panel
+   404→  // figure that MinerU split into pieces), we pick the LARGEST image block
+   405→  // by bbox area — this is almost always the "full figure" view (the first
+   406→  // panel typically contains the composite image). Picking the block that
+   407→  // holds the caption (usually the LAST block) would show only the last
+   408→  // panel, which is exactly the "拆分小图" problem the user reported.
+   409→  // ────────────────────────────────────────────────────────────────────────
+   410→
+   411→  // Helper: estimate image block area from bbox (returns 0 if no bbox).
+   412→  const blockArea = (b: MinerUBlock): number => {
+   413→    if (!b.bbox || b.bbox.length !== 4) return 0;
+   414→    const [x1, y1, x2, y2] = b.bbox;
+   415→    return Math.abs((x2 - x1) * (y2 - y1));
+   416→  };
+   417→
+   418→  // Helper: pick the "best" image block from a candidate — prefer the
+   419→  // LARGEST by bbox area (this is the composite / full-figure image);
+   420→  // require img_path to be present; fall back to the first block with
+   421→  // img_path if no block has a bbox.
+   422→  const pickBestImageBlock = (cand: { blocks: MinerUBlock[] }): MinerUBlock | null => {
+   423→    if (cand.blocks.length === 0) return null;
+   424→    // Only consider blocks that actually have an img_path — otherwise
+   425→    // we'd point at a block whose image file doesn't exist.
+   426→    const withPath = cand.blocks.filter((b) => b.img_path);
+   427→    if (withPath.length === 0) return null;
+   428→    let best = withPath[0];
+   429→    let bestArea = blockArea(best);
+   430→    for (let i = 1; i < withPath.length; i++) {
+   431→      const a = blockArea(withPath[i]);
+   432→      // Strictly greater — ties keep the earlier (top-most) block.
+   433→      if (a > bestArea) {
+   434→        best = withPath[i];
+   435→        bestArea = a;
+   436→      }
+   437→    }
+   438→    return best;
+   439→  };
+   440→
+   441→  for (const cand of candidates) {
+   442→    // 2a: try caption from the LAST block (most common — caption attaches
+   443→    // to the last panel of a multi-panel figure).
+   444→    let bestMatch: { caption: string; block: MinerUBlock; blockIdx: number } | null = null;
+   445→
+   446→    // Search from last block backwards — usually the caption is on the last
+   447→    // panel, but fall back to earlier blocks if the last one has no caption.
+   448→    for (let k = cand.blocks.length - 1; k >= 0; k--) {
+   449→      const m = extractCaptionFromBlock(cand.blocks[k]);
+   450→      if (m) {
+   451→        bestMatch = { ...m, blockIdx: cand.startIdx + k };
+   452→        break;
+   453→      }
+   454→    }
+   455→
+   456→    if (bestMatch) {
+   457→      const label = normaliseFigureLabel(bestMatch.caption)!;
+   458→      // Use the LARGEST image block (full figure), not the caption-bearing
+   459→      // block (which might be just one panel).
+   460→      const displayBlock = pickBestImageBlock(cand) || bestMatch.block;
+   461→      // Walk forward from the caption's text block to merge any continuation
+   462→      // text blocks (MinerU often splits a caption's body across blocks).
+   463→      const startPage = bestMatch.block.page_idx ?? cand.pageIndex - 1;
+   464→      const mergedCaption = extendCaptionForward(bestMatch.blockIdx, bestMatch.caption, startPage);
+   465→      upsert(label, mergedCaption, displayBlock, cand.pageIndex);
+   466→      continue; // candidate handled
+   467→    }
+   468→
+   469→    // 2b: Strategy B fallback — look at the next 1-2 blocks AFTER this
+   470→    // candidate. If a text block starts with "Figure N", use it as the
+   471→    // caption and pair with the LARGEST image block of this candidate.
+   472→    // Then walk FORWARD from there, merging subsequent text blocks into
+   473→    // the caption (fixes the "only title captured" issue — MinerU often
+   474→    // splits a caption's body across multiple text blocks).
+   475→    const largestBlock = pickBestImageBlock(cand);
+   476→    if (!largestBlock) {
+   477→      // No usable image block at all — skip this candidate.
+   478→      // (This avoids creating "figure" entries whose image won't render.)
+   479→      continue;
+   480→    }
+   481→    for (let j = cand.endIdx + 1; j <= Math.min(blocks.length - 1, cand.endIdx + 2); j++) {
+   482→      const nb = blocks[j];
+   483→      if (nb.type !== "text") continue;
+   484→      const rawCap = (typeof nb.text === "string" ? nb.text : "").trim();
+   485→      if (!rawCap || rawCap.length < 30) continue;
+   486→      if (/https?:\/\//i.test(rawCap)) continue;
+   487→      const label = normaliseFigureLabel(rawCap);
+   488→      if (label) {
+   489→        // Found the caption's starting block. Walk forward to merge any
+   490→        // continuation text blocks into one complete caption string.
+   491→        const mergedCaption = extendCaptionForward(j, rawCap, nb.page_idx ?? cand.pageIndex - 1);
+   492→        upsert(label, mergedCaption, largestBlock, cand.pageIndex);
+   493→        break;
+   494→      }
+   495→    }
+   496→    // If still no caption found: this candidate is just an image without
+   497→    // any caption info — skip it. We'd rather miss a figure than create a
+   498→    // duplicate / half-figure entry. (Captions from citations in Call A
+   499→    // can still pick these up if needed.)
+   500→  }
+   501→
+   502→  // ────────────────────────────────────────────────────────────────────────
+   503→  // Phase 3: Strategy B standalone — scan text blocks whose content starts
+   504→  // with "Figure N" that we haven't already paired via Phase 2.
+   505→  // Covers: caption text blocks far from any image block, or where the
+   506→  // image blocks were absorbed into a different figure candidate.
+   507→  // ────────────────────────────────────────────────────────────────────────
+   508→  for (let i = 0; i < blocks.length; i++) {
+   509→    const b = blocks[i];
+   510→    if (b.type !== "text") continue;
+   511→    const rawCap = (typeof b.text === "string" ? b.text : "").trim();
+   512→    if (!rawCap || rawCap.length < 30) continue;
+   513→    if (/https?:\/\//i.test(rawCap)) continue;
+   514→    const label = normaliseFigureLabel(rawCap);
+   515→    if (!label) continue;
+   516→
+   517→    // Merge subsequent caption continuation blocks BEFORE comparing to
+   518→    // the existing entry — otherwise a "title-only" caption would always
+   519→    // lose to an existing entry, even though the merged version is longer.
+   520→    const mergedCap = extendCaptionForward(i, rawCap, b.page_idx ?? 0);
+   521→
+   522→    // If we already have this label with a caption at least as long, skip.
+   523→    const existing = byLabel.get(label);
+   524→    if (existing && existing.caption.length >= mergedCap.length) continue;
+   525→
+   526→    // Look BACKWARD (up to 5 blocks) for the nearest image/chart block.
+   527→    let imgBlock: MinerUBlock | null = null;
+   528→    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+   529→      const nb = blocks[j];
+   530→      if (nb.type === "image" || nb.type === "chart") {
+   531→        imgBlock = nb;
+   532→        break;
+   533→      }
+   534→      if (nb.type === "text") {
+   535→        const prevText = (nb.text || "").trim();
+   536→        if (/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(prevText)) break;
+   537→        if (typeof nb.text_level === "number" && nb.text_level === 1) break;
+   538→      }
+   539→    }
+   540→
+   541→    // Fallback: look FORWARD (up to 2 blocks).
+   542→    if (!imgBlock) {
+   543→      for (let j = i + 1; j <= Math.min(blocks.length - 1, i + 2); j++) {
+   544→        const nb = blocks[j];
+   545→        if (nb.type === "image" || nb.type === "chart") {
+   546→          imgBlock = nb;
+   547→          break;
+   548→        }
+   549→      }
+   550→    }
+   551→
+   552→    upsert(label, mergedCap, imgBlock, (b.page_idx ?? 0) + 1);
+   553→  }
+   554→
+   555→  // ────────────────────────────────────────────────────────────────────────
+   556→  // Final pass: resolve imagePath from the paired image block.
+   557→  // ────────────────────────────────────────────────────────────────────────
+   558→  const out: ExtractedFigure[] = [];
+   559→  for (const f of byLabel.values()) {
+   560→    let imagePath: string | null = null;
+   561→    if (f._imgBlock?.img_path && imagesDir) {
+   562→      const cleanName = f._imgBlock.img_path
+   563→        .replace(/^images\//, "")
+   564→        .replace(/^\//, "");
+   565→      const basename = cleanName.split("/").pop();
+   566→      if (basename) {
+   567→        imagePath = `${imagesDir.replace(/\/$/, "")}/${basename}`;
+   568→      }
+   569→    }
+   570→    out.push({
+   571→      label: f.label,
+   572→      caption: f.caption,
+   573→      imagePath,
+   574→      pageIndex: f.pageIndex,
+   575→      order: f.order,
+   576→      panelCount: f.panelCount,
+   577→    });
+   578→  }
+   579→
+   580→  // Sort by FIGURE NUMBER (Figure 1 → 2 → 3 ...), NOT by chainIndex.
+   581→  // chainIndex is the LLM-assigned "argument-chain order" which may differ
+   582→  // from document order; the figure LIST should always be in numeric order.
+   583→  out.sort((a, b) => {
+   584→    const an = parseInt(a.label.replace(/\D/g, ""), 10) || 0;
+   585→    const bn = parseInt(b.label.replace(/\D/g, ""), 10) || 0;
+   586→    return an - bn;
+   587→  });
+   588→  // Reassign order based on sorted position.
+   589→  out.forEach((f, i) => (f.order = i));
+   590→
+   591→  return out;
+   592→}
+   593→
+   594→/**
+   595→ * Public: extract figures from a paper's stored blocksJson and persist
+   596→ * to the Figure table. Idempotent — deletes existing rows first.
+   597→ *
+   598→ * Returns the count of figures written. Returns 0 if blocksJson is missing
+   599→ * or no figures were found (e.g. pdfjs fallback mode, or a review paper
+   600→ * with no figures).
+   601→ */
+   602→export async function extractAndStoreFigures(paperId: string): Promise<number> {
+   603→  const paper = await db.paper.findUnique({
+   604→    where: { id: paperId },
+   605→    select: { blocksJson: true, imagesDir: true },
+   606→  });
+   607→  if (!paper || !paper.blocksJson) return 0;
+   608→
+   609→  let blocks: MinerUBlock[] = [];
+   610→  try {
+   611→    const parsed = JSON.parse(paper.blocksJson);
+   612→    if (Array.isArray(parsed)) blocks = parsed as MinerUBlock[];
+   613→  } catch {
+   614→    return 0;
+   615→  }
+   616→  if (blocks.length === 0) return 0;
+   617→
+   618→  const figures = extractFiguresFromBlocks(blocks, paper.imagesDir);
+   619→  if (figures.length === 0) return 0;
+   620→
+   621→  // Idempotent: clear any prior rows (e.g. from a previous attempt), then insert.
+   622→  await db.figure.deleteMany({ where: { paperId } });
+   623→  await db.figure.createMany({
+   624→    data: figures.map((f) => ({
+   625→      paperId,
+   626→      label: f.label,
+   627→      caption: f.caption,
+   628→      imagePath: f.imagePath,
+   629→      pageIndex: f.pageIndex,
+   630→      order: f.order,
+   631→      panelCount: f.panelCount,
+   632→    })),
+   633→  });
+   634→
+   635→  return figures.length;
+   636→}
+   637→

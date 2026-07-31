@@ -1,0 +1,1182 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useMemo, useState } from "react";
+     4→import Link from "next/link";
+     5→import {
+     6→  Activity,
+     7→  ArrowLeft,
+     8→  ChevronDown,
+     9→  ChevronRight,
+    10→  Download,
+    11→  LogIn,
+    12→  Shield,
+    13→  ThumbsDown,
+    14→  Users,
+    15→  Zap,
+    16→} from "lucide-react";
+    17→import {
+    18→  Bar,
+    19→  BarChart,
+    20→  CartesianGrid,
+    21→  Cell,
+    22→  Legend,
+    23→  Line,
+    24→  LineChart,
+    25→  Pie,
+    26→  PieChart,
+    27→  ResponsiveContainer,
+    28→  Tooltip,
+    29→  XAxis,
+    30→  YAxis,
+    31→} from "recharts";
+    32→import { Button } from "@/components/ui/button";
+    33→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    34→import { Badge } from "@/components/ui/badge";
+    35→import { Skeleton } from "@/components/ui/skeleton";
+    36→import {
+    37→  Table,
+    38→  TableBody,
+    39→  TableCell,
+    40→  TableHead,
+    41→  TableHeader,
+    42→  TableRow,
+    43→} from "@/components/ui/table";
+    44→import { Input } from "@/components/ui/input";
+    45→
+    46→// ---------- Types ----------
+    47→type DailyActive = { date: string; users: number };
+    48→type DailyAction = {
+    49→  date: string;
+    50→  analyze: number;
+    51→  chat: number;
+    52→  translate: number;
+    53→  vision: number;
+    54→  upload_pdf: number;
+    55→};
+    56→type FeedbackSummary = { up: number; down: number };
+    57→type RecentUser = {
+    58→  id: string;
+    59→  email: string;
+    60→  name: string | null;
+    61→  createdAt: string | null;
+    62→  lastActiveAt: string | null;
+    63→  chatCount: number;
+    64→};
+    65→type RecentChat = {
+    66→  id: string;
+    67→  userEmail: string | null;
+    68→  question: string;
+    69→  paperTitle: string | null;
+    70→  createdAt: string | null;
+    71→};
+    72→type DownFeedback = {
+    73→  id: string;
+    74→  userEmail: string | null;
+    75→  question: string;
+    76→  answer: string;
+    77→  answerFull: string;
+    78→  reason: string | null;
+    79→  createdAt: string | null;
+    80→  chatLogId: string | null;
+    81→};
+    82→type TokenUsageByModel = {
+    83→  provider: string;
+    84→  model: string;
+    85→  calls: number;
+    86→  promptTokens: number;
+    87→  completionTokens: number;
+    88→  totalTokens: number;
+    89→  costCny: number;
+    90→};
+    91→type TokenUsageByAction = {
+    92→  action: string;
+    93→  calls: number;
+    94→  promptTokens: number;
+    95→  completionTokens: number;
+    96→  totalTokens: number;
+    97→  costCny: number;
+    98→};
+    99→type TokenUsageDaily = {
+   100→  date: string;
+   101→  tokens: number;
+   102→  costCny: number;
+   103→};
+   104→type TokenUsage = {
+   105→  totals: {
+   106→    calls: number;
+   107→    promptTokens: number;
+   108→    completionTokens: number;
+   109→    totalTokens: number;
+   110→    costCny: number;
+   111→  };
+   112→  byModel: TokenUsageByModel[];
+   113→  byAction: TokenUsageByAction[];
+   114→  daily: TokenUsageDaily[];
+   115→};
+   116→type Stats = {
+   117→  dailyActive: DailyActive[];
+   118→  dailyActions: DailyAction[];
+   119→  feedbackSummary: FeedbackSummary;
+   120→  recentUsers: RecentUser[];
+   121→  recentChats: RecentChat[];
+   122→  downFeedbacks: DownFeedback[];
+   123→  totalUsers: number;
+   124→  totalChats: number;
+   125→  tokenUsage?: TokenUsage;
+   126→};
+   127→
+   128→// Chart colors mapped to the dim-N CSS variables so they follow the theme.
+   129→const DIM_COLORS = [
+   130→  "var(--dim-1)",
+   131→  "var(--dim-2)",
+   132→  "var(--dim-3)",
+   133→  "var(--dim-4)",
+   134→  "var(--dim-5)",
+   135→];
+   136→const ACTION_KEYS: Array<{ key: keyof Omit<DailyAction, "date">; label: string }> = [
+   137→  { key: "analyze", label: "分析" },
+   138→  { key: "chat", label: "对话" },
+   139→  { key: "translate", label: "翻译" },
+   140→  { key: "vision", label: "视觉" },
+   141→  { key: "upload_pdf", label: "上传PDF" },
+   142→];
+   143→
+   144→// ---------- Helpers ----------
+   145→function formatDateShort(iso: string | null): string {
+   146→  if (!iso) return "—";
+   147→  const d = new Date(iso);
+   148→  if (Number.isNaN(d.getTime())) return "—";
+   149→  return `${d.getMonth() + 1}/${d.getDate()}`;
+   150→}
+   151→
+   152→function formatDateTime(iso: string | null): string {
+   153→  if (!iso) return "—";
+   154→  const d = new Date(iso);
+   155→  if (Number.isNaN(d.getTime())) return "—";
+   156→  const y = d.getFullYear();
+   157→  const m = String(d.getMonth() + 1).padStart(2, "0");
+   158→  const day = String(d.getDate()).padStart(2, "0");
+   159→  const hh = String(d.getHours()).padStart(2, "0");
+   160→  const mm = String(d.getMinutes()).padStart(2, "0");
+   161→  return `${y}-${m}-${day} ${hh}:${mm}`;
+   162→}
+   163→
+   164→function datePart(iso: string | null): string {
+   165→  if (!iso) return "";
+   166→  // ISO strings start with YYYY-MM-DD regardless of T or space separator.
+   167→  return iso.slice(0, 10);
+   168→}
+   169→
+   170→/** Format a token count with thousands separators + k/M suffix. */
+   171→function formatTokens(n: number): string {
+   172→  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+   173→  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+   174→  return String(n);
+   175→}
+   176→
+   177→/** Format a CNY cost: large numbers use 万, small numbers use 4 decimals. */
+   178→function formatCny(n: number): string {
+   179→  if (n >= 10_000) return `${(n / 10_000).toFixed(2)}万`;
+   180→  if (n >= 1) return n.toFixed(2);
+   181→  return n.toFixed(4);
+   182→}
+   183→
+   184→/** Human-readable label for an LLM action code. */
+   185→function actionLabel(action: string): string {
+   186→  const map: Record<string, string> = {
+   187→    analyze: "大纲分析",
+   188→    chat: "Agent 提问",
+   189→    translate: "翻译",
+   190→    vision: "图表解读",
+   191→    followups: "追问生成",
+   192→    llm_test: "连通性测试",
+   193→  };
+   194→  return map[action] || action;
+   195→}
+   196→
+   197→// ---------- Page ----------
+   198→export default function AdminPage() {
+   199→  const [data, setData] = useState<Stats | null>(null);
+   200→  const [loading, setLoading] = useState(true);
+   201→  const [forbidden, setForbidden] = useState(false);
+   202→  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+   203→
+   204→  // Down-feedback filters
+   205→  const [fromDate, setFromDate] = useState("");
+   206→  const [toDate, setToDate] = useState("");
+   207→  const [emailFilter, setEmailFilter] = useState("");
+   208→  const [expandedId, setExpandedId] = useState<string | null>(null);
+   209→
+   210→  useEffect(() => {
+   211→    let cancelled = false;
+   212→    (async () => {
+   213→      setLoading(true);
+   214→      setForbidden(false);
+   215→      setErrorMsg(null);
+   216→      try {
+   217→        const res = await fetch("/api/admin/stats", { cache: "no-store" });
+   218→        if (cancelled) return;
+   219→        if (res.status === 403) {
+   220→          setForbidden(true);
+   221→          return;
+   222→        }
+   223→        if (!res.ok) {
+   224→          const j = await res.json().catch(() => ({}));
+   225→          setErrorMsg(j?.detail || j?.error || `HTTP ${res.status}`);
+   226→          return;
+   227→        }
+   228→        const json = (await res.json()) as Stats;
+   229→        setData(json);
+   230→      } catch (e) {
+   231→        if (!cancelled) {
+   232→          setErrorMsg(e instanceof Error ? e.message : String(e));
+   233→        }
+   234→      } finally {
+   235→        if (!cancelled) setLoading(false);
+   236→      }
+   237→    })();
+   238→    return () => {
+   239→      cancelled = true;
+   240→    };
+   241→  }, []);
+   242→
+   243→  const filteredDown = useMemo(() => {
+   244→    if (!data?.downFeedbacks) return [];
+   245→    const email = emailFilter.trim().toLowerCase();
+   246→    return data.downFeedbacks.filter((f) => {
+   247→      const d = datePart(f.createdAt);
+   248→      if (fromDate && d < fromDate) return false;
+   249→      if (toDate && d > toDate) return false;
+   250→      if (email && !(f.userEmail || "").toLowerCase().includes(email)) return false;
+   251→      return true;
+   252→    });
+   253→  }, [data, fromDate, toDate, emailFilter]);
+   254→
+   255→  /**
+   256→   * Escape a single CSV cell. Doubles internal double-quotes and wraps the
+   257→   * value in double-quotes if it contains a comma, newline, or quote char.
+   258→   * Empty strings become "" (so blank cells still render as empty in Excel).
+   259→   */
+   260→  function csvCell(s: string | null | undefined): string {
+   261→    const v = s == null ? "" : String(s);
+   262→    if (/["\n\r,]/.test(v)) {
+   263→      return `"${v.replace(/"/g, '""')}"`;
+   264→    }
+   265→    return v;
+   266→  }
+   267→
+   268→  /**
+   269→   * Export the currently-filtered down-feedback rows as a CSV download.
+   270→   * BOM prefix ensures Excel opens UTF-8 correctly. Filename includes the
+   271→   * timestamp so repeated exports don't silently overwrite each other.
+   272→   */
+   273→  function exportDownCsv() {
+   274→    const headers = [
+   275→      "时间",
+   276→      "用户邮箱",
+   277→      "原问题",
+   278→      "原回答(完整)",
+   279→      "点踩原因",
+   280→      "ChatLogID",
+   281→    ];
+   282→    const rows = filteredDown.map((f) =>
+   283→      [
+   284→        f.createdAt || "",
+   285→        f.userEmail || "",
+   286→        f.question || "",
+   287→        f.answerFull || "",
+   288→        f.reason || "",
+   289→        f.chatLogId || "",
+   290→      ]
+   291→        .map(csvCell)
+   292→        .join(",")
+   293→    );
+   294→    const csv = "\uFEFF" + headers.map(csvCell).join(",") + "\n" + rows.join("\n");
+   295→    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+   296→    const url = URL.createObjectURL(blob);
+   297→    const ts = new Date();
+   298→    const pad = (n: number) => String(n).padStart(2, "0");
+   299→    const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+   300→    const a = document.createElement("a");
+   301→    a.href = url;
+   302→    a.download = `down_feedbacks_${stamp}.csv`;
+   303→    document.body.appendChild(a);
+   304→    a.click();
+   305→    document.body.removeChild(a);
+   306→    URL.revokeObjectURL(url);
+   307→  }
+   308→
+   309→  /**
+   310→   * Export the currently-filtered down-feedback rows as a JSON download.
+   311→   * Useful when the admin wants to programmatically post-process the data.
+   312→   */
+   313→  function exportDownJson() {
+   314→    const payload = {
+   315→      exportedAt: new Date().toISOString(),
+   316→      filters: { fromDate, toDate, emailFilter },
+   317→      count: filteredDown.length,
+   318→      rows: filteredDown,
+   319→    };
+   320→    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+   321→      type: "application/json;charset=utf-8;",
+   322→    });
+   323→    const url = URL.createObjectURL(blob);
+   324→    const ts = new Date();
+   325→    const pad = (n: number) => String(n).padStart(2, "0");
+   326→    const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}`;
+   327→    const a = document.createElement("a");
+   328→    a.href = url;
+   329→    a.download = `down_feedbacks_${stamp}.json`;
+   330→    document.body.appendChild(a);
+   331→    a.click();
+   332→    document.body.removeChild(a);
+   333→    URL.revokeObjectURL(url);
+   334→  }
+   335→
+   336→  // ---------- Error / forbidden states ----------
+   337→  if (forbidden) {
+   338→    return (
+   339→      <div className="min-h-screen flex flex-col bg-background">
+   340→        <Header />
+   341→        <main className="flex-1 flex items-center justify-center px-6 py-16">
+   342→          <Card className="max-w-md w-full">
+   343→            <CardHeader>
+   344→              <CardTitle className="flex items-center gap-2 text-base">
+   345→                <Shield className="h-4 w-4 text-destructive" />
+   346→                需要管理员权限
+   347→              </CardTitle>
+   348→            </CardHeader>
+   349→            <CardContent className="space-y-3">
+   350→              <p className="text-sm text-muted-foreground">
+   351→                当前账号无权访问该页面。请使用管理员账号登录后再访问。
+   352→              </p>
+   353→              <div className="flex gap-2">
+   354→                <Link href="/login">
+   355→                  <Button size="sm" className="gap-1.5">
+   356→                    <LogIn className="h-3.5 w-3.5" />
+   357→                    前往登录
+   358→                  </Button>
+   359→                </Link>
+   360→                <Link href="/">
+   361→                  <Button size="sm" variant="outline" className="gap-1.5">
+   362→                    <ArrowLeft className="h-3.5 w-3.5" />
+   363→                    返回首页
+   364→                  </Button>
+   365→                </Link>
+   366→              </div>
+   367→            </CardContent>
+   368→          </Card>
+   369→        </main>
+   370→      </div>
+   371→    );
+   372→  }
+   373→
+   374→  if (errorMsg && !loading) {
+   375→    return (
+   376→      <div className="min-h-screen flex flex-col bg-background">
+   377→        <Header />
+   378→        <main className="flex-1 flex items-center justify-center px-6 py-16">
+   379→          <Card className="max-w-md w-full">
+   380→            <CardHeader>
+   381→              <CardTitle className="text-base text-destructive">加载失败</CardTitle>
+   382→            </CardHeader>
+   383→            <CardContent className="space-y-3">
+   384→              <p className="text-sm text-muted-foreground break-all">{errorMsg}</p>
+   385→              <Link href="/">
+   386→                <Button size="sm" variant="outline" className="gap-1.5">
+   387→                  <ArrowLeft className="h-3.5 w-3.5" />
+   388→                  返回首页
+   389→                </Button>
+   390→              </Link>
+   391→            </CardContent>
+   392→          </Card>
+   393→        </main>
+   394→      </div>
+   395→    );
+   396→  }
+   397→
+   398→  // ---------- Main render ----------
+   399→  return (
+   400→    <div className="min-h-screen flex flex-col bg-background">
+   401→      <Header />
+   402→
+   403→      <main className="flex-1 w-full max-w-[1400px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+   404→        {/* Top stat cards */}
+   405→        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   406→          <StatCard
+   407→            label="总用户数"
+   408→            value={data?.totalUsers}
+   409→            loading={loading}
+   410→            icon={<Users className="h-4 w-4" />}
+   411→            colorClass="text-[var(--dim-1)]"
+   412→          />
+   413→          <StatCard
+   414→            label="总对话数"
+   415→            value={data?.totalChats}
+   416→            loading={loading}
+   417→            icon={<Activity className="h-4 w-4" />}
+   418→            colorClass="text-[var(--dim-2)]"
+   419→          />
+   420→          <StatCard
+   421→            label="总点踩数"
+   422→            value={data?.feedbackSummary?.down}
+   423→            loading={loading}
+   424→            icon={<ThumbsDown className="h-4 w-4" />}
+   425→            colorClass="text-[var(--dim-6)]"
+   426→          />
+   427→        </section>
+   428→
+   429→        {/* Charts row */}
+   430→        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+   431→          <Card className="shadow-sm">
+   432→            <CardHeader className="pb-2">
+   433→              <CardTitle className="text-sm">近30天每日活跃用户数</CardTitle>
+   434→            </CardHeader>
+   435→            <CardContent>
+   436→              {loading ? (
+   437→                <Skeleton className="h-[300px] w-full" />
+   438→              ) : (
+   439→                <div style={{ width: "100%", height: 300 }}>
+   440→                  <ResponsiveContainer width="100%" height="100%">
+   441→                    <LineChart
+   442→                      data={data?.dailyActive ?? []}
+   443→                      margin={{ top: 8, right: 12, bottom: 4, left: -12 }}
+   444→                    >
+   445→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+   446→                      <XAxis
+   447→                        dataKey="date"
+   448→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   449→                        tickFormatter={(v: string) => formatDateShort(v)}
+   450→                        stroke="var(--border)"
+   451→                      />
+   452→                      <YAxis
+   453→                        allowDecimals={false}
+   454→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   455→                        stroke="var(--border)"
+   456→                      />
+   457→                      <Tooltip
+   458→                        contentStyle={{
+   459→                          background: "var(--card)",
+   460→                          border: "1px solid var(--border)",
+   461→                          borderRadius: 6,
+   462→                          fontSize: 12,
+   463→                          color: "var(--foreground)",
+   464→                        }}
+   465→                        labelFormatter={(v: string) => `日期: ${v}`}
+   466→                        formatter={(v: number) => [v, "活跃用户"]}
+   467→                      />
+   468→                      <Line
+   469→                        type="monotone"
+   470→                        dataKey="users"
+   471→                        stroke="var(--primary)"
+   472→                        strokeWidth={2}
+   473→                        dot={{ r: 2, fill: "var(--primary)" }}
+   474→                        activeDot={{ r: 4 }}
+   475→                      />
+   476→                    </LineChart>
+   477→                  </ResponsiveContainer>
+   478→                </div>
+   479→              )}
+   480→            </CardContent>
+   481→          </Card>
+   482→
+   483→          <Card className="shadow-sm">
+   484→            <CardHeader className="pb-2">
+   485→              <CardTitle className="text-sm">近30天每日各操作次数</CardTitle>
+   486→            </CardHeader>
+   487→            <CardContent>
+   488→              {loading ? (
+   489→                <Skeleton className="h-[300px] w-full" />
+   490→              ) : (
+   491→                <div style={{ width: "100%", height: 300 }}>
+   492→                  <ResponsiveContainer width="100%" height="100%">
+   493→                    <BarChart
+   494→                      data={data?.dailyActions ?? []}
+   495→                      margin={{ top: 8, right: 12, bottom: 4, left: -12 }}
+   496→                    >
+   497→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+   498→                      <XAxis
+   499→                        dataKey="date"
+   500→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   501→                        tickFormatter={(v: string) => formatDateShort(v)}
+   502→                        stroke="var(--border)"
+   503→                      />
+   504→                      <YAxis
+   505→                        allowDecimals={false}
+   506→                        tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+   507→                        stroke="var(--border)"
+   508→                      />
+   509→                      <Tooltip
+   510→                        contentStyle={{
+   511→                          background: "var(--card)",
+   512→                          border: "1px solid var(--border)",
+   513→                          borderRadius: 6,
+   514→                          fontSize: 12,
+   515→                          color: "var(--foreground)",
+   516→                        }}
+   517→                      />
+   518→                      <Legend
+   519→                        wrapperStyle={{ fontSize: 11 }}
+   520→                        iconType="circle"
+   521→                        iconSize={8}
+   522→                      />
+   523→                      {ACTION_KEYS.map((a, i) => (
+   524→                        <Bar
+   525→                          key={a.key}
+   526→                          dataKey={a.key}
+   527→                          name={a.label}
+   528→                          stackId="a"
+   529→                          fill={DIM_COLORS[i % DIM_COLORS.length]}
+   530→                          radius={i === ACTION_KEYS.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+   531→                        />
+   532→                      ))}
+   533→                    </BarChart>
+   534→                  </ResponsiveContainer>
+   535→                </div>
+   536→              )}
+   537→            </CardContent>
+   538→          </Card>
+   539→
+   540→          <Card className="shadow-sm">
+   541→            <CardHeader className="pb-2">
+   542→              <CardTitle className="text-sm">点赞 / 点踩比例</CardTitle>
+   543→            </CardHeader>
+   544→            <CardContent>
+   545→              {loading ? (
+   546→                <Skeleton className="h-[300px] w-full" />
+   547→              ) : (
+   548→                <div style={{ width: "100%", height: 300 }}>
+   549→                  <ResponsiveContainer width="100%" height="100%">
+   550→                    <PieChart>
+   551→                      <Pie
+   552→                        data={[
+   553→                          { name: "点赞", value: data?.feedbackSummary?.up ?? 0, key: "up" },
+   554→                          { name: "点踩", value: data?.feedbackSummary?.down ?? 0, key: "down" },
+   555→                        ]}
+   556→                        dataKey="value"
+   557→                        nameKey="name"
+   558→                        cx="50%"
+   559→                        cy="50%"
+   560→                        innerRadius={55}
+   561→                        outerRadius={90}
+   562→                        paddingAngle={2}
+   563→                        stroke="var(--card)"
+   564→                        strokeWidth={2}
+   565→                        label={(entry: { name?: string; value?: number }) =>
+   566→                          `${entry.name}: ${entry.value ?? 0}`
+   567→                        }
+   568→                        labelLine={false}
+   569→                      >
+   570→                        <Cell fill="var(--success)" />
+   571→                        <Cell fill="var(--destructive)" />
+   572→                      </Pie>
+   573→                      <Tooltip
+   574→                        contentStyle={{
+   575→                          background: "var(--card)",
+   576→                          border: "1px solid var(--border)",
+   577→                          borderRadius: 6,
+   578→                          fontSize: 12,
+   579→                          color: "var(--foreground)",
+   580→                        }}
+   581→                      />
+   582→                      <Legend
+   583→                        wrapperStyle={{ fontSize: 11 }}
+   584→                        iconType="circle"
+   585→                        iconSize={8}
+   586→                      />
+   587→                    </PieChart>
+   588→                  </ResponsiveContainer>
+   589→                </div>
+   590→              )}
+   591→            </CardContent>
+   592→          </Card>
+   593→        </section>
+   594→
+   595→        {/* LLM Token Usage & Estimated Cost */}
+   596→        <section className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+   597→          <Card className="shadow-sm">
+   598→            <CardHeader className="pb-2">
+   599→              <CardTitle className="text-sm flex items-center gap-2">
+   600→                <Zap className="h-3.5 w-3.5 text-[var(--dim-3)]" />
+   601→                模型用量 (近30天)
+   602→              </CardTitle>
+   603→            </CardHeader>
+   604→            <CardContent>
+   605→              {loading ? (
+   606→                <Skeleton className="h-[120px] w-full" />
+   607→              ) : (
+   608→                <div className="space-y-2.5">
+   609→                  <div>
+   610→                    <p className="text-[10px] uppercase text-muted-foreground">总 Tokens</p>
+   611→                    <p className="text-2xl font-semibold tabular-nums">
+   612→                      {formatTokens(data?.tokenUsage?.totals.totalTokens ?? 0)}
+   613→                    </p>
+   614→                  </div>
+   615→                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+   616→                    <div>
+   617→                      <span className="text-muted-foreground">输入 </span>
+   618→                      <span className="font-medium tabular-nums">
+   619→                        {formatTokens(data?.tokenUsage?.totals.promptTokens ?? 0)}
+   620→                      </span>
+   621→                    </div>
+   622→                    <div>
+   623→                      <span className="text-muted-foreground">输出 </span>
+   624→                      <span className="font-medium tabular-nums">
+   625→                        {formatTokens(data?.tokenUsage?.totals.completionTokens ?? 0)}
+   626→                      </span>
+   627→                    </div>
+   628→                  </div>
+   629→                  <div className="text-[10px] text-muted-foreground">
+   630→                    共 {data?.tokenUsage?.totals.calls ?? 0} 次调用
+   631→                  </div>
+   632→                </div>
+   633→              )}
+   634→            </CardContent>
+   635→          </Card>
+   636→
+   637→          <Card className="shadow-sm">
+   638→            <CardHeader className="pb-2">
+   639→              <CardTitle className="text-sm flex items-center gap-2">
+   640→                <span className="text-[var(--dim-4)]">¥</span>
+   641→                估算开支 (CNY)
+   642→              </CardTitle>
+   643→            </CardHeader>
+   644→            <CardContent>
+   645→              {loading ? (
+   646→                <Skeleton className="h-[120px] w-full" />
+   647→              ) : (
+   648→                <div className="space-y-2.5">
+   649→                  <div>
+   650→                    <p className="text-[10px] uppercase text-muted-foreground">近30天</p>
+   651→                    <p className="text-2xl font-semibold tabular-nums text-[var(--dim-4)]">
+   652→                      ¥ {formatCny(data?.tokenUsage?.totals.costCny ?? 0)}
+   653→                    </p>
+   654→                  </div>
+   655→                  <div className="text-[11px] text-muted-foreground">
+   656→                    基于公开定价表估算，仅供参考；非实际账单
+   657→                  </div>
+   658→                  <div className="text-[11px] text-muted-foreground">
+   659→                    日均 ¥ {formatCny((data?.tokenUsage?.totals.costCny ?? 0) / 30)}
+   660→                  </div>
+   661→                </div>
+   662→              )}
+   663→            </CardContent>
+   664→          </Card>
+   665→
+   666→          {/* Daily tokens trend */}
+   667→          <Card className="shadow-sm lg:col-span-2">
+   668→            <CardHeader className="pb-2">
+   669→              <CardTitle className="text-sm">每日 Tokens 用量趋势</CardTitle>
+   670→            </CardHeader>
+   671→            <CardContent>
+   672→              {loading ? (
+   673→                <Skeleton className="h-[140px] w-full" />
+   674→              ) : (
+   675→                <div style={{ width: "100%", height: 140 }}>
+   676→                  <ResponsiveContainer width="100%" height="100%">
+   677→                    <BarChart
+   678→                      data={data?.tokenUsage?.daily ?? []}
+   679→                      margin={{ top: 4, right: 8, bottom: 0, left: -10 }}
+   680→                    >
+   681→                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+   682→                      <XAxis
+   683→                        dataKey="date"
+   684→                        tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+   685→                        tickFormatter={(v: string) => formatDateShort(v)}
+   686→                        stroke="var(--border)"
+   687→                      />
+   688→                      <YAxis
+   689→                        tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+   690→                        stroke="var(--border)"
+   691→                        tickFormatter={(v: number) =>
+   692→                          v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
+   693→                        }
+   694→                      />
+   695→                      <Tooltip
+   696→                        contentStyle={{
+   697→                          background: "var(--card)",
+   698→                          border: "1px solid var(--border)",
+   699→                          borderRadius: 6,
+   700→                          fontSize: 12,
+   701→                          color: "var(--foreground)",
+   702→                        }}
+   703→                        formatter={(v: number) => [formatTokens(v), "Tokens"]}
+   704→                      />
+   705→                      <Bar
+   706→                        dataKey="tokens"
+   707→                        name="Tokens"
+   708→                        fill="var(--dim-3)"
+   709→                        radius={[2, 2, 0, 0]}
+   710→                      />
+   711→                    </BarChart>
+   712→                  </ResponsiveContainer>
+   713→                </div>
+   714→              )}
+   715→            </CardContent>
+   716→          </Card>
+   717→        </section>
+   718→
+   719→        {/* Token usage breakdown tables */}
+   720→        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   721→          <Card className="shadow-sm">
+   722→            <CardHeader className="pb-2">
+   723→              <CardTitle className="text-sm flex items-center gap-2">
+   724→                <Zap className="h-3.5 w-3.5 text-[var(--dim-3)]" />
+   725→                按模型 / 服务商
+   726→              </CardTitle>
+   727→            </CardHeader>
+   728→            <CardContent className="px-3">
+   729→              {loading ? (
+   730→                <Skeleton className="h-[200px] w-full" />
+   731→              ) : (
+   732→                <div className="max-h-[260px] overflow-y-auto scrollbar-thin">
+   733→                  <Table>
+   734→                    <TableHeader className="sticky top-0 bg-card z-10">
+   735→                      <TableRow>
+   736→                        <TableHead className="text-xs">模型</TableHead>
+   737→                        <TableHead className="text-xs text-right">调用</TableHead>
+   738→                        <TableHead className="text-xs text-right">Tokens</TableHead>
+   739→                        <TableHead className="text-xs text-right">¥ CNY</TableHead>
+   740→                      </TableRow>
+   741→                    </TableHeader>
+   742→                    <TableBody>
+   743→                      {(data?.tokenUsage?.byModel ?? []).length === 0 ? (
+   744→                        <TableRow>
+   745→                          <TableCell colSpan={4} className="text-xs text-muted-foreground text-center py-6">
+   746→                            暂无调用记录
+   747→                          </TableCell>
+   748→                        </TableRow>
+   749→                      ) : (
+   750→                        (data?.tokenUsage?.byModel ?? []).map((m, i) => (
+   751→                          <TableRow key={i}>
+   752→                            <TableCell className="text-xs">
+   753→                              <div className="font-mono text-[11px]">{m.model}</div>
+   754→                              <div className="text-[10px] text-muted-foreground uppercase">{m.provider}</div>
+   755→                            </TableCell>
+   756→                            <TableCell className="text-xs text-right tabular-nums">{m.calls}</TableCell>
+   757→                            <TableCell className="text-xs text-right tabular-nums">
+   758→                              {formatTokens(m.totalTokens)}
+   759→                            </TableCell>
+   760→                            <TableCell className="text-xs text-right tabular-nums text-[var(--dim-4)]">
+   761→                              {formatCny(m.costCny)}
+   762→                            </TableCell>
+   763→                          </TableRow>
+   764→                        ))
+   765→                      )}
+   766→                    </TableBody>
+   767→                  </Table>
+   768→                </div>
+   769→              )}
+   770→            </CardContent>
+   771→          </Card>
+   772→
+   773→          <Card className="shadow-sm">
+   774→            <CardHeader className="pb-2">
+   775→              <CardTitle className="text-sm flex items-center gap-2">
+   776→                <Activity className="h-3.5 w-3.5 text-[var(--dim-2)]" />
+   777→                按功能场景
+   778→              </CardTitle>
+   779→            </CardHeader>
+   780→            <CardContent className="px-3">
+   781→              {loading ? (
+   782→                <Skeleton className="h-[200px] w-full" />
+   783→              ) : (
+   784→                <div className="max-h-[260px] overflow-y-auto scrollbar-thin">
+   785→                  <Table>
+   786→                    <TableHeader className="sticky top-0 bg-card z-10">
+   787→                      <TableRow>
+   788→                        <TableHead className="text-xs">场景</TableHead>
+   789→                        <TableHead className="text-xs text-right">调用</TableHead>
+   790→                        <TableHead className="text-xs text-right">输入 Tokens</TableHead>
+   791→                        <TableHead className="text-xs text-right">输出 Tokens</TableHead>
+   792→                        <TableHead className="text-xs text-right">¥ CNY</TableHead>
+   793→                      </TableRow>
+   794→                    </TableHeader>
+   795→                    <TableBody>
+   796→                      {(data?.tokenUsage?.byAction ?? []).length === 0 ? (
+   797→                        <TableRow>
+   798→                          <TableCell colSpan={5} className="text-xs text-muted-foreground text-center py-6">
+   799→                            暂无调用记录
+   800→                          </TableCell>
+   801→                        </TableRow>
+   802→                      ) : (
+   803→                        (data?.tokenUsage?.byAction ?? []).map((a, i) => (
+   804→                          <TableRow key={i}>
+   805→                            <TableCell className="text-xs">
+   806→                              <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+   807→                                {actionLabel(a.action)}
+   808→                              </Badge>
+   809→                            </TableCell>
+   810→                            <TableCell className="text-xs text-right tabular-nums">{a.calls}</TableCell>
+   811→                            <TableCell className="text-xs text-right tabular-nums">
+   812→                              {formatTokens(a.promptTokens)}
+   813→                            </TableCell>
+   814→                            <TableCell className="text-xs text-right tabular-nums">
+   815→                              {formatTokens(a.completionTokens)}
+   816→                            </TableCell>
+   817→                            <TableCell className="text-xs text-right tabular-nums text-[var(--dim-4)]">
+   818→                              {formatCny(a.costCny)}
+   819→                            </TableCell>
+   820→                          </TableRow>
+   821→                        ))
+   822→                      )}
+   823→                    </TableBody>
+   824→                  </Table>
+   825→                </div>
+   826→              )}
+   827→            </CardContent>
+   828→          </Card>
+   829→        </section>
+   830→
+   831→        {/* Two-column tables */}
+   832→        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+   833→          <Card className="shadow-sm">
+   834→            <CardHeader className="pb-2">
+   835→              <CardTitle className="text-sm flex items-center gap-2">
+   836→                <Users className="h-3.5 w-3.5" />
+   837→                最近用户
+   838→              </CardTitle>
+   839→            </CardHeader>
+   840→            <CardContent className="px-3">
+   841→              {loading ? (
+   842→                <Skeleton className="h-[260px] w-full" />
+   843→              ) : (
+   844→                <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
+   845→                  <Table>
+   846→                    <TableHeader>
+   847→                      <TableRow>
+   848→                        <TableHead className="text-xs">邮箱</TableHead>
+   849→                        <TableHead className="text-xs">注册时间</TableHead>
+   850→                        <TableHead className="text-xs">最近活跃</TableHead>
+   851→                        <TableHead className="text-xs text-right">对话数</TableHead>
+   852→                      </TableRow>
+   853→                    </TableHeader>
+   854→                    <TableBody>
+   855→                      {(data?.recentUsers ?? []).length === 0 ? (
+   856→                        <TableRow>
+   857→                          <TableCell colSpan={4} className="text-xs text-muted-foreground text-center py-6">
+   858→                            暂无用户
+   859→                          </TableCell>
+   860→                        </TableRow>
+   861→                      ) : (
+   862→                        (data?.recentUsers ?? []).map((u) => (
+   863→                          <TableRow key={u.id}>
+   864→                            <TableCell className="text-xs font-medium truncate max-w-[160px]">
+   865→                              {u.email}
+   866→                            </TableCell>
+   867→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   868→                              {formatDateTime(u.createdAt)}
+   869→                            </TableCell>
+   870→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   871→                              {formatDateTime(u.lastActiveAt)}
+   872→                            </TableCell>
+   873→                            <TableCell className="text-xs text-right">
+   874→                              <Badge variant="secondary" className="font-mono">
+   875→                                {u.chatCount}
+   876→                              </Badge>
+   877→                            </TableCell>
+   878→                          </TableRow>
+   879→                        ))
+   880→                      )}
+   881→                    </TableBody>
+   882→                  </Table>
+   883→                </div>
+   884→              )}
+   885→            </CardContent>
+   886→          </Card>
+   887→
+   888→          <Card className="shadow-sm">
+   889→            <CardHeader className="pb-2">
+   890→              <CardTitle className="text-sm flex items-center gap-2">
+   891→                <Activity className="h-3.5 w-3.5" />
+   892→                最近对话
+   893→              </CardTitle>
+   894→            </CardHeader>
+   895→            <CardContent className="px-3">
+   896→              {loading ? (
+   897→                <Skeleton className="h-[260px] w-full" />
+   898→              ) : (
+   899→                <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
+   900→                  <Table>
+   901→                    <TableHeader>
+   902→                      <TableRow>
+   903→                        <TableHead className="text-xs">用户</TableHead>
+   904→                        <TableHead className="text-xs">问题摘要</TableHead>
+   905→                        <TableHead className="text-xs">时间</TableHead>
+   906→                      </TableRow>
+   907→                    </TableHeader>
+   908→                    <TableBody>
+   909→                      {(data?.recentChats ?? []).length === 0 ? (
+   910→                        <TableRow>
+   911→                          <TableCell colSpan={3} className="text-xs text-muted-foreground text-center py-6">
+   912→                            暂无对话
+   913→                          </TableCell>
+   914→                        </TableRow>
+   915→                      ) : (
+   916→                        (data?.recentChats ?? []).map((c) => (
+   917→                          <TableRow key={c.id}>
+   918→                            <TableCell className="text-xs text-muted-foreground truncate max-w-[120px]">
+   919→                              {c.userEmail || "—"}
+   920→                            </TableCell>
+   921→                            <TableCell className="text-xs">
+   922→                              <div className="truncate max-w-[280px]" title={c.question}>
+   923→                                {c.question || "—"}
+   924→                              </div>
+   925→                              {c.paperTitle && (
+   926→                                <div className="text-[10px] text-muted-foreground truncate max-w-[280px]">
+   927→                                  {c.paperTitle}
+   928→                                </div>
+   929→                              )}
+   930→                            </TableCell>
+   931→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+   932→                              {formatDateTime(c.createdAt)}
+   933→                            </TableCell>
+   934→                          </TableRow>
+   935→                        ))
+   936→                      )}
+   937→                    </TableBody>
+   938→                  </Table>
+   939→                </div>
+   940→              )}
+   941→            </CardContent>
+   942→          </Card>
+   943→        </section>
+   944→
+   945→        {/* Down feedbacks */}
+   946→        <Card className="shadow-sm">
+   947→          <CardHeader className="pb-2">
+   948→            <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
+   949→              <ThumbsDown className="h-3.5 w-3.5 text-[var(--dim-6)]" />
+   950→              点踩回答收集
+   951→              <Badge variant="destructive" className="ml-1">
+   952→                {(data?.feedbackSummary?.down ?? 0)} 条
+   953→              </Badge>
+   954→              {/* Export buttons — visible only when there are filtered rows.
+   955→                  CSV is the primary format (Excel-friendly with BOM); JSON
+   956→                  is provided for programmatic post-processing. */}
+   957→              <div className="ml-auto flex items-center gap-1.5">
+   958→                <Button
+   959→                  variant="outline"
+   960→                  size="sm"
+   961→                  className="h-7 gap-1.5 text-[11px]"
+   962→                  onClick={exportDownCsv}
+   963→                  disabled={filteredDown.length === 0}
+   964→                  title={filteredDown.length === 0 ? "暂无可导出的记录" : `导出 ${filteredDown.length} 条记录为 CSV`}
+   965→                >
+   966→                  <Download className="h-3 w-3" />
+   967→                  导出 CSV
+   968→                </Button>
+   969→                <Button
+   970→                  variant="outline"
+   971→                  size="sm"
+   972→                  className="h-7 gap-1.5 text-[11px]"
+   973→                  onClick={exportDownJson}
+   974→                  disabled={filteredDown.length === 0}
+   975→                  title={filteredDown.length === 0 ? "暂无可导出的记录" : `导出 ${filteredDown.length} 条记录为 JSON`}
+   976→                >
+   977→                  <Download className="h-3 w-3" />
+   978→                  导出 JSON
+   979→                </Button>
+   980→              </div>
+   981→            </CardTitle>
+   982→          </CardHeader>
+   983→          <CardContent className="space-y-3 px-3">
+   984→            {/* Filters */}
+   985→            <div className="flex flex-wrap items-end gap-3 px-2 pt-1">
+   986→              <div className="flex flex-col gap-1">
+   987→                <label className="text-[10px] uppercase text-muted-foreground">开始日期</label>
+   988→                <Input
+   989→                  type="date"
+   990→                  value={fromDate}
+   991→                  onChange={(e) => setFromDate(e.target.value)}
+   992→                  className="h-8 w-[150px] text-xs"
+   993→                />
+   994→              </div>
+   995→              <div className="flex flex-col gap-1">
+   996→                <label className="text-[10px] uppercase text-muted-foreground">结束日期</label>
+   997→                <Input
+   998→                  type="date"
+   999→                  value={toDate}
+  1000→                  onChange={(e) => setToDate(e.target.value)}
+  1001→                  className="h-8 w-[150px] text-xs"
+  1002→                />
+  1003→              </div>
+  1004→              <div className="flex flex-col gap-1 flex-1 min-w-[180px]">
+  1005→                <label className="text-[10px] uppercase text-muted-foreground">用户邮箱过滤</label>
+  1006→                <Input
+  1007→                  type="text"
+  1008→                  placeholder="输入邮箱关键字…"
+  1009→                  value={emailFilter}
+  1010→                  onChange={(e) => setEmailFilter(e.target.value)}
+  1011→                  className="h-8 text-xs"
+  1012→                />
+  1013→              </div>
+  1014→              {(fromDate || toDate || emailFilter) && (
+  1015→                <Button
+  1016→                  variant="ghost"
+  1017→                  size="sm"
+  1018→                  className="h-8 text-xs"
+  1019→                  onClick={() => {
+  1020→                    setFromDate("");
+  1021→                    setToDate("");
+  1022→                    setEmailFilter("");
+  1023→                  }}
+  1024→                >
+  1025→                  清除
+  1026→                </Button>
+  1027→              )}
+  1028→              <div className="ml-auto text-[11px] text-muted-foreground self-center">
+  1029→                显示 {filteredDown.length} / {data?.downFeedbacks?.length ?? 0} 条
+  1030→              </div>
+  1031→            </div>
+  1032→
+  1033→            {loading ? (
+  1034→              <Skeleton className="h-[300px] w-full" />
+  1035→            ) : (
+  1036→              <div className="max-h-[520px] overflow-y-auto scrollbar-thin border-t">
+  1037→                <Table>
+  1038→                  <TableHeader className="sticky top-0 bg-card z-10">
+  1039→                    <TableRow>
+  1040→                      <TableHead className="text-xs w-[140px]">时间</TableHead>
+  1041→                      <TableHead className="text-xs w-[180px]">用户邮箱</TableHead>
+  1042→                      <TableHead className="text-xs w-[260px]">原问题</TableHead>
+  1043→                      <TableHead className="text-xs">原回答</TableHead>
+  1044→                      <TableHead className="text-xs w-[200px]">点踩原因</TableHead>
+  1045→                    </TableRow>
+  1046→                  </TableHeader>
+  1047→                  <TableBody>
+  1048→                    {filteredDown.length === 0 ? (
+  1049→                      <TableRow>
+  1050→                        <TableCell colSpan={5} className="text-xs text-muted-foreground text-center py-8">
+  1051→                          暂无符合条件的点踩记录
+  1052→                        </TableCell>
+  1053→                      </TableRow>
+  1054→                    ) : (
+  1055→                      filteredDown.map((f) => {
+  1056→                        const expanded = expandedId === f.id;
+  1057→                        const hasFull = f.answerFull.length > f.answer.length;
+  1058→                        return (
+  1059→                          <TableRow
+  1060→                            key={f.id}
+  1061→                            className="cursor-pointer"
+  1062→                            onClick={() => setExpandedId(expanded ? null : f.id)}
+  1063→                          >
+  1064→                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap align-top pt-2">
+  1065→                              {formatDateTime(f.createdAt)}
+  1066→                            </TableCell>
+  1067→                            <TableCell className="text-xs text-muted-foreground truncate max-w-[180px] align-top pt-2">
+  1068→                              {f.userEmail || "—"}
+  1069→                            </TableCell>
+  1070→                            <TableCell className="text-xs align-top pt-2">
+  1071→                              <div className="line-clamp-2 max-w-[260px]">{f.question || "—"}</div>
+  1072→                            </TableCell>
+  1073→                            <TableCell className="text-xs align-top pt-2">
+  1074→                              <div className="flex items-start gap-1">
+  1075→                                <span className="text-muted-foreground mt-[1px]">
+  1076→                                  {expanded ? (
+  1077→                                    <ChevronDown className="h-3 w-3" />
+  1078→                                  ) : (
+  1079→                                    <ChevronRight className="h-3 w-3" />
+  1080→                                  )}
+  1081→                                </span>
+  1082→                                <div
+  1083→                                  className={
+  1084→                                    expanded
+  1085→                                      ? "whitespace-pre-wrap break-words max-w-[440px]"
+  1086→                                      : "line-clamp-2 max-w-[440px]"
+  1087→                                  }
+  1088→                                >
+  1089→                                  {expanded ? f.answerFull || "（空）" : f.answer || "（空）"}
+  1090→                                  {!expanded && hasFull && (
+  1091→                                    <span className="text-muted-foreground ml-1">…</span>
+  1092→                                  )}
+  1093→                                </div>
+  1094→                              </div>
+  1095→                            </TableCell>
+  1096→                            <TableCell className="text-xs text-muted-foreground align-top pt-2">
+  1097→                              <div className="max-w-[200px] line-clamp-3" title={f.reason || ""}>
+  1098→                                {f.reason || "—"}
+  1099→                              </div>
+  1100→                            </TableCell>
+  1101→                          </TableRow>
+  1102→                        );
+  1103→                      })
+  1104→                    )}
+  1105→                  </TableBody>
+  1106→                </Table>
+  1107→              </div>
+  1108→            )}
+  1109→          </CardContent>
+  1110→        </Card>
+  1111→      </main>
+  1112→
+  1113→      <footer className="mt-auto border-t border-border bg-muted/30">
+  1114→        <div className="max-w-[1400px] mx-auto px-6 py-3 text-[11px] text-muted-foreground flex items-center justify-between">
+  1115→          <span>MedReader Agent · 管理员后台</span>
+  1116→          <Link href="/" className="hover:text-foreground transition-colors">
+  1117→            ← 返回首页
+  1118→          </Link>
+  1119→        </div>
+  1120→      </footer>
+  1121→    </div>
+  1122→  );
+  1123→}
+  1124→
+  1125→// ---------- Subcomponents ----------
+  1126→function Header() {
+  1127→  return (
+  1128→    <header className="glass-header h-12 flex-shrink-0 flex items-center px-4 gap-3 border-b border-border/30 sticky top-0 z-20">
+  1129→      <div className="flex items-center gap-2">
+  1130→        <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center shadow-sm">
+  1131→          <Shield className="h-4 w-4 text-primary-foreground" />
+  1132→        </div>
+  1133→        <span className="font-semibold text-sm text-background">管理员后台</span>
+  1134→        <span className="text-[10px] opacity-70 hidden sm:inline">MedReader Admin</span>
+  1135→      </div>
+  1136→      <div className="flex-1" />
+  1137→      <Link href="/">
+  1138→        <Button
+  1139→          variant="ghost"
+  1140→          size="sm"
+  1141→          className="h-8 gap-1.5 text-background hover:bg-background/10"
+  1142→        >
+  1143→          <ArrowLeft className="h-3.5 w-3.5" />
+  1144→          返回首页
+  1145→        </Button>
+  1146→      </Link>
+  1147→    </header>
+  1148→  );
+  1149→}
+  1150→
+  1151→function StatCard({
+  1152→  label,
+  1153→  value,
+  1154→  loading,
+  1155→  icon,
+  1156→  colorClass,
+  1157→}: {
+  1158→  label: string;
+  1159→  value: number | undefined;
+  1160→  loading: boolean;
+  1161→  icon: React.ReactNode;
+  1162→  colorClass: string;
+  1163→}) {
+  1164→  return (
+  1165→    <Card className="shadow-sm">
+  1166→      <CardContent className="pt-5">
+  1167→        <div className="flex items-start justify-between">
+  1168→          <div>
+  1169→            <p className="text-xs text-muted-foreground">{label}</p>
+  1170→            {loading ? (
+  1171→              <Skeleton className="h-8 w-20 mt-2" />
+  1172→            ) : (
+  1173→              <p className="text-3xl font-semibold tabular-nums mt-1">{value ?? 0}</p>
+  1174→            )}
+  1175→          </div>
+  1176→          <div className={`p-2 rounded-md bg-muted/60 ${colorClass}`}>{icon}</div>
+  1177→        </div>
+  1178→      </CardContent>
+  1179→    </Card>
+  1180→  );
+  1181→}
+  1182→
