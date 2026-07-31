@@ -122,6 +122,19 @@ type Props = {
    *   - "error"       : Call A or spine failed
    */
   figuresStatus?: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+
+  /**
+   * Upload-stage signal from the parent — drives the "MinerU 正在加载"
+   * indicator shown in the left panel BEFORE the LLM analysis starts.
+   *   - "idle"      : no paper yet (show the empty placeholder)
+   *   - "uploading" : PDF upload in flight
+   *   - "parsing"   : MinerU 解析中（30-90s，最长的等待阶段）
+   *   - "analyzing" : Stage 1 LLM 分析中（此时 outlineLoading 也为 true）
+   *   - "done"      : 全部完成
+   */
+  uploadStage?: "idle" | "uploading" | "parsing" | "analyzing" | "done";
+  /** Human-readable status text from the parent (e.g. "MinerU 解析中（30-90 秒）…"). */
+  mineruStatus?: string;
 };
 
 // ── Section config: which parts exist + their display metadata ────────────
@@ -157,25 +170,42 @@ export default function OutlinePanel({
   onPanelChipClick,
   onJumpToPage,
   figuresStatus = "idle",
+  uploadStage = "idle",
+  mineruStatus = "",
 }: Props) {
   const [retrying, setRetrying] = useState<string | null>(null);
 
   // ── Per-section fold state ────────────────────────────────────────────
-  // User request: "大标题默认展开, 论证主线默认缩起来"
-  //   - questionBackground / novelty / limitsOpportunities → open by default
-  //   - argumentSpine                                       → closed by default
+  // User request: "开始的时候就展开成这样就可以了,不用把所有的内容都展开"
+  // → only ONE section expanded by default (问题与背景), the other three
+  //   collapsed. User can click any header to expand it.
   // The state is keyed by SectionKey. We initialize lazily so a freshly
   // loaded outline starts in the right fold state regardless of when its
   // content arrives.
   const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
-    questionBackground: true,
-    argumentSpine: false, // collapsed by default
-    novelty: true,
-    limitsOpportunities: true,
+    questionBackground: true,   // 默认展开第一个
+    argumentSpine: false,
+    novelty: false,
+    limitsOpportunities: false,
   });
   const toggleSection = useCallback((key: SectionKey) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
+
+  // 当一个全新的 outline 到达时，重置回默认折叠态（仅 questionBackground 展开）。
+  // 否则切换论文时上一份的展开状态会残留。
+  const outlineTitleRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (outline?.title && outlineTitleRef.current !== outline.title) {
+      outlineTitleRef.current = outline.title;
+      setOpenSections({
+        questionBackground: true,
+        argumentSpine: false,
+        novelty: false,
+        limitsOpportunities: false,
+      });
+    }
+  }, [outline?.title]);
 
   const fs = (px: number) => `${px}px`;
 
@@ -206,20 +236,34 @@ export default function OutlinePanel({
   );
 
   // ── Header (always rendered) ────────────────────────────────────────────
+  // Determine whether we're in the MinerU-parsing phase (before outline exists).
+  // During this phase we show a dedicated "MinerU 正在加载" indicator inside
+  // the panel body so the user knows what's happening on the left side.
+  const isMineruLoading =
+    !outline && (uploadStage === "uploading" || uploadStage === "parsing");
+  // True while Stage 1 LLM analysis is running (after MinerU finished).
+  const isAnalyzing =
+    loading && !outline && uploadStage === "analyzing";
+
   return (
     <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
-      {/* Panel header — always visible. The outer `collapsed` prop
-          controls the panel-level collapse (whole panel hidden except
-          header); individual sections inside have their own per-section
-          fold state (see openSections above). Default fold state:
-          questionBackground / novelty / limitsOpportunities expanded,
-          argumentSpine collapsed. */}
-      <div
+      {/* Panel header — always visible, click to collapse/expand the whole panel.
+          Restored per user request: "我还是喜欢之前的那种排版方式,右上方展开栏".
+          The outer `collapsed` prop controls the panel-level collapse (whole
+          panel hidden except header); individual sections inside have their
+          own per-section fold state (see openSections above). */}
+      <button
+        type="button"
+        onClick={() => onCollapsedChange?.(!collapsed)}
         className={cn(
-          "w-full px-3 py-2 flex items-center gap-2 flex-shrink-0",
+          "w-full px-3 py-2 flex items-center gap-2 text-left flex-shrink-0 transition-colors",
+          "hover:bg-slate-100/60 dark:hover:bg-slate-800/40",
           "border-b border-slate-200/70 dark:border-slate-800/60",
           "bg-gradient-to-r from-slate-50/80 to-slate-100/40 dark:from-slate-900/60 dark:to-slate-900/30"
         )}
+        title={collapsed ? "展开全文框架" : "折叠全文框架"}
+        aria-label={collapsed ? "展开全文框架" : "折叠全文框架"}
+        aria-expanded={!collapsed}
       >
         <LayoutGrid className="h-3.5 w-3.5 text-slate-600 dark:text-slate-400 flex-shrink-0" />
         <span className="text-[12px] font-semibold flex-1 text-slate-700 dark:text-slate-300">
@@ -233,12 +277,30 @@ export default function OutlinePanel({
             4 层
           </Badge>
         )}
-      </div>
+        {/* 右上方展开/折叠按钮 — restores the previous layout's panel-level toggle */}
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0",
+            !collapsed && "rotate-90"
+          )}
+        />
+      </button>
 
-      {(!collapsed || true) && (
+      {!collapsed && (
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           <div className="p-2">
-            {loading && !outline && (
+            {/* MinerU 解析阶段：uploadStage === "uploading" | "parsing".
+                用户反馈「最开始的时候在左侧也显示一下mineru正在加载,不然不知道在干嘛」。
+                在 outline 还没出现前，左面板需要明确的加载提示，而不是静态占位符。 */}
+            {isMineruLoading && (
+              <MineruLoadingIndicator
+                stage={uploadStage}
+                statusMessage={mineruStatus}
+              />
+            )}
+
+            {/* Stage 1 LLM 分析阶段：MinerU 已完成、4 层 outline 正在生成 */}
+            {isAnalyzing && (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
                 <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 <p className="text-xs">Agent 正在分析文献…</p>
@@ -248,7 +310,8 @@ export default function OutlinePanel({
               </div>
             )}
 
-            {!loading && !outline && (
+            {/* 完全空闲：还没传 PDF */}
+            {!loading && !outline && uploadStage === "idle" && (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground/70 gap-2 px-4 text-center">
                 <FileSearch className="h-6 w-6 opacity-40" />
                 <p className="text-xs">导入 PDF 后，Agent 将自动生成分析</p>
@@ -593,6 +656,119 @@ function ArgumentSpineProgress({
             · 已提取 {figuresCount} 张主图
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── MinerU loading indicator ───────────────────────────────────────────────
+// Shown in the left panel during the upload + MinerU-parse phase (BEFORE
+// the LLM Stage 1 analysis starts). User feedback: "最开始的时候在左侧也显示
+// 一下mineru正在加载,不然不知道在干嘛".
+//
+// Visual: a card with a pulsing dot row (3 steps: 上传 → 解析 → 分析) and
+// the live statusMessage from the parent (e.g. "MinerU 解析中…（已等 60s）").
+
+function MineruLoadingIndicator({
+  stage,
+  statusMessage,
+}: {
+  stage: "uploading" | "parsing" | "analyzing" | "idle" | "done";
+  statusMessage?: string;
+}) {
+  // Three-step progress: 上传 PDF → MinerU 解析 → 智能分析
+  type StepState = "done" | "active" | "pending";
+  const steps: Array<{ key: string; label: string; state: StepState }> = (() => {
+    if (stage === "uploading") {
+      return [
+        { key: "upload", label: "上传 PDF", state: "active" },
+        { key: "parse",  label: "MinerU 解析", state: "pending" },
+        { key: "analyze", label: "智能分析", state: "pending" },
+      ];
+    }
+    if (stage === "parsing") {
+      return [
+        { key: "upload", label: "上传 PDF", state: "done" },
+        { key: "parse",  label: "MinerU 解析", state: "active" },
+        { key: "analyze", label: "智能分析", state: "pending" },
+      ];
+    }
+    if (stage === "analyzing") {
+      return [
+        { key: "upload", label: "上传 PDF", state: "done" },
+        { key: "parse",  label: "MinerU 解析", state: "done" },
+        { key: "analyze", label: "智能分析", state: "active" },
+      ];
+    }
+    return [
+      { key: "upload", label: "上传 PDF", state: "pending" },
+      { key: "parse",  label: "MinerU 解析", state: "pending" },
+      { key: "analyze", label: "智能分析", state: "pending" },
+    ];
+  })();
+
+  const headline =
+    stage === "uploading" ? "正在上传 PDF…"
+    : stage === "parsing"  ? "MinerU 正在解析 PDF…"
+    : stage === "analyzing" ? "MinerU 完成，正在分析…"
+    : "等待中…";
+
+  return (
+    <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-gradient-to-b from-slate-50 to-slate-50/40 dark:from-slate-900/40 dark:to-slate-900/20 p-3 space-y-2.5">
+      {/* Headline */}
+      <div className="flex items-center gap-2">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-600 dark:text-slate-400 flex-shrink-0" />
+        <span className="text-[12px] font-medium text-slate-700 dark:text-slate-300">
+          {headline}
+        </span>
+      </div>
+
+      {/* 3-step progress dots */}
+      <div className="flex items-center gap-1">
+        {steps.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-1 flex-1 min-w-0">
+            <div
+              className={cn(
+                "h-1.5 w-1.5 rounded-full flex-shrink-0",
+                s.state === "done" && "bg-emerald-500",
+                s.state === "active" && "bg-slate-600 dark:bg-slate-300 animate-pulse",
+                s.state === "pending" && "bg-muted-foreground/25"
+              )}
+            />
+            <span
+              className={cn(
+                "text-[10px] truncate",
+                s.state === "done" && "text-emerald-600 dark:text-emerald-400",
+                s.state === "active" && "text-slate-700 dark:text-slate-200 font-medium",
+                s.state === "pending" && "text-muted-foreground/60"
+              )}
+            >
+              {s.label}
+            </span>
+            {i < steps.length - 1 && (
+              <div
+                className={cn(
+                  "flex-1 h-px min-w-[6px]",
+                  s.state === "done" ? "bg-emerald-500/40" : "bg-border"
+                )}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Live status message from parent (e.g. "MinerU 解析中…（已等 60s）") */}
+      {statusMessage && (
+        <div className="text-[10.5px] text-muted-foreground/70 italic leading-relaxed break-words">
+          {statusMessage}
+        </div>
+      )}
+
+      {/* Helpful tip — explains what MinerU is doing behind the scenes */}
+      <div className="text-[10px] text-muted-foreground/60 leading-relaxed border-t border-slate-200/60 dark:border-slate-800/60 pt-2">
+        {stage === "uploading" && "正在将 PDF 上传至服务器，随后启动结构化解析。"}
+        {stage === "parsing" && "MinerU 正在抽取段落、图表与版式信息，通常需要 30-90 秒，复杂 PDF 可能更久。完成后将自动进入智能分析。"}
+        {stage !== "uploading" && stage !== "parsing" && "解析完成，正在生成 4 层结构化分析。"}
       </div>
     </div>
   );

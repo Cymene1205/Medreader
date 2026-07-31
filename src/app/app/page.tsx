@@ -203,11 +203,10 @@ export default function Home() {
       setCitations([]);
       setFiguresStatus("idle");
       setFiguresLoading(false);
-      // Left panel: 全文框架 starts expanded during loading (so the user
-      // sees the "analyzing…" / progress indicator), then auto-collapses
-      // once Stage 1 results arrive. Heading panel was removed from the
-      // left column — paragraph navigation is now a button inside the
-      // 智能解析 toolbar.
+      // Left panel: 全文框架 starts (and stays) expanded so the user can
+      // see the "MinerU 正在加载" / "Agent 正在分析" progress indicator.
+      // It no longer auto-collapses after Stage 1 results arrive — user
+      // can manually collapse via the ChevronRight in the panel header.
       setOutlineCollapsed(false);
       // Default the center view to PDF while the MinerU parse runs (it takes
       // 30-90s). The user sees their PDF immediately instead of a blank
@@ -372,11 +371,11 @@ export default function Home() {
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         setOutline(data.outline);
         setUploadStage("done");
-        // User request: "在产生结果之后先上下折叠" — after analysis results
-        // are produced, the left 全文框架 panel starts collapsed so the
-        // center reader gets maximum screen real estate. The user can click
-        // the panel header to expand.
-        setOutlineCollapsed(true);
+        // 用户最新反馈："开始的时候就展开成这样就可以了" — outline 出现后
+        // 左侧 全文框架 保持展开（不再自动折叠），用户能看到第一层内容。
+        // 之前的 auto-collapse 行为已废弃；用户可手动点 header 右上方的
+        // ChevronRight 来折叠整个面板。
+        setOutlineCollapsed(false);
       } catch (e) {
         setOutlineError(e instanceof Error ? e.message : String(e));
         setUploadStage("idle");
@@ -678,6 +677,8 @@ export default function Home() {
                   figures={figures}
                   citations={citations}
                   figuresStatus={figuresStatus}
+                  uploadStage={uploadStage}
+                  mineruStatus={mineruStatus}
                   onPanelChipClick={(quote, pageIndex) => {
                     // Jump to the citing sentence in BOTH views:
                     //  - 智能解析 (blocks): use highlightToken (quote-based match)
