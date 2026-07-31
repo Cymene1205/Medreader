@@ -36,17 +36,39 @@ function ipHash(req?: Request): string | null {
 }
 
 /**
+ * Whether the given user role should bypass quota enforcement entirely.
+ *
+ * Admins are exempt from per-day caps on all metered actions so they can
+ * keep testing / demoing the product even after a normal user would have
+ * been throttled. The MinerU upstream quota is still the real ceiling —
+ * we just stop software-blocking admins locally.
+ */
+export function roleBypassesQuota(role?: string | null): boolean {
+  return role === "admin";
+}
+
+/**
  * Increment the per-(user,action,day) counter and return whether the
  * caller may proceed (i.e. still under the limit) plus the current
  * count.
  *
  * If the user is anonymous, we key off an IP+UA hash stored in meta.
+ *
+ * If `userRole` is "admin", the call short-circuits: it returns ok=true
+ * WITHOUT touching the counter, so admins never get throttled by their
+ * own usage.
  */
 export async function checkAndIncrement(
   action: QuotaAction,
   userId: string | null,
-  req?: Request
+  req?: Request,
+  userRole?: string | null
 ): Promise<{ ok: boolean; count: number; limit: number }> {
+  // Admin bypass — never increment, never block.
+  if (roleBypassesQuota(userRole)) {
+    return { ok: true, count: 0, limit: Number.MAX_SAFE_INTEGER };
+  }
+
   const limit = QUOTA_LIMITS[action];
   const day = todayStr();
   const key = userId || ipHash(req) || "anonymous";
@@ -65,12 +87,19 @@ export async function checkAndIncrement(
 
 /**
  * Peek without incrementing — useful for showing remaining quota in the UI.
+ *
+ * Admins always see "unlimited" remaining so the UI doesn't show a
+ * misleading 0/N state.
  */
 export async function peekQuota(
   action: QuotaAction,
   userId: string | null,
-  req?: Request
+  req?: Request,
+  userRole?: string | null
 ): Promise<{ count: number; limit: number; remaining: number }> {
+  if (roleBypassesQuota(userRole)) {
+    return { count: 0, limit: Number.MAX_SAFE_INTEGER, remaining: Number.MAX_SAFE_INTEGER };
+  }
   const limit = QUOTA_LIMITS[action];
   const day = todayStr();
   const key = userId || ipHash(req) || "anonymous";

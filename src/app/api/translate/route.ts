@@ -16,13 +16,15 @@ export async function POST(req: NextRequest) {
     }
 
     let userId: string | null = null;
+    let userRole: string | null = null;
     try {
       const session = await getServerSession(authOptions);
       userId = (session?.user as any)?.id ?? null;
+      userRole = (session?.user as any)?.role ?? null;
     } catch {
       // ignore
     }
-    const quota = await checkAndIncrement("translate", userId, req);
+    const quota = await checkAndIncrement("translate", userId, req, userRole);
     if (!quota.ok) {
       return NextResponse.json(
         { error: `今日翻译额度已用尽（${quota.count}/${quota.limit}）。明日重置。` },

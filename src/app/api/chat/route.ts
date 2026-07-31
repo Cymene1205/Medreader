@@ -28,13 +28,15 @@ export async function POST(req: NextRequest) {
 
     // Resolve user (anonymous allowed) and enforce quota.
     let userId: string | null = null;
+    let userRole: string | null = null;
     try {
       const session = await getServerSession(authOptions);
       userId = (session?.user as any)?.id ?? null;
+      userRole = (session?.user as any)?.role ?? null;
     } catch {
       // ignore — anonymous flow
     }
-    const quota = await checkAndIncrement("chat", userId, req);
+    const quota = await checkAndIncrement("chat", userId, req, userRole);
     if (!quota.ok) {
       return new Response(
         JSON.stringify({
