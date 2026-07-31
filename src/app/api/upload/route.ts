@@ -144,6 +144,24 @@ async function parsePdfBackground(paperId: string, filePath: string): Promise<vo
         parsedText: markdownToPlainText(result.markdown),
       },
     });
+
+    // Extract figures + citations so that /api/figures and /api/figure-detail
+    // have data to work with on the first request. These are pure-code (no
+    // LLM) and run in the background; failures are non-fatal.
+    try {
+      const { extractAndStoreFigures } = await import("@/lib/extract-figures");
+      const figCount = await extractAndStoreFigures(paperId);
+      console.log(`[upload] extracted ${figCount} figures for paper ${paperId}`);
+    } catch (e) {
+      console.warn(`[upload] extractAndStoreFigures failed (non-fatal) for ${paperId}:`, e);
+    }
+    try {
+      const { buildCitationsAndStore } = await import("@/lib/align-citations");
+      const cites = await buildCitationsAndStore(paperId);
+      console.log(`[upload] stored ${cites.length} citations for paper ${paperId}`);
+    } catch (e) {
+      console.warn(`[upload] buildCitationsAndStore failed (non-fatal) for ${paperId}:`, e);
+    }
   } catch (e) {
     console.error(`[upload] MinerU parse failed for ${paperId}:`, e);
     // Fallback: try pdfjs-dist
@@ -158,6 +176,15 @@ async function parsePdfBackground(paperId: string, filePath: string): Promise<vo
           // No markdown / blocks available in fallback mode
         },
       });
+      // In pdfjs fallback mode there are no image blocks, so we can't extract
+      // figures. But we can still build citations from the plain text.
+      try {
+        const { buildCitationsAndStore } = await import("@/lib/align-citations");
+        const cites = await buildCitationsAndStore(paperId);
+        console.log(`[upload] (fallback) stored ${cites.length} citations for paper ${paperId}`);
+      } catch (e2) {
+        console.warn(`[upload] (fallback) buildCitationsAndStore failed for ${paperId}:`, e2);
+      }
     } catch (e2) {
       console.error(`[upload] pdfjs fallback also failed for ${paperId}:`, e2);
       try {
