@@ -15,10 +15,18 @@ COPY package.json bun.lock* package-lock.json* pnpm-lock.yaml* ./
 
 # Install ALL dependencies (including dev) — we need them for `next build`.
 # Use npm ci if a package-lock.json exists, else fall back to bun install.
+#
+# ⚠️ --ignore-scripts is MANDATORY here:
+#   package.json has a postinstall hook: `prisma generate && npm run sync-pdfjs-worker`.
+#   In the deps stage we only have package.json + lockfile — no prisma/schema.prisma
+#   and no node_modules/pdfjs-dist yet — so postinstall would crash the build.
+#   We re-run those two commands explicitly in the builder stage after `COPY . .`,
+#   where the full source tree is available.
+#   Do NOT remove postinstall from package.json — local dev relies on it.
 RUN if [ -f package-lock.json ]; then \
-      npm ci; \
+      npm ci --ignore-scripts; \
     else \
-      bun install --frozen-lockfile; \
+      bun install --frozen-lockfile --ignore-scripts; \
     fi
 
 # =============================================================================
@@ -32,9 +40,15 @@ RUN npm install -g bun
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# prisma generate must run before next build — the build imports the
-# generated Prisma Client.
-RUN npx prisma generate
+# prisma generate + pdfjs worker sync must run BEFORE next build:
+#   - prisma generate: the build imports the generated Prisma Client
+#   - sync-pdfjs-worker: copies pdf.worker.min.mjs into public/ so the
+#     client can load it at runtime
+# These two commands are normally triggered by package.json's postinstall
+# hook, but we skipped postinstall in the deps stage with --ignore-scripts
+# (schema and pdfjs-dist weren't available there). Re-run them here, where
+# the full source tree has been COPYied in.
+RUN npx prisma generate && npm run sync-pdfjs-worker
 
 # Build the standalone output. The package.json build script also
 # copies .next/static and public into the standalone dir.
