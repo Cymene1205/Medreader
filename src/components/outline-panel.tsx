@@ -15,6 +15,8 @@ import {
   FileSearch,
   AlertCircle,
   RefreshCw,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -158,6 +160,23 @@ export default function OutlinePanel({
 }: Props) {
   const [retrying, setRetrying] = useState<string | null>(null);
 
+  // ── Per-section fold state ────────────────────────────────────────────
+  // User request: "大标题默认展开, 论证主线默认缩起来"
+  //   - questionBackground / novelty / limitsOpportunities → open by default
+  //   - argumentSpine                                       → closed by default
+  // The state is keyed by SectionKey. We initialize lazily so a freshly
+  // loaded outline starts in the right fold state regardless of when its
+  // content arrives.
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
+    questionBackground: true,
+    argumentSpine: false, // collapsed by default
+    novelty: true,
+    limitsOpportunities: true,
+  });
+  const toggleSection = useCallback((key: SectionKey) => {
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   const fs = (px: number) => `${px}px`;
 
   // Retry a failed part
@@ -189,10 +208,12 @@ export default function OutlinePanel({
   // ── Header (always rendered) ────────────────────────────────────────────
   return (
     <div className={cn("flex flex-col bg-card", collapsed ? "h-auto" : "h-full")}>
-      {/* Header — no longer collapsible (user requested removal of folding)
-          so the entire panel stays open. We still respect the outer
-          `collapsed` prop for backward compat with page.tsx, but the inner
-          section list no longer has fold/unfold buttons. */}
+      {/* Panel header — always visible. The outer `collapsed` prop
+          controls the panel-level collapse (whole panel hidden except
+          header); individual sections inside have their own per-section
+          fold state (see openSections above). Default fold state:
+          questionBackground / novelty / limitsOpportunities expanded,
+          argumentSpine collapsed. */}
       <div
         className={cn(
           "w-full px-3 py-2 flex items-center gap-2 flex-shrink-0",
@@ -241,9 +262,9 @@ export default function OutlinePanel({
               <div className="space-y-1.5">
                 {SECTIONS.map((sec) => {
                   const part = outline[sec.key];
-                  // Sections are NO LONGER collapsible — always open.
-                  // (User explicitly requested removal of fold/unfold.)
-                  const isOpen = true;
+                  // Per-section fold state — defaults set above
+                  // (argumentSpine collapsed, others expanded).
+                  const isOpen = openSections[sec.key];
                   const isFailed = outline.failedParts?.includes(sec.key);
                   const isRetrying = retrying === sec.key;
 
@@ -269,14 +290,36 @@ export default function OutlinePanel({
                         borderColor: sec.border,
                       }}
                     >
-                      {/* Header — NOT a button anymore, just a div */}
-                      <div
+                      {/* Header — clickable to fold/unfold the section.
+                          Main sections (Q&A, Novelty, Limits) start expanded;
+                          ArgumentSpine starts collapsed (per user request:
+                          "大标题默认展开, 论证主线默认缩起来"). */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(sec.key)}
+                        aria-expanded={isOpen}
                         className={cn(
                           "w-full text-left px-2.5 py-2 flex items-start gap-2",
-                          "rounded-t-md"
+                          "rounded-t-md transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]",
+                          "focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40",
+                          !isOpen && "rounded-b-md"
                         )}
                         style={{ background: sec.soft }}
                       >
+                        {/* Chevron fold indicator */}
+                        <span className="flex-shrink-0 w-3 mt-0.5 flex items-center justify-center">
+                          {isOpen ? (
+                            <ChevronDown
+                              className="h-3 w-3"
+                              style={{ color: sec.color }}
+                            />
+                          ) : (
+                            <ChevronRight
+                              className="h-3 w-3"
+                              style={{ color: sec.color }}
+                            />
+                          )}
+                        </span>
                         <span
                           className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5"
                           style={{ background: sec.color }}
@@ -339,9 +382,11 @@ export default function OutlinePanel({
                             </div>
                           )}
                         </div>
-                      </div>
+                      </button>
 
-                      {/* Body — always visible */}
+                      {/* Body — only rendered when the section is open.
+                          When closed, the button gets rounded-b-md so the
+                          section header looks like a tidy collapsed chip. */}
                       {isOpen && (
                         <div className="px-2.5 pb-2.5 pt-0 space-y-2">
                           {/* ArgumentSpine: special rendering — summary + figure chain */}

@@ -1159,3 +1159,67 @@ Notes:
 - 之前两轮"图片分割问题"用户没再提，应该已经从根上解决（v2 的 extract-figures.ts 三阶段合并算法 + pickBestImageBlock）
 - 论证主线展开折叠：用户说"全文框架不需要折叠"——理解为整个全文框架都不要折叠，包括论证主线 section。如果用户后续要求论证主线单独可折叠，可以再加回 argumentSpine 的折叠按钮
 - 用户提到 PDF 渲染问题是"其他人用的时候"——本机开发者网络能访问 cdnjs 看不到问题，但部署给其他用户（医学院同学/导师）时国内网络访问 cdnjs 超时导致 PDF 无法渲染。现在改成同源 /api/pdf-worker 完全消除这个依赖
+
+---
+
+## Task ID: round-4-title-and-fold
+**Agent:** main-agent
+**Task:** 用户在第三轮反馈后追加要求：(1) 全文框架的内容还是要展开的，大标题默认展开但「论证主线」默认缩起来；(2) 文章标题要识别出来——之前用的是文件名（filename）当标题，应当从 PDF 内容里提取真正的论文标题。
+
+### Work Log
+- 调用 VLM skill 分析了两张用户截图：截图 1 显示「全文框架」面板第一个章节「问题与背景」展开状态（其他章节未见折叠按钮，因为之前用户要求取消折叠），截图 2 显示中央 tab 上方以 `vafadarnejad-et-al-2020-dynamics-of-cardiac-neutrophil-diversity-in-murine-myocardial-infarction.pdf` 这样的 PDF 文件名作为标题展示——这显然不是真正的论文标题。
+- 排查代码发现标题来源链路：
+  - `/api/upload/route.ts` line 75 `title: originalName` — 上传时直接把文件名存到 `Paper.title`
+  - `/api/analyze/route.ts` line 214 `const paperTitle = title || paper.title || "未命名论文"` — 这里 `title` 来自客户端 POST body，客户端传的是 `file.name`（文件名）
+  - `outline.title` 字段最终就是这个文件名
+  - 中央 tab 标题 `src/app/app/page.tsx` line 704-707 直接显示 `{fileName}`
+  - 思维导图 hero `src/components/mindmap-view.tsx` line 168 显示 `outline.title || "（未识别论文标题）"`
+- 设计方案：
+  - 在 MinerU 解析完成后，从 `MinerUBlock[]` 里启发式提取真正的论文标题（通常是 page 0 第一个 `text_level === 1` 的 text block）
+  - 写回 `Paper.title`，让 DB 成为权威的标题来源
+  - `/api/analyze` 改成优先用 `paper.title`，客户端 body 里的 `title` 只作为最后的 fallback
+  - 已有 analysisJson 的旧论文：在 `/api/analyze` 里检测 `analysis.title !== paperTitle` 时同步更新
+  - 中央 tab 标题改成显示 `outline?.title || fileName`（解析中或提取失败时回退到文件名）
+- 在 `src/lib/mineru.ts` 新增 `extractPaperTitle(blocks)` 函数（~100 行）：
+  - 三层启发式：
+    1. 优先取 page_idx=0 的前 20 个 block 里第一个 `text_level === 1` 且 15-280 字且不像 section keyword / DOI / email / 日期 / 作者列表 的 text block
+    2. 退化到前 20 个 page_idx=0 的任意 text block，找第一个满足上述过滤条件的
+    3. 都找不到就返回 `null`（调用方保留原文件名作为 fallback）
+  - 过滤规则涵盖：section keywords (abstract/introduction/methods/中英)、URLs/DOIs/email/dates、版权符号、通讯作者、作者贡献、关键词、资助信息、纯作者列表（≥3 逗号）、纯数字、affiliation 上标标记、纯大写期刊名
+- 修改 `src/app/api/upload/route.ts` `parsePdfBackground`：
+  - import `extractPaperTitle`
+  - MinerU 解析成功后立即调用 `extractPaperTitle(result.blocks)`
+  - 如果返回非 null，把 `title: extractedTitle` 加入 `db.paper.update` 的 data；返回 null 时不覆盖（保留原文件名）
+  - 加了日志：`[upload] extracted paper title for ${paperId}: "..."`
+- 修改 `src/app/api/analyze/route.ts`：
+  - line 219: 改 precedence 从 `title || paper.title` 变成 `paper.title || title`，让 DB 的提取标题优先
+  - 在 `JSON.parse(paper.analysisJson)` 成功分支里，如果 `analysis.title !== paperTitle` 就同步更新（让旧论文下次访问时也拿到正确标题）
+- 修改 `src/components/outline-panel.tsx` 恢复折叠功能：
+  - import `ChevronDown`, `ChevronRight` from lucide-react
+  - 新增 `useState<Record<SectionKey, boolean>>` 默认 `{questionBackground: true, argumentSpine: false, novelty: true, limitsOpportunities: true}`
+  - 新增 `toggleSection(key)` callback
+  - 把每个 section 的 header 从 `<div>` 改回 `<button>`，加 `onClick={() => toggleSection(sec.key)}` 和 `aria-expanded={isOpen}`
+  - header 左侧加 chevron 图标：开 `ChevronDown`、关 `ChevronRight`，颜色用 `sec.color`
+  - header 在折叠时加 `rounded-b-md`（否则只有顶部圆角，底部空白看着奇怪）
+  - `{isOpen && (...)}` body 渲染保留，但 body 注释从 "always visible" 改成 "only rendered when open"
+  - 失败重试按钮里的 `e.stopPropagation()` 保留（防止点重试误触发折叠）
+- 修改 `src/app/app/page.tsx` 中央 tab 标题：
+  - 从 `{fileName}` 改成 `{outline?.title || fileName}`
+  - 加 `title={...}` tooltip 让鼠标悬停看完整标题
+  - max-width 从 300px 放宽到 360px
+- 编译验证：`npx tsc --noEmit` 我改的所有文件无错误（仅 examples/、skills/、block-reader.tsx 有无关的预存在错误）；`npx next build` 成功 `✓ Compiled successfully in 20.4s`，全部 22 个静态页面生成完毕
+- 启动 production server 验证：`node .next/standalone/server.js` 启动正常 `✓ Ready in 72ms`，HTTP 探测 `/` 返回 307（重定向到登录页，正常）
+
+### Stage Summary
+- ✅ 文章标题提取：`extractPaperTitle` 启发式从 MinerU blocks 里提取真正的论文标题，写回 DB `Paper.title`，让分析 JSON 和 UI 都用提取的标题而非文件名。旧论文下次访问 `/api/analyze` 时也会自动同步标题。
+- ✅ 折叠状态恢复：每个 section header 现在是可点击 button 带左右箭头图标，默认 questionBackground/novelty/limitsOpportunities 展开、argumentSpine 折叠
+- ✅ 中央 tab 标题：显示真正的论文标题，鼠标悬停看完整标题
+- 编译通过、production server 启动正常
+- 用户需要重启自己的 production server（pkill next-server 后 `npm run start`）来让改动生效
+
+### Files Modified
+- `src/lib/mineru.ts` — 新增 `extractPaperTitle()` 函数
+- `src/app/api/upload/route.ts` — MinerU 解析后调用 `extractPaperTitle` 写回 `Paper.title`
+- `src/app/api/analyze/route.ts` — `paperTitle` precedence 改为 `paper.title || title`；analysisJson 里 title 与 paperTitle 不同步时同步
+- `src/components/outline-panel.tsx` — 恢复 per-section 折叠，加 chevron 图标，默认 argumentSpine 折叠
+- `src/app/app/page.tsx` — 中央 tab 显示 `outline?.title || fileName`，加 tooltip

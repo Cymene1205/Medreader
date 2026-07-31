@@ -701,9 +701,16 @@ export default function Home() {
                       思维导图
                     </TabsTrigger>
                   </TabsList>
-                  {fileName && (
-                    <span className="text-[11px] text-muted-foreground truncate max-w-[300px]">
-                      {fileName}
+                  {/* Display the real paper title (extracted from the PDF
+                      by MinerU) when available. Fall back to the filename
+                      only while the paper is still being parsed or if title
+                      extraction failed. */}
+                  {(outline?.title || fileName) && (
+                    <span
+                      className="text-[11px] text-muted-foreground truncate max-w-[360px]"
+                      title={outline?.title || fileName}
+                    >
+                      {outline?.title || fileName}
                     </span>
                   )}
                 </div>

@@ -232,6 +232,128 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Extract the paper title from MinerU blocks.
+ *
+ * MinerU usually emits the article title as one of the first few text blocks
+ * on page 0, often (but not always) with text_level === 1. This function
+ * scans the first ~15 blocks of page 0 and picks the most title-like text.
+ *
+ * Heuristics (in priority order):
+ *   1. First text_level === 1 block that's > 15 chars and doesn't look like
+ *      a section name (Abstract, Introduction, Methods, Results, etc.)
+ *   2. First text block that:
+ *        - is on page_idx 0
+ *        - is not a page_number / header / footer
+ *        - is between 20 and 280 chars
+ *        - doesn't start with a section keyword
+ *        - doesn't look like a date / DOI / email / author affiliation
+ *   3. Fallback: return null (caller keeps the filename)
+ *
+ * The goal is "usually right" — when uncertain, we return null and let the
+ * caller keep the original filename rather than guess wrong.
+ */
+export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
+  if (!Array.isArray(blocks) || blocks.length === 0) return null;
+
+  // Section keywords that should NOT be treated as titles
+  const sectionKeywords = [
+    "abstract", "introduction", "methods", "materials",
+    "results", "discussion", "conclusion", "references",
+    "background", "study design", "experimental",
+    "摘要", "引言", "方法", "结果", "讨论", "结论", "参考文献",
+  ];
+
+  // Patterns that indicate "not a title"
+  const notTitlePatterns = [
+    /^https?:\/\//i,         // URLs
+    /^doi:\s*/i,             // DOIs
+    /^\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{2,4}/,  // Dates
+    /^\w+\s+\d{1,2},?\s*\d{4}$/,                    // "January 15, 2020"
+    /^[\w.+-]+@[\w.-]+\.\w+$/,                      // Email
+    /^vol\.?\s*\d+/i,        // Volume markers
+    /^issue\s*\d+/i,         // Issue markers
+    /^page\s*\d+/i,          // Page markers
+    /^manuscript\s/i,
+    /^article\s/i,
+    /^research\s+article\s*$/i,
+    /^received\s*:/i,
+    /^accepted\s*:/i,
+    /^published\s*:/i,
+    /^©\s*\d{4}/i,           // Copyright
+    /^corresponding author/i,
+    /^author contributions/i,
+    /^author contribution$/i,
+    /^conflict of interest/i,
+    /^acknowledgement/i,
+    /^keywords?:/i,
+    /^funding:/i,
+    /^ethics/i,
+  ];
+
+  const isLikelyNotTitle = (text: string): boolean => {
+    const lower = text.toLowerCase().trim();
+    if (lower.length === 0) return true;
+    // Section keyword (exact match or "starts with keyword + colon/space")
+    for (const kw of sectionKeywords) {
+      if (lower === kw) return true;
+      if (lower.startsWith(kw + ":") || lower.startsWith(kw + " —") || lower.startsWith(kw + " -")) {
+        return true;
+      }
+    }
+    for (const pat of notTitlePatterns) {
+      if (pat.test(text.trim())) return true;
+    }
+    // Pure author list: "Smith J, Brown K, Lee A et al." — usually short
+    // and full of commas. Skip if it has > 3 commas and < 100 chars.
+    const commaCount = (text.match(/,/g) || []).length;
+    if (commaCount >= 3 && text.length < 100) return true;
+    // Just numbers
+    if (/^\d+$/.test(text.trim())) return true;
+    // Affiliation marker (starts with digit+superscript marker or "*")
+    if (/^\d+\s/.test(text.trim()) && text.length < 80) return true;
+    if (/^\*\s/.test(text.trim())) return true;
+    // All-caps short text (journal name like "NATURE", "CELL")
+    if (text === text.toUpperCase() && text.length < 30 && /^[A-Z\s]+$/.test(text)) return true;
+    return false;
+  };
+
+  // Step 1: prefer a text_level === 1 block on page_idx 0 in the first ~15 blocks
+  const head = blocks.slice(0, 20);
+  const page0Headings = head.filter(
+    (b) =>
+      b.type === "text" &&
+      b.text_level === 1 &&
+      (b.page_idx ?? 0) === 0 &&
+      b.text &&
+      b.text.trim().length >= 15 &&
+      b.text.trim().length <= 280 &&
+      !isLikelyNotTitle(b.text)
+  );
+  if (page0Headings.length > 0) {
+    return page0Headings[0].text!.trim().slice(0, 280);
+  }
+
+  // Step 2: scan first ~15 page-0 text blocks for the first title-like text
+  const page0Texts = head.filter(
+    (b) =>
+      (b.type === "text" || b.type === "title") &&
+      (b.page_idx ?? 0) === 0 &&
+      b.text &&
+      b.text.trim().length >= 20 &&
+      b.text.trim().length <= 280
+  );
+  for (const b of page0Texts) {
+    const t = b.text!.trim();
+    if (!isLikelyNotTitle(t)) {
+      return t.slice(0, 280);
+    }
+  }
+
+  // Step 3: fallback — return null (caller keeps filename)
+  return null;
+}
+
+/**
  * Map MinerU block img_path ("images/xxx.jpg") to a served URL via
  * /api/paper-images?dir=<imagesDir>&name=<basename>.
  */

@@ -211,13 +211,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const paperTitle = title || paper.title || "未命名论文";
+    // Prefer the DB-stored title (which is the real paper title extracted
+    // from MinerU blocks after parsing — see /api/upload). Fall back to the
+    // filename passed by the client only if the DB title is missing.
+    // The client sends `title = file.name` which is just the PDF filename
+    // and is a poor title — but we keep it as a last-resort fallback.
+    const paperTitle = paper.title || title || "未命名论文";
 
     // Parse existing analysisJson (if any) so we can do partial retries
     let analysis: AnalysisJson;
     if (paper.analysisJson) {
       try {
         analysis = JSON.parse(paper.analysisJson) as AnalysisJson;
+        // Sync the title — older analyses may have stored the PDF filename
+        // as the title (before extractPaperTitle was added). Always prefer
+        // the current DB title so the UI shows the real paper title.
+        if (analysis.title !== paperTitle) {
+          analysis.title = paperTitle;
+        }
       } catch {
         analysis = {
           title: paperTitle,
