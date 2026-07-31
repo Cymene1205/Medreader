@@ -24,7 +24,6 @@
  *   If a header is missing, the corresponding env var (or default) is used.
  */
 
-import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
 export type LLMProvider = "deepseek" | "openai" | "zhipu" | "moonshot" | "anthropic" | "custom";
@@ -444,11 +443,25 @@ export async function* streamLLM(
 
 // --- Vision (image-based) ----------------------------------------------------
 //
-// Vision is currently routed through the z-ai-web-dev-sdk because that's the
-// only vision-capable endpoint available in this environment by default.
+// Vision is routed through Zhipu GLM-4V (OpenAI-compatible multimodal API).
+// The vision endpoint is INDEPENDENT of the chat LLM provider — even when
+// the user picks DeepSeek for chat, vision calls still go to Zhipu because
+// DeepSeek doesn't provide a public vision endpoint we can rely on.
+//
+// Configure via env vars (no .z-ai-config file needed):
+//   VISION_BASE_URL — default https://open.bigmodel.cn/api/paas/v4
+//   VISION_API_KEY  — required (Zhipu API key, e.g. ab99....xxxx)
+//   VISION_MODEL    — default glm-4v-flash (free tier; switch to glm-4v / glm-4.5v if needed)
+//
 // If the user supplies a custom OpenAI-compatible endpoint that supports
-// vision (e.g. gpt-4o), we transparently route through the standard
-// OpenAI vision message format instead.
+// vision (e.g. gpt-4o), and the chosen provider is NOT the default DeepSeek,
+// we transparently route through the user's endpoint instead.
+
+const VISION_DEFAULTS = {
+  baseUrl: process.env.VISION_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
+  apiKey: process.env.VISION_API_KEY || "",
+  model: process.env.VISION_MODEL || "glm-4v-flash",
+};
 
 export async function callVisionLLM(
   cfg: LLMConfig,
@@ -486,77 +499,40 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
 
 回答风格要求：专业、准确、不啰嗦；中文为主，专业术语首次出现时附英文原词；如果图中信息不足以支撑某段，请诚实说明"图中未显示"。`;
 
-  // Build message list
-  const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt },
-    ...history.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
-  ];
-
   const imageUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/png;base64,${imageBase64}`;
 
-  // If the configured provider is NOT the default DeepSeek, route through the
-  // standard OpenAI-compatible vision message format. This lets users plug in
-  // gpt-4o, claude-3-5-sonnet (via openai-compat proxy), qwen-vl, etc.
+  // Decide which endpoint to use:
+  //   - If the user has explicitly chosen a non-deepseek provider in their
+  //     LLM config, honor it and route vision through that provider's
+  //     OpenAI-compatible multimodal endpoint (e.g. gpt-4o).
+  //   - Otherwise (default DeepSeek, which has no public vision API), fall
+  //     back to the dedicated vision endpoint configured via VISION_* env
+  //     vars (Zhipu GLM-4V by default).
+  let visionBaseUrl: string;
+  let visionApiKey: string;
+  let visionModel: string;
+  let visionProviderLabel: string; // for token usage attribution
+
   if (cfg.provider !== "deepseek") {
-    // Push a multimodal user message
-    (messages as any).push({
-      role: "user",
-      content: [
-        { type: "text", text: prompt || "请按照四段式结构解读这张科研图表。" },
-        { type: "image_url", image_url: { url: imageUrl } },
-      ],
-    });
-    // Call the standard OpenAI-compatible endpoint with the multimodal payload
-    const body = {
-      model: cfg.model,
-      messages,
-      temperature: 0.4,
-      stream: false,
-    };
-    const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Vision LLM error ${res.status}: ${errText.slice(0, 400)}`);
-    }
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content ?? "";
-
-    if (usage) {
-      const u = extractUsage(data);
-      let promptT = u.promptTokens;
-      let completionT = u.completionTokens;
-      if (promptT === 0 && completionT === 0) {
-        // Rough estimate: image ≈ 1k tokens + all message text / 3.5
-        const approxChars = systemPrompt.length + (prompt?.length || 0) + history.reduce((a, m) => a + (m.content?.length || 0), 0);
-        promptT = Math.ceil(approxChars / 3.5) + 1000;
-        completionT = Math.ceil(content.length / 3.5);
-      }
-      await recordTokenUsage({
-        userId: usage.userId,
-        action: usage.action,
-        provider: cfg.provider,
-        model: cfg.model,
-        promptTokens: promptT,
-        completionTokens: completionT,
-        totalTokens: promptT + completionT,
-        paperId: usage.paperId,
-      });
-    }
-
-    return content;
+    visionBaseUrl = cfg.baseUrl;
+    visionApiKey = cfg.apiKey;
+    visionModel = cfg.model;
+    visionProviderLabel = cfg.provider;
+  } else {
+    visionBaseUrl = VISION_DEFAULTS.baseUrl;
+    visionApiKey = VISION_DEFAULTS.apiKey;
+    visionModel = VISION_DEFAULTS.model;
+    visionProviderLabel = "zhipu-vision";
   }
 
-  // Default DeepSeek provider doesn't support vision; fall back to z-ai SDK.
-  const zai = await ZAI.create();
-  const zaiMessages: any[] = [
+  if (!visionApiKey) {
+    throw new Error(
+      'Vision API key 未配置。请在 .env.production 中设置 VISION_API_KEY（智谱 API key），或在右上角「模型设置」中切换到自带 vision 能力的 provider（如 openai/gpt-4o、zhipu/glm-4v）。'
+    );
+  }
+
+  // Build OpenAI-compatible multimodal message list
+  const messages: any[] = [
     { role: "system", content: systemPrompt },
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {
@@ -567,28 +543,54 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
       ],
     },
   ];
-  const response = await zai.chat.completions.createVision({
-    model: "glm-4.5v",
-    messages: zaiMessages,
-    thinking: { type: "disabled" },
-  } as any);
-  const content = response?.choices?.[0]?.message?.content ?? "";
+
+  const body = {
+    model: visionModel,
+    messages,
+    temperature: 0.4,
+    stream: false,
+  };
+
+  const url = `${visionBaseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${visionApiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Vision LLM error ${res.status} (${visionProviderLabel}/${visionModel}): ${errText.slice(0, 400)}`);
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content ?? "";
 
   if (usage) {
-    // z-ai SDK doesn't expose usage in the response; estimate from content.
-    const approxChars = systemPrompt.length + (prompt?.length || 0) + history.reduce((a, m) => a + (m.content?.length || 0), 0);
-    const promptT = Math.ceil(approxChars / 3.5) + 1000;
-    const completionT = Math.ceil(content.length / 3.5);
+    const u = extractUsage(data);
+    let promptT = u.promptTokens;
+    let completionT = u.completionTokens;
+    if (promptT === 0 && completionT === 0) {
+      // Rough estimate: image ≈ 1k tokens + all message text / 3.5
+      const approxChars =
+        systemPrompt.length +
+        (prompt?.length || 0) +
+        history.reduce((a, m) => a + (m.content?.length || 0), 0);
+      promptT = Math.ceil(approxChars / 3.5) + 1000;
+      completionT = Math.ceil(content.length / 3.5);
+    }
     await recordTokenUsage({
       userId: usage.userId,
       action: usage.action,
-      provider: "zai-vision",
-      model: "glm-4.5v",
+      provider: visionProviderLabel,
+      model: visionModel,
       promptTokens: promptT,
       completionTokens: completionT,
       totalTokens: promptT + completionT,
       paperId: usage.paperId,
-      isVisionFallback: true,
     });
   }
 

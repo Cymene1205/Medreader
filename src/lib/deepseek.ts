@@ -43,9 +43,13 @@ export async function* streamDeepSeek(
 }
 
 /**
- * Vision chat using z-ai-web-dev-sdk (default) OR a user-supplied OpenAI-compatible
- * vision endpoint. Accepts base64 image and a prompt, returns assistant text.
- * If paperContext is provided, uses a structured "teach-how-to-read → explain → connect" workflow.
+ * Vision chat using Zhipu GLM-4V (default, OpenAI-compatible multimodal API)
+ * OR a user-supplied OpenAI-compatible vision endpoint. Accepts base64 image
+ * and a prompt, returns assistant text. If paperContext is provided, uses a
+ * structured "teach-how-to-read → explain → connect" workflow.
+ *
+ * Vision endpoint is configured via VISION_API_KEY / VISION_BASE_URL / VISION_MODEL
+ * env vars (no .z-ai-config file needed). Default model is glm-4v-flash.
  *
  * For per-request override, use callVisionLLM(cfg, ...) directly from an API route
  * that has resolved the LLMConfig from request headers.
