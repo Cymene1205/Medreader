@@ -107,6 +107,18 @@ type Props = {
   /** New: callbacks for figure interactions */
   onPanelChipClick?: (quote: string, pageIndex: number) => void;
   onJumpToPage?: (pageIndex: number) => void;
+  /**
+   * Stage 2 progress signal from the parent. Indicates where the figures /
+   * argumentSpine pipeline currently is so we can show a progress indicator
+   * in the 论证主线 section. Possible values:
+   *   - "idle"        : no paper loaded
+   *   - "extracting"  : MinerU figure extraction done, Call A not yet triggered
+   *   - "call-a"      : Call A LLM (batch analyse all figures) in flight
+   *   - "spine"       : Call A done, argumentSpine generation in flight
+   *   - "done"        : Stage 2 complete — figures + spine both ready
+   *   - "error"       : Call A or spine failed
+   */
+  figuresStatus?: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
 };
 
 // ── Section config: which parts exist + their display metadata ────────────
@@ -137,6 +149,7 @@ export default function OutlinePanel({
   citations = [],
   onPanelChipClick,
   onJumpToPage,
+  figuresStatus = "idle",
 }: Props) {
   const [openItems, setOpenItems] = useState<string[]>(["argumentSpine"]); // 论证主线 default open
   const [retrying, setRetrying] = useState<string | null>(null);
@@ -304,14 +317,11 @@ export default function OutlinePanel({
                             </div>
                           )}
                           {!hasContent && !isFailed && sec.key === "argumentSpine" && (
-                            <div
-                              className="text-muted-foreground/60 mt-0.5 italic"
-                              style={{ fontSize: fs(11) }}
-                            >
-                              {figures.length === 0
-                                ? "等待图表解析完成…"
-                                : "正在生成论证主线…"}
-                            </div>
+                            <ArgumentSpineProgress
+                              figuresStatus={figuresStatus}
+                              figuresCount={figures.length}
+                              hasSpine={!!outline.argumentSpine?.summary}
+                            />
                           )}
                           {isFailed && (
                             <div className="mt-1 flex items-center gap-1.5">
@@ -428,6 +438,116 @@ export default function OutlinePanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── ArgumentSpine progress indicator ──────────────────────────────────────
+// Shows the current Stage 2 sub-step inside the 论证主线 card header so the
+// user can see why it's "still loading" — figure extraction / Call A / spine
+// generation each have their own message and progress dot.
+
+function ArgumentSpineProgress({
+  figuresStatus,
+  figuresCount,
+  hasSpine,
+}: {
+  figuresStatus: "idle" | "extracting" | "call-a" | "spine" | "done" | "error";
+  figuresCount: number;
+  hasSpine: boolean;
+}) {
+  // Steps: 1) 提取图表  2) Call A 批量分析  3) 生成论证主线
+  // Each step is one of: done / active / pending
+  type StepState = "done" | "active" | "pending";
+  const steps: Array<{ key: string; label: string; state: StepState }> = (() => {
+    if (figuresStatus === "error") {
+      return [
+        { key: "extract", label: "提取图表", state: figuresCount > 0 ? "done" : "active" },
+        { key: "calla", label: "Call A 分析", state: "pending" },
+        { key: "spine", label: "生成主线", state: "pending" },
+      ];
+    }
+    if (hasSpine && figuresStatus === "done") {
+      return [
+        { key: "extract", label: "提取图表", state: "done" },
+        { key: "calla", label: "Call A 分析", state: "done" },
+        { key: "spine", label: "生成主线", state: "done" },
+      ];
+    }
+    if (figuresStatus === "spine") {
+      return [
+        { key: "extract", label: "提取图表", state: "done" },
+        { key: "calla", label: "Call A 分析", state: "done" },
+        { key: "spine", label: "生成主线", state: "active" },
+      ];
+    }
+    if (figuresStatus === "call-a") {
+      return [
+        { key: "extract", label: "提取图表", state: "done" },
+        { key: "calla", label: "Call A 分析", state: "active" },
+        { key: "spine", label: "生成主线", state: "pending" },
+      ];
+    }
+    // idle / extracting
+    return [
+      { key: "extract", label: "提取图表", state: figuresStatus === "extracting" ? "active" : "pending" },
+      { key: "calla", label: "Call A 分析", state: "pending" },
+      { key: "spine", label: "生成主线", state: "pending" },
+    ];
+  })();
+
+  const currentLabel = (() => {
+    const active = steps.find((s) => s.state === "active");
+    if (active) return active.label + "中…";
+    if (figuresStatus === "error") return "生成失败";
+    if (steps.every((s) => s.state === "done")) return "完成";
+    return "等待中…";
+  })();
+
+  return (
+    <div className="mt-1.5 space-y-1">
+      {/* Step dots */}
+      <div className="flex items-center gap-1">
+        {steps.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-1 flex-1">
+            <div
+              className={cn(
+                "h-1.5 w-1.5 rounded-full flex-shrink-0",
+                s.state === "done" && "bg-emerald-500",
+                s.state === "active" && "bg-teal-500 animate-pulse",
+                s.state === "pending" && "bg-muted-foreground/30"
+              )}
+            />
+            <span
+              className={cn(
+                "text-[9.5px] truncate",
+                s.state === "done" && "text-emerald-600 dark:text-emerald-400",
+                s.state === "active" && "text-teal-600 dark:text-teal-400 font-medium",
+                s.state === "pending" && "text-muted-foreground/60"
+              )}
+            >
+              {s.label}
+            </span>
+            {i < steps.length - 1 && (
+              <div
+                className={cn(
+                  "flex-1 h-px",
+                  s.state === "done" ? "bg-emerald-500/40" : "bg-border"
+                )}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      {/* Status text */}
+      <div className="text-[10.5px] text-muted-foreground/70 italic">
+        {currentLabel}
+        {figuresCount > 0 && figuresStatus !== "done" && (
+          <span className="ml-1.5 text-muted-foreground/50">
+            · 已提取 {figuresCount} 张主图
+          </span>
+        )}
+      </div>
     </div>
   );
 }

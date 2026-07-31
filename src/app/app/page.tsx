@@ -14,7 +14,6 @@ import TranslationPanel from "@/components/translation-panel";
 import ChatPanel from "@/components/chat-panel";
 import MindmapView from "@/components/mindmap-view";
 import BlockReader, { type MinerUBlock, type BlockReaderHandle } from "@/components/block-reader";
-import HeadingNavigator from "@/components/heading-navigator";
 import LLMSettingsDialog, {
   refreshLLMHeaders,
   hasUserLLMConfig,
@@ -33,7 +32,6 @@ import {
   FileText,
   Network,
   LayoutGrid,
-  ListTree,
   Settings2,
   AlertTriangle,
   X,
@@ -72,13 +70,27 @@ export default function Home() {
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
-  const [activeHeadingText, setActiveHeadingText] = useState<string | undefined>();
-  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap" | "headings">("pdf");
+  const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("pdf");
 
   // New 4-layer pipeline state: figures + citations + spine polling
   const [figures, setFigures] = useState<Figure[]>([]);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [figuresLoading, setFiguresLoading] = useState(false);
+  /**
+   * Stage 2 progress state machine — drives the progress indicator inside
+   * OutlinePanel's 论证主线 card.
+   *
+   * Lifecycle:
+   *   idle      → (paper uploaded, MinerU figure extraction done)
+   *   extracting→ (Call A POST fired, waiting for first figures poll)
+   *   call-a    → (figures exist but at least one has no `question` yet)
+   *   spine     → (all figures have questions, argumentSpine still null)
+   *   done      → (argumentSpine present)
+   *   error     → (Call A POST returned non-2xx, or polling exhausted)
+   */
+  const [figuresStatus, setFiguresStatus] = useState<
+    "idle" | "extracting" | "call-a" | "spine" | "done" | "error"
+  >("idle");
   // Tracks whether the user has manually clicked a center-tab since the
   // current upload. We use this to decide whether to auto-switch from the
   // PDF tab (the default initial view, shown while MinerU is parsing) to
@@ -104,11 +116,8 @@ export default function Home() {
   // collapsed, the 原文段落导航 panel above automatically expands to fill
   // the freed vertical space.
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
-  // Mirror state for 原文段落导航. Both panels start collapsed when a new
-  // analysis result arrives (user request: "在产生结果之后先上下折叠"),
-  // so the user sees the document content first and can expand either panel
-  // by clicking its header.
-  const [headingCollapsed, setHeadingCollapsed] = useState(false);
+  // headingCollapsed was removed along with the HeadingNavigator panel —
+  // paragraph navigation is now inside the 智能解析 toolbar.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blockReaderRef = useRef<BlockReaderHandle>(null);
 
@@ -182,16 +191,21 @@ export default function Home() {
       setSelectedText("");
       setSelectedBlockIdx(null);
       setAttachedImage(null);
-      setActiveHeadingText(undefined);
       setActiveChildId(undefined);
       setPaperMarkdown(null);
       setPaperBlocks(null);
       setPaperImagesDir(null);
-      // Reset both left-panel collapse states at the start of a new upload
-      // so the panels are visible while loading (showing "analyzing…"), then
-      // auto-collapse once results arrive (see the setOutline call below).
+      // Reset Stage 2 state for the new upload
+      setFigures([]);
+      setCitations([]);
+      setFiguresStatus("idle");
+      setFiguresLoading(false);
+      // Left panel: 全文框架 starts expanded during loading (so the user
+      // sees the "analyzing…" / progress indicator), then auto-collapses
+      // once Stage 1 results arrive. Heading panel was removed from the
+      // left column — paragraph navigation is now a button inside the
+      // 智能解析 toolbar.
       setOutlineCollapsed(false);
-      setHeadingCollapsed(false);
       // Default the center view to PDF while the MinerU parse runs (it takes
       // 30-90s). The user sees their PDF immediately instead of a blank
       // "parsing…" placeholder. When the parsed markdown/blocks arrive we
@@ -316,11 +330,10 @@ export default function Home() {
         setOutline(data.outline);
         setUploadStage("done");
         // User request: "在产生结果之后先上下折叠" — after analysis results
-        // are produced, both left panels (原文段落导航 + 全文框架) start
-        // collapsed so the center reader gets maximum screen real estate.
-        // The user can click either header to expand.
+        // are produced, the left 全文框架 panel starts collapsed so the
+        // center reader gets maximum screen real estate. The user can click
+        // the panel header to expand.
         setOutlineCollapsed(true);
-        setHeadingCollapsed(true);
       } catch (e) {
         setOutlineError(e instanceof Error ? e.message : String(e));
         setUploadStage("idle");
@@ -336,6 +349,7 @@ export default function Home() {
       // ─────────────────────────────────────────────────────────────────
       if (serverPaperId) {
         setFiguresLoading(true);
+        setFiguresStatus("extracting");
         // Fire-and-forget the figures POST (Call A). It writes to DB on
         // completion; we poll the GET endpoint for results.
         fetch("/api/figures", {
@@ -347,10 +361,16 @@ export default function Home() {
           body: JSON.stringify({ paperId: serverPaperId }),
         }).catch((e) => {
           console.warn("[figures] Call A trigger failed:", e);
+          setFiguresStatus("error");
         });
 
         // Poll for figures + updated analysisJson + citations.
+        // We also drive the figuresStatus state machine here so the
+        // OutlinePanel 论证主线 progress indicator reflects the current
+        // sub-step (extracting → call-a → spine → done).
+        let pollCount = 0;
         const poll = async () => {
+          pollCount++;
           try {
             const [figRes, analysisRes, paperRes] = await Promise.all([
               fetch(`/api/figures?paperId=${serverPaperId}`).then((r) => r.json()),
@@ -368,14 +388,32 @@ export default function Home() {
             if (Array.isArray(paperRes.citations)) {
               setCitations(paperRes.citations as Citation[]);
             }
-            // Stop polling when all figures have a question (Call A done)
-            const allDone =
-              Array.isArray(figRes.figures) &&
-              figRes.figures.length > 0 &&
-              figRes.figures.every((f: Figure) => f.question);
-            // Also stop when spine is present (Stage 2 complete)
+
+            // ── Drive the figuresStatus state machine ──
+            const figs: Figure[] = Array.isArray(figRes.figures) ? figRes.figures : [];
+            const allHaveQuestion =
+              figs.length > 0 && figs.every((f) => f.question);
             const spineReady = !!analysisRes.outline?.argumentSpine;
-            if (allDone && spineReady) {
+
+            if (spineReady && allHaveQuestion) {
+              setFiguresStatus("done");
+              setFiguresLoading(false);
+              return; // stop polling
+            }
+            if (allHaveQuestion && !spineReady) {
+              setFiguresStatus("spine");
+            } else if (figs.length > 0 && !allHaveQuestion) {
+              setFiguresStatus("call-a");
+            } else if (pollCount > 1) {
+              // After 2+ polls still no figures — likely Call A still
+              // processing or figure extraction slow. Stay in extracting.
+              setFiguresStatus("extracting");
+            }
+
+            // Safety: stop after ~6 minutes of polling (90 iterations × 4s)
+            if (pollCount > 90) {
+              console.warn("[poll] exhausted 90 iterations, giving up");
+              setFiguresStatus("error");
               setFiguresLoading(false);
               return;
             }
@@ -422,7 +460,6 @@ export default function Home() {
   const onChildClick = useCallback(
     (child: OutlineChild, _section: OutlineSection) => {
       setActiveChildId(child.id);
-      setActiveHeadingText(undefined);
       setHighlightToken({
         quote: child.quote || "",
         keywords: child.keywords || [],
@@ -440,38 +477,10 @@ export default function Home() {
     [activeView]
   );
 
-  /**
-   * Heading-navigator click — translated Chinese heading label.
-   *
-   * The displayed label `h.title` is the Chinese translation (so the user
-   * sees 中文 in the 原文段落导航 panel). The block reader matches against
-   * the paper's verbatim markdown text, so we must use `h.origTitle`
-   * (the original English/verbatim heading) when calling scrollToText —
-   * otherwise the fuzzy matcher wouldn't find the heading block in the
-   * (English) paper.
-   */
-  const onHeadingClick = useCallback(
-    (h: { title: string; origTitle: string }) => {
-      // For active-state matching in HeadingNavigator we use the displayed
-      // title (so the row highlights when the user re-clicks the same item).
-      setActiveHeadingText(h.title);
-      setActiveChildId(undefined);
-      // But for block matching, prefer the verbatim origTitle.
-      const matchText = h.origTitle || h.title;
-      setHighlightToken({
-        quote: matchText,
-        keywords: [],
-        nonce: Date.now(),
-      });
-      if (activeView === "mindmap") {
-        setActiveView("blocks");
-      }
-      setTimeout(() => {
-        blockReaderRef.current?.scrollToText(matchText, []);
-      }, 50);
-    },
-    [activeView]
-  );
+  // Heading-navigator click handler was removed — paragraph navigation is
+  // now handled inside BlockReader via the side drawer (no parent wiring
+  // needed). activeHeadingText is kept for potential future use but no
+  // longer drives any UI.
 
   const stageLabel: Record<UploadStage, string> = {
     idle: "",
@@ -604,40 +613,15 @@ export default function Home() {
       {/* 5-panel resizable layout */}
       <div className="flex-1 min-h-0 hidden md:block">
         <PanelGroup direction="horizontal" autoSaveId="medreader-h">
-          {/* Left: Heading Navigator (top) + Outline Panel (bottom) */}
+          {/* Left: Outline Panel only (4-layer 全文框架 + Figure 链) —
+              HeadingNavigator was removed; paragraph navigation is now a
+              button inside the 智能解析 toolbar (opens a side drawer). */}
           <Panel defaultSize={20} minSize={14} collapsible={false}>
             <div className="h-full border-r bg-card flex flex-col">
-              {/* HeadingNavigator at top — verbatim paper section/subsection
-                  titles, used for precise paragraph jumping.
-
-                  Per user request, this panel ALWAYS renders at its natural
-                  height (capped internally at 50vh with scroll) — it no
-                  longer expands to fill the leftover space when 全文框架
-                  below is collapsed. This way, when 原文段落导航 is expanded,
-                  the 全文框架 header sits right beneath the last section
-                  item instead of being pushed to the bottom of the visible
-                  area ("容易找不着了"). */}
-              <div className="flex-shrink-0 min-h-0">
-                <HeadingNavigator
-                  structuredHeadings={outline?.structuredHeadings}
-                  activeHeadingText={activeHeadingText}
-                  onHeadingClick={onHeadingClick}
-                  collapsed={headingCollapsed}
-                  onCollapsedChange={setHeadingCollapsed}
-                />
-              </div>
-              {/* Outline (6-dimension LLM-generated analysis) — placed
-                  directly under the navigator. When expanded, it takes the
-                  remaining vertical space (flex-1). When collapsed, it
-                  shrinks to header-only and the leftover space stays empty
-                  below — exactly what the user asked for: "全文框架紧跟着
-                  最后一个上面的框框就行了,不用放到最底下". */}
               <div
                 className={cn(
-                  "border-t border-border/60",
-                  outlineCollapsed
-                    ? "flex-shrink-0"
-                    : "flex-1 min-h-0 overflow-hidden"
+                  "min-h-0",
+                  outlineCollapsed ? "flex-shrink-0" : "flex-1 overflow-hidden"
                 )}
               >
                 <OutlinePanel
@@ -650,6 +634,7 @@ export default function Home() {
                   paperId={paperId}
                   figures={figures}
                   citations={citations}
+                  figuresStatus={figuresStatus}
                   onPanelChipClick={(quote, _pageIndex) => {
                     // Re-use the existing quote-jump mechanism.
                     setHighlightToken({
@@ -657,7 +642,7 @@ export default function Home() {
                       keywords: [],
                       nonce: Date.now(),
                     });
-                    if (activeView === "mindmap" || activeView === "headings") {
+                    if (activeView === "mindmap") {
                       setActiveView("blocks");
                     }
                     setTimeout(() => {
@@ -706,10 +691,6 @@ export default function Home() {
                     <TabsTrigger value="mindmap" className="text-xs gap-1.5 h-7">
                       <Network className="h-3.5 w-3.5" />
                       思维导图
-                    </TabsTrigger>
-                    <TabsTrigger value="headings" className="text-xs gap-1.5 h-7">
-                      <ListTree className="h-3.5 w-3.5" />
-                      段落导航
                     </TabsTrigger>
                   </TabsList>
                   {fileName && (
@@ -770,20 +751,6 @@ export default function Home() {
                   />
                 </TabsContent>
 
-                <TabsContent
-                  value="headings"
-                  className="flex-1 mt-0 min-h-0 data-[state=inactive]:hidden"
-                >
-                  <div className="h-full overflow-y-auto scrollbar-thin bg-background p-3">
-                    <HeadingNavigator
-                      structuredHeadings={outline?.structuredHeadings}
-                      activeHeadingText={activeHeadingText}
-                      onHeadingClick={onHeadingClick}
-                      collapsed={false}
-                      onCollapsedChange={() => {}}
-                    />
-                  </div>
-                </TabsContent>
               </Tabs>
             </div>
           </Panel>

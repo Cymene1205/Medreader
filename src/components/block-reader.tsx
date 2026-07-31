@@ -23,10 +23,17 @@ import {
   ChevronUp,
   ChevronDown,
   Type,
+  ListTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 export type MinerUBlock = {
   type: string;
@@ -99,7 +106,31 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
   const [searchMatches, setSearchMatches] = useState<number[]>([]);
   const [searchCursor, setSearchCursor] = useState(0);
 
+  // Heading navigator side-drawer state
+  const [headingsOpen, setHeadingsOpen] = useState(false);
+  const [activeHeadingIdx, setActiveHeadingIdx] = useState<number | null>(null);
+
   const hasBlocks = blocks && blocks.length > 0;
+
+  // Extract heading blocks (type === "text" with text_level >= 1) — used by
+  // the side drawer. No LLM involved, just MinerU's structural metadata.
+  // Each entry carries the original block index so clicking it can scroll
+  // the reader to that exact block via blockRefs.
+  const headings = useMemo(() => {
+    if (!blocks) return [];
+    return blocks
+      .map((b, i) => ({ block: b, idx: i }))
+      .filter(({ block }) => {
+        const t = (block.type || "").toLowerCase();
+        return t === "text" && typeof block.text_level === "number" && block.text_level >= 1;
+      })
+      .map(({ block, idx }) => ({
+        idx,
+        level: block.text_level || 1,
+        text: (block.text || "").trim(),
+      }))
+      .filter((h) => h.text.length > 0);
+  }, [blocks]);
 
   // Filter blocks to only render the readable content (skip page_number, footer noise).
   const renderBlocks = useMemo(() => {
@@ -141,6 +172,18 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
     }),
     [blocks]
   );
+
+  // Jump to a heading by block index — used by the side drawer.
+  const jumpToHeading = useCallback((idx: number) => {
+    const el = blockRefs.current[idx];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.add("block-flash");
+      setTimeout(() => el.classList.remove("block-flash"), 2200);
+      setActiveIdx(idx);
+      setActiveHeadingIdx(idx);
+    }
+  }, []);
 
   // React to highlightToken (from outline click) — scroll & flash.
   useEffect(() => {
@@ -275,9 +318,25 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
         </div>
       )}
 
-      {/* Toolbar with search toggle */}
+      {/* Toolbar with search toggle + headings drawer toggle */}
       {!searchOpen && (
-        <div className="px-3 py-1 bg-background/60 border-b flex items-center justify-end">
+        <div className="px-3 py-1 bg-background/60 border-b flex items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 text-[11px] text-muted-foreground"
+            onClick={() => setHeadingsOpen(true)}
+            disabled={!hasBlocks || headings.length === 0}
+            title="段落导航"
+          >
+            <ListTree className="h-3 w-3" />
+            段落导航
+            {headings.length > 0 && (
+              <span className="ml-0.5 text-[9.5px] text-muted-foreground/70">
+                ({headings.length})
+              </span>
+            )}
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -290,6 +349,70 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
           </Button>
         </div>
       )}
+
+      {/* Heading navigator side drawer */}
+      <Sheet open={headingsOpen} onOpenChange={setHeadingsOpen}>
+        <SheetContent side="right" className="w-[360px] sm:w-[400px] p-0 flex flex-col">
+          <SheetHeader className="px-4 py-3 border-b">
+            <SheetTitle className="flex items-center gap-2 text-sm">
+              <ListTree className="h-4 w-4 text-sky-600" />
+              段落导航
+              <span className="ml-1 text-[11px] text-muted-foreground font-normal">
+                · {headings.length} 个标题
+              </span>
+            </SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto scrollbar-thin px-2 py-2">
+            {headings.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground text-xs">
+                暂无标题结构
+                <div className="mt-1 text-[10px] text-muted-foreground/70">
+                  MinerU 解析完成后此处显示论文大小标题
+                </div>
+              </div>
+            ) : (
+              <ul className="space-y-0.5">
+                {headings.map((h, i) => {
+                  const isActive = activeHeadingIdx === h.idx;
+                  // Indent by level (max 4 levels visually)
+                  const indent = Math.min(h.level - 1, 3) * 12;
+                  return (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          jumpToHeading(h.idx);
+                          // Don't auto-close — let user click multiple headings
+                        }}
+                        className={cn(
+                          "w-full text-left px-2 py-1.5 rounded text-[12px] leading-snug transition-colors flex items-start gap-1.5",
+                          isActive
+                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+                            : "hover:bg-muted/60 text-foreground/80"
+                        )}
+                        style={{ paddingLeft: `${8 + indent}px` }}
+                      >
+                        {/* Level marker */}
+                        <span
+                          className={cn(
+                            "flex-shrink-0 mt-0.5 w-1 h-1 rounded-full",
+                            h.level === 1
+                              ? "bg-sky-500"
+                              : h.level === 2
+                              ? "bg-sky-400/60"
+                              : "bg-muted-foreground/40"
+                          )}
+                        />
+                        <span className="flex-1 line-clamp-2">{h.text}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Reading surface */}
       <div ref={containerRef} className="flex-1 overflow-auto scrollbar-thin">
