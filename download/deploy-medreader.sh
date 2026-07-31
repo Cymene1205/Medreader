@@ -46,6 +46,9 @@ fi
 # Zhipu GLM-4V key provided by user
 ZHIPU_KEY="ab99da4d58cc4f67bb858684be8e50fc.AnqgaeynbqrMTDtR"
 
+# DeepSeek chat LLM key provided by user
+DEEPSEEK_KEY="sk-edb16a1b2daa4982a45307247934cd91"
+
 # Helper: ensure a key exists in .env.production with a specific value
 ensure_var() {
   local key="$1" val="$2"
@@ -58,9 +61,10 @@ ensure_var() {
   echo "    $key = ${val:0:12}..."
 }
 
-ensure_var "VISION_BASE_URL" "https://open.bigmodel.cn/api/paas/v4"
-ensure_var "VISION_API_KEY"  "$ZHIPU_KEY"
-ensure_var "VISION_MODEL"    "glm-4v-flash"
+ensure_var "DEEPSEEK_API_KEY" "$DEEPSEEK_KEY"
+ensure_var "VISION_BASE_URL"  "https://open.bigmodel.cn/api/paas/v4"
+ensure_var "VISION_API_KEY"   "$ZHIPU_KEY"
+ensure_var "VISION_MODEL"     "glm-4v-flash"
 
 echo ""
 echo "==> [4/5] docker compose up -d --build..."
