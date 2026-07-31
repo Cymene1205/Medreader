@@ -32,8 +32,18 @@ export type MinerUBlock = {
   table_body?: string; // HTML
   table_caption?: string;
   table_footnote?: string;
-  chart_caption?: string;
-  chart_footnote?: string;
+  // ⚠️ MinerU vlm mode emits BOTH chart_caption AND image_caption as ARRAYS
+  // of strings — NOT flat strings. Typical content:
+  //   chart_caption: ["Figure 2. SiglecF^hi neutrophils populate..."]
+  //   image_caption: ["G", "Single-cell regulatory network inference (SCENIC)",
+  //                   "Figure 1. Single-cell RNA (scRNA)-seq reveals..."]
+  // The last item that starts with "Figure N" is the real caption; earlier
+  // items are panel labels (A, B, C, G, ...). The Figure-extraction code in
+  // src/lib/extract-figures.ts iterates the array and picks the "Figure N" item.
+  chart_caption?: string[];
+  chart_footnote?: string[];
+  image_caption?: string[];
+  image_footnote?: string[];
 };
 
 export type MinerUResult = {

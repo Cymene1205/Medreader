@@ -121,46 +121,117 @@ export function countPanels(caption: string): number {
  *
  * Pure function — no DB. Returns the figures in document order.
  *
- * Strategy: caption-anchored (see file header for rationale).
+ * ⚠️ DUAL-STRATEGY UNION (real-world MinerU emits captions in TWO places):
+ *
+ *   Strategy A — chart_caption / image_caption field on the block itself.
+ *     MinerU vlm mode populates these on the image/chart block that contains
+ *     the figure. This is the dominant path — covers ~80% of main figures.
+ *     - chart_caption: a flat string ("Figure 2. SiglecF^hi neutrophils...")
+ *     - image_caption: an ARRAY of strings, last item is the real caption
+ *       (["G", "Single-cell regulatory network inference (SCENIC)",
+ *        "Figure 1. Single-cell RNA (scRNA)-seq reveals..."])
+ *
+ *   Strategy B — independent text block whose content starts with "Figure N".
+ *     Sometimes MinerU emits the caption as a separate text block immediately
+ *     before/after the image block (covers the remaining ~20%, e.g. Figure 6
+ *     in vafadarnejad 2020). We pair these with the nearest image/chart block
+ *     by scanning backwards/forwards.
+ *
+ * Both strategies are run; results are merged and de-duplicated by label
+ * (preferring the longer caption). caption-only records (no paired image)
+ * are still kept — Call A can analyse them from caption + citing sentences.
  */
 export function extractFiguresFromBlocks(
   blocks: MinerUBlock[],
   imagesDir: string | null
 ): ExtractedFigure[] {
-  const out: ExtractedFigure[] = [];
+  // Intermediate map keyed by label — lets us dedup across strategies A & B.
+  const byLabel = new Map<string, ExtractedFigure & { _imgBlock?: MinerUBlock | null }>();
   let order = 0;
 
+  const upsert = (
+    label: string,
+    caption: string,
+    imgBlock: MinerUBlock | null,
+    pageIndex: number
+  ) => {
+    const existing = byLabel.get(label);
+    if (existing) {
+      // Prefer the longer caption (more info for Call A).
+      if (caption.length > existing.caption.length) {
+        existing.caption = caption;
+      }
+      // Prefer the entry that actually has an image block paired.
+      if (!existing.imagePath && imgBlock?.img_path) {
+        existing._imgBlock = imgBlock;
+      }
+      return;
+    }
+    byLabel.set(label, {
+      label,
+      caption,
+      imagePath: null, // resolved below from _imgBlock
+      pageIndex,
+      order: order++,
+      panelCount: countPanels(caption),
+      _imgBlock: imgBlock,
+    });
+  };
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Strategy A: scan chart/image blocks for chart_caption / image_caption.
+  // Both fields are ARRAYS of strings in MinerU vlm output. The real caption
+  // is the array item that starts with "Figure N"; earlier items are panel
+  // labels (A, B, G, ...).
+  // ────────────────────────────────────────────────────────────────────────
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== "image" && b.type !== "chart") continue;
+
+    // Gather all caption-array candidates from this block.
+    const captionArrays: string[][] = [];
+    if (Array.isArray(b.chart_caption) && b.chart_caption.length > 0) {
+      captionArrays.push(b.chart_caption);
+    }
+    if (Array.isArray(b.image_caption) && b.image_caption.length > 0) {
+      captionArrays.push(b.image_caption);
+    }
+    if (captionArrays.length === 0) continue;
+
+    for (const arr of captionArrays) {
+      for (const capItem of arr) {
+        if (typeof capItem !== "string") continue;
+        const trimmed = capItem.trim();
+        if (trimmed.length < 30) continue; // skip panel labels like "G", "A, B, C"
+        if (/https?:\/\//i.test(trimmed)) continue; // skip TOC entries
+        const label = normaliseFigureLabel(trimmed);
+        if (label) {
+          upsert(label, trimmed, b, (b.page_idx ?? 0) + 1);
+          break; // one caption per array — stop after first match
+        }
+      }
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Strategy B: scan text blocks whose content starts with "Figure N"
+  // ────────────────────────────────────────────────────────────────────────
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     if (b.type !== "text") continue;
     const rawCap = (typeof b.text === "string" ? b.text : "").trim();
-    if (!rawCap) continue;
+    if (!rawCap || rawCap.length < 30) continue;
+    if (/https?:\/\//i.test(rawCap)) continue; // skip TOC entries
 
-    // Must start with "Figure N" / "Fig. N" / etc.
-    const m = rawCap.match(MAIN_FIGURE_RE);
-    if (!m) continue;
-    const num = m[1];
-    if (!num) continue;
-    const label = `Figure ${num}`;
+    const label = normaliseFigureLabel(rawCap);
+    if (!label) continue;
 
-    // Filter out TOC / front-matter pseudo-captions:
-    //   - Too short (real captions are usually 60+ chars)
-    //   - Contains URL (TOC entries like "Figure 1: Neutrophils alone: https://...")
-    if (rawCap.length < 30) continue;
-    if (/https?:\/\//i.test(rawCap)) continue;
+    // If Strategy A already captured this label, prefer A's caption only if
+    // longer; otherwise Strategy B's text-block caption is usually the most
+    // complete (the chart_caption field is sometimes truncated to panel
+    // labels). The upsert() above handles dedup with "prefer longer" rule.
 
-    // Dedup: if we already have this label, prefer the longer caption
-    const existing = out.find((f) => f.label === label);
-    if (existing) {
-      if (rawCap.length > existing.caption.length) {
-        existing.caption = rawCap;
-      }
-      continue;
-    }
-
-    // ── Look BACKWARD (up to 5 blocks) for the nearest image/chart block ──
-    // MinerU usually emits: [image, image, image, ..., text="Figure N. ..."]
-    // so the caption comes AFTER the last panel of the figure.
+    // Look BACKWARD (up to 5 blocks) for the nearest image/chart block
     let imgBlock: MinerUBlock | null = null;
     for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
       const nb = blocks[j];
@@ -168,9 +239,7 @@ export function extractFiguresFromBlocks(
         imgBlock = nb;
         break;
       }
-      // Stop the backward walk if we hit another caption or an H1 heading —
-      // it means our caption has no associated image block, which is fine
-      // (we'll keep the caption-only record below).
+      // Stop backward walk if we hit another caption or an H1 heading.
       if (nb.type === "text") {
         const prevText = (nb.text || "").trim();
         if (/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(prevText)) break;
@@ -178,8 +247,7 @@ export function extractFiguresFromBlocks(
       }
     }
 
-    // ── Fallback: look FORWARD (up to 2 blocks) ──
-    // Some papers put caption above the figure. Rare but worth handling.
+    // Fallback: look FORWARD (up to 2 blocks) — caption above the figure
     if (!imgBlock) {
       for (let j = i + 1; j <= Math.min(blocks.length - 1, i + 2); j++) {
         const nb = blocks[j];
@@ -190,11 +258,17 @@ export function extractFiguresFromBlocks(
       }
     }
 
-    // Resolve image path. MinerU gives us "images/xxxxx.jpg" relative to
-    // the extracted imagesDir.
+    upsert(label, rawCap, imgBlock, (b.page_idx ?? 0) + 1);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Final pass: resolve imagePath from the paired image block
+  // ────────────────────────────────────────────────────────────────────────
+  const out: ExtractedFigure[] = [];
+  for (const f of byLabel.values()) {
     let imagePath: string | null = null;
-    if (imgBlock?.img_path && imagesDir) {
-      const cleanName = imgBlock.img_path
+    if (f._imgBlock?.img_path && imagesDir) {
+      const cleanName = f._imgBlock.img_path
         .replace(/^images\//, "")
         .replace(/^\//, "");
       const basename = cleanName.split("/").pop();
@@ -202,16 +276,27 @@ export function extractFiguresFromBlocks(
         imagePath = `${imagesDir.replace(/\/$/, "")}/${basename}`;
       }
     }
-
     out.push({
-      label,
-      caption: rawCap,
+      label: f.label,
+      caption: f.caption,
       imagePath,
-      pageIndex: (b.page_idx ?? 0) + 1, // 1-indexed
-      order: order++,
-      panelCount: countPanels(rawCap),
+      pageIndex: f.pageIndex,
+      order: f.order,
+      panelCount: f.panelCount,
     });
   }
+
+  // Re-sort by document order (we may have inserted out of order across the
+  // two strategies — final order should match page_idx, then by label number).
+  out.sort((a, b) => {
+    if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex;
+    // Same page: sort by figure number extracted from label
+    const an = parseInt(a.label.replace(/\D/g, ""), 10) || 0;
+    const bn = parseInt(b.label.replace(/\D/g, ""), 10) || 0;
+    return an - bn;
+  });
+  // Reassign order based on sorted position
+  out.forEach((f, i) => (f.order = i));
 
   return out;
 }

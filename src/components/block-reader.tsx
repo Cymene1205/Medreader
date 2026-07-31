@@ -47,8 +47,12 @@ export type MinerUBlock = {
   table_body?: string;
   table_caption?: string;
   table_footnote?: string;
-  chart_caption?: string;
-  chart_footnote?: string;
+  // ⚠️ MinerU emits chart_caption / image_caption as ARRAYS of strings.
+  // See src/lib/mineru.ts for the rationale.
+  chart_caption?: string[];
+  chart_footnote?: string[];
+  image_caption?: string[];
+  image_footnote?: string[];
 };
 
 export type BlockReaderHandle = {
@@ -250,7 +254,13 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
     const q = searchQuery.toLowerCase();
     const idxs: number[] = [];
     for (let i = 0; i < blocks.length; i++) {
-      const t = (blocks[i].text || blocks[i].table_caption || blocks[i].chart_caption || "").toLowerCase();
+      const t = (
+        blocks[i].text ||
+        blocks[i].table_caption ||
+        (Array.isArray(blocks[i].chart_caption) ? blocks[i].chart_caption.join(" ") : "") ||
+        (Array.isArray(blocks[i].image_caption) ? blocks[i].image_caption.join(" ") : "") ||
+        ""
+      ).toLowerCase();
       if (t.includes(q)) idxs.push(i);
     }
     setSearchMatches(idxs);
@@ -632,10 +642,17 @@ function BlockView({
 
   // Images / charts
   if (type === "image" || type === "chart") {
-    const caption =
-      (typeof block.chart_caption === "string" && block.chart_caption) ||
-      text ||
-      "";
+    // chart_caption / image_caption are arrays — pick the longest item that
+    // starts with "Figure N" (the real caption), or fall back to the longest
+    // item, then to the block's text field.
+    const captionArrs = [
+      ...(Array.isArray(block.chart_caption) ? block.chart_caption : []),
+      ...(Array.isArray(block.image_caption) ? block.image_caption : []),
+    ].filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+    const figCaption = captionArrs
+      .filter((s) => /^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(s))
+      .sort((a, b) => b.length - a.length)[0];
+    const caption = figCaption || captionArrs.sort((a, b) => b.length - a.length)[0] || text || "";
     return (
       <div
         ref={blockRef}

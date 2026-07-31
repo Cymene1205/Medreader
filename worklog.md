@@ -847,3 +847,78 @@ Files Created:
 - scripts/generate-doc-body.js (章节内容)
 - download/MedReader-Agent-项目白皮书.docx (最终交付)
 - download/MedReader-Agent-项目白皮书.pdf (PDF 版本)
+
+---
+Task ID: figure-extract-dual-strategy
+Agent: main (Super Z)
+Task: 修复 figure 提取（漏抓 Figure 2/3/5/7）+ 重启 production server + 端到端验证
+
+Work Log:
+- 用户反馈："重启一下,又杀掉了"
+- 第一次重启：直接 nohup node server.js，服务起来了（HTTP 200）但用户能在前端用着
+- 读 src/lib/extract-figures.ts 发现已经是 caption-anchored 版本（上次 session 改过）
+- 读 src/components/block-reader.tsx 发现 H1/H2 分级渲染也已经改过
+- 怀疑：上次改完代码但没 build，所以跑的是旧逻辑
+- 写 scripts/check-db.mjs 查 DB 状态：vafadarnejad 那篇只有 1 个 Figure（应该是 7 张主图）
+- 写 scripts/dump-blocks.mjs 扫 blocks：只有 3 个 text block 以 "Figure N" 开头
+  - 2 个是带 URL 的 TOC 条目（被正确过滤）
+  - 1 个是 Figure 6 真实 caption（被提取）
+  - Figure 1/2/3/4/5/7 的 caption 不在 text block 里！
+- 写 scripts/dump-chart-blocks.mjs 找 caption 真实位置：
+  - Figure 1 → 在 image block idx=71 的 image_caption 数组里（最后一项）
+  - Figure 2/3/5/7 → 在 chart block 的 chart_caption 字段里
+  - Figure 4 → 在 image block idx=165 的 image_caption 数组里
+  - Figure 6 → 在独立 text block 里（之前能提取）
+- 写 scripts/dump-idx126.mjs 看真实类型：
+  - **chart_caption 也是 string[] 数组，不是 string！**
+  - 这就是为什么 typeof b.chart_caption === "string" 永远 false
+- 根因：MinerUBlock 类型定义里 chart_caption?: string 写错了，应该是 string[]
+- 修复 src/lib/mineru.ts：chart_caption / chart_footnote / image_caption / image_footnote 全部改为 string[]
+- 修复 src/lib/extract-figures.ts：Strategy A 把 chart_caption 和 image_caption 当数组遍历（之前只处理 image_caption 数组）
+- 修复 src/components/block-reader.tsx：
+  - 类型定义改 chart_caption / image_caption 为 string[]
+  - 搜索匹配（第 253 行）：把 chart_caption / image_caption 数组 join 成字符串参与搜索
+  - 渲染 caption（第 636 行）：从数组里挑最长 "Figure N" 开头的 item 作为 caption
+- 写 scripts/test-extract2.mjs 验证新逻辑：7 张主图全部提取出来（之前 1 张）
+- 杀 server → npm run build（限制 2G 内存）→ 重启
+- 第一次重启后 server 进程反复消失：
+  - bash 退出时把整个进程组都杀了（即使 nohup + disown）
+  - 用 setsid 创建新 session 才稳定
+- 写 scripts/start-prod.sh 用 setsid + nohup + disown 启动
+- 写 scripts/reextract-and-enrich.mjs：
+  - 找到 vafadarnejad 最新 paper（id=cms8lz4cl0002q8lhzxtqz2jf）
+  - 用新的双策略逻辑重新提取 figures
+  - 删除旧 Figure 行，写入 7 个新 Figure 行（question/role 全 null）
+  - 清理 analysisJson 里旧的 argumentSpine（让前端重新触发 spine）
+- POST /api/figures paperId=cms8lz4cl0002q8lhzxtqz2jf：
+  - HTTP 200, 4.6s 完成
+  - Call A 批量 LLM 分析 7 张 figures → 全部成功
+  - 自动调用 updateArgumentSpine → 写入完整论证链
+- 写 scripts/check-spine.mjs 验证最终状态：
+  - argumentSpine.summary 完整：Fig 1→2→3→4→5→6→7 论证链
+  - linchpinFigure = "Figure 1"（之前是 null）
+  - failedParts = []
+  - questionBackground / novelty / limitsOpportunities 全部有内容
+
+Stage Summary:
+- ✅ 修复根因：MinerUBlock.chart_caption 实际是 string[]，不是 string
+- ✅ extract-figures.ts 双策略 union：Strategy A（block 自带 caption 字段，覆盖 80%）+ Strategy B（独立 text block，覆盖 20%）
+- ✅ block-reader.tsx 兼容数组 caption（搜索 + 渲染）
+- ✅ 用 setsid 解决 bash 退出杀进程组的问题
+- ✅ vafadarnejad 那篇从 1 figure 提升到 7 figures
+- ✅ argumentSpine 完整跑通（linchpinFigure 不再是 null）
+- ✅ failedParts = []
+- 启动脚本：scripts/start-prod.sh（用 setsid 防止进程被杀）
+
+Files Modified:
+- src/lib/mineru.ts（MinerUBlock 类型：caption/footnote 字段全部改为 string[]）
+- src/lib/extract-figures.ts（Strategy A 双数组 union）
+- src/components/block-reader.tsx（类型 + 搜索 + 渲染兼容数组 caption）
+
+Files Created:
+- scripts/start-prod.sh（setsid 启动脚本）
+- scripts/check-db.mjs（DB 状态检查）
+- scripts/dump-blocks.mjs / dump-chart-blocks.mjs / dump-idx126.mjs（debug 工具）
+- scripts/test-extract.mjs / test-extract2.mjs（提取逻辑测试）
+- scripts/reextract-and-enrich.mjs（端到端修复脚本）
+- scripts/check-spine.mjs（spine 验证）
