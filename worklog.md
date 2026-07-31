@@ -1410,3 +1410,32 @@ Stage Summary:
 - 修改文件：src/components/pdf-viewer.tsx（init 逻辑、错误 UI）
 - 关键决策：从"多 fallback 策略"改为"单一最可靠策略"（fake worker）
 - 待用户验证：刷新浏览器后 PDF 应能渲染；如失败，PDF 区域会显示具体错误信息 + Console 中会有 [pdf-viewer] 日志说明卡在哪一步
+
+---
+Task ID: pdf-tohex-polyfill-share-fix
+Agent: main
+Task: 修复微信链接点开 PDF 渲染失败 (a.toHex is not a function) + 分享链接打开后状态问题
+
+Work Log:
+- 用户反馈具体错误：`a.toHex is not a function`，发生在 pdfjs-dist 模块求值时
+- 根因：`polyfills.js` 缺少 `Uint8Array.prototype.toHex` polyfill（ES2025 Stage-3 提案，Chrome 140+ 才有）。微信内置浏览器（X5/老版 Chromium）没有此方法
+- 同时还可能用到的：`Uint8Array.fromHex` / `Uint8Array.prototype.toBase64` / `Uint8Array.fromBase64`
+- 在 polyfills.js 中追加 4 个 polyfill：
+  * Uint8Array.prototype.toHex（关键！修复 a.toHex 错误）
+  * Uint8Array.fromHex
+  * Uint8Array.prototype.toBase64
+  * Uint8Array.fromBase64
+- 用 Node 测试了所有 polyfill，确认输出正确
+- 关于"分享界面是前一个人使用界面"的反馈：
+  * 代码逻辑本来是正确的（URL 带 paperId → sharedLoad 触发 → 加载该论文 → 不会显示别人的浏览器状态）
+  * 但用户可能困惑或在微信中遇到 clipboard API 受限问题
+  * 改进点 1：handleShare 中加了 window.history.replaceState —— 把分享 URL push 到地址栏，用户可以直接长按地址栏复制（应对微信 clipboard API 限制）
+  * 改进点 2：clipboard 复制链路加多层 fallback：navigator.clipboard.writeText → document.execCommand("copy") → window.prompt 让用户长按复制
+  * 改进点 3：sharedLoad 加详细 [shared] console.log —— 用户在微信中打开分享链接后，DevTools Console 能看到具体加载到哪一步
+
+Stage Summary:
+- 修改文件：
+  * public/polyfills.js —— 追加 4 个 Uint8Array 系列 polyfill（修复 a.toHex 错误）
+  * src/app/app/page.tsx —— handleShare 加 replaceState + clipboard fallback 链；sharedLoad 加详细日志
+- dev server 已热加载，polyfills.js 新版本已通过 HTTP 验证
+- 待用户在微信中重新打开 PDF 验证：刷新页面（清除缓存）→ 重新加载 PDF → 应该不再报 a.toHex 错误

@@ -138,33 +138,76 @@ export default function Home() {
 
   // ── Share button state ─────────────────────────────────────────────────
   // When the user clicks "分享", we generate a URL with ?paperId=xxx and
-  // copy it to the clipboard. The checkmark icon shows for 2s to confirm.
+  // copy it to the clipboard. We also push it to the browser address bar
+  // so the user can see exactly what link they're sharing. The checkmark
+  // icon shows for 2s to confirm.
+  //
+  // IMPORTANT: When the recipient opens this URL, they see ONLY this
+  // paper's content (PDF + parsed text + analysis outline + figures).
+  // They do NOT see the sharer's browsing history, chat messages, or
+  // any other state — every visit to a shared URL starts a fresh React
+  // session that loads only this paper from the server via /api/paper/[id].
   const [shareCopied, setShareCopied] = useState(false);
   const handleShare = useCallback(async () => {
     if (!paperId) return;
     try {
       const url = `${window.location.origin}/app?paperId=${paperId}`;
+      console.log(`[share] generated URL: ${url}`);
+
+      // Push the share URL into the address bar WITHOUT reloading the
+      // page. This way:
+      //   1. The user can see / copy the URL directly from the address bar
+      //      (useful in WeChat in-app browser where clipboard API may be
+      //      restricted).
+      //   2. If the user reloads, the page reloads as a "shared paper"
+      //      view (same as what the recipient will see).
+      try {
+        window.history.replaceState(null, "", url);
+      } catch {
+        /* ignore — some embed browsers block this */
+      }
+
       // Try the modern clipboard API first; fall back to a hidden textarea
-      // for older browsers / non-secure contexts.
+      // for older browsers / non-secure contexts (notably WeChat X5).
+      let copied = false;
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(url);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = url;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
+        try {
+          await navigator.clipboard.writeText(url);
+          copied = true;
+        } catch {
+          // Clipboard API may be blocked by embed browser — fall through
+          // to execCommand fallback.
+        }
+      }
+      if (!copied) {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = url;
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          ta.style.top = "0";
+          ta.setAttribute("readonly", "");
+          document.body.appendChild(ta);
+          ta.select();
+          ta.setSelectionRange(0, url.length);
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          copied = true;
+        } catch {
+          /* fall through to prompt */
+        }
+      }
+      if (!copied) {
+        // Last-resort: open a prompt with the URL so the user can
+        // long-press → copy manually (common in WeChat).
+        window.prompt("长按复制分享链接：", url);
       }
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 2000);
     } catch (e) {
       console.warn("[share] copy failed:", e);
-      // Fallback: open a prompt with the URL so the user can copy manually
       const url = `${window.location.origin}/app?paperId=${paperId}`;
-      window.prompt("复制分享链接：", url);
+      window.prompt("长按复制分享链接：", url);
     }
   }, [paperId]);
 
@@ -237,28 +280,42 @@ export default function Home() {
 
     const params = new URLSearchParams(window.location.search);
     const sharedId = params.get("paperId") || params.get("p");
-    if (!sharedId) return;
+    console.log(`[shared] mount, URL paperId param = ${sharedId ? `"${sharedId}"` : "(none)"}`);
+    if (!sharedId) {
+      // No paperId in URL → this is a fresh visit, show the empty state
+      // (NOT a previous user's state). The empty state is "点击导入 PDF".
+      console.log("[shared] no paperId → showing empty homepage (fresh visit)");
+      return;
+    }
 
     // Mark as "loading a shared paper" so the UI shows progress
     setUploadStage("parsing");
     setMineruStatus("正在加载分享的论文…");
     setOutlineCollapsed(false);
+    console.log(`[shared] loading paper ${sharedId} from server`);
 
     (async () => {
+      const t0 = performance.now();
       try {
         // 1. Fetch paper metadata + parsed content
+        console.log(`[shared] GET /api/paper/${sharedId}`);
         const paperRes = await fetch(`/api/paper/${sharedId}`);
         if (!paperRes.ok) {
           throw new Error(`Paper fetch failed: HTTP ${paperRes.status}`);
         }
         const paperData = await paperRes.json();
+        console.log(`[shared] paper metadata loaded: title="${paperData.title}", hasMarkdown=${!!paperData.markdown}, hasBlocks=${!!paperData.blocks}`);
 
         // 2. Fetch PDF binary (for PdfViewer)
         let pdfBuf: ArrayBuffer | null = null;
         try {
+          console.log(`[shared] GET /api/paper/${sharedId}/pdf`);
           const pdfRes = await fetch(`/api/paper/${sharedId}/pdf`);
           if (pdfRes.ok) {
             pdfBuf = await pdfRes.arrayBuffer();
+            console.log(`[shared] PDF binary loaded: ${pdfBuf.byteLength} bytes`);
+          } else {
+            console.warn(`[shared] PDF binary fetch returned HTTP ${pdfRes.status}`);
           }
         } catch (e) {
           console.warn("[shared] PDF binary fetch failed:", e);
@@ -322,6 +379,7 @@ export default function Home() {
 
         setUploadStage("done");
         setMineruStatus("");
+        console.log(`[shared] done in ${Math.round(performance.now() - t0)}ms — paper "${paperData.title}" is now visible to the recipient`);
       } catch (e) {
         console.error("[shared] load failed:", e);
         setOutlineError(
