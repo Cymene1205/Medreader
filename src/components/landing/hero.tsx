@@ -19,7 +19,7 @@ export function Hero() {
       <div className="absolute top-16 left-0 right-0 border-y border-[var(--rule)] bg-[var(--paper-soft)]/60">
         <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-2 flex items-center justify-between font-sans-ui text-[10px] tracking-[0.22em] uppercase text-[var(--ink-muted)]">
           <span>ISSN 2026-MDR · An AI Reading Agent for Medical Literature</span>
-          <span className="hidden md:inline">Huazhong UST · Tongji Medical College</span>
+          <span className="hidden md:inline">Built with Aliyun · Open Source</span>
           <span>№ 001 · First Edition</span>
         </div>
       </div>
@@ -195,7 +195,7 @@ export function Hero() {
             ↓ Scroll to read the prospectus · 向下滚动阅读项目说明书
           </p>
           <p className="font-sans-ui text-[10px] tracking-[0.2em] uppercase">
-            Curated by Chen Yumo · Tongji Med
+            Curated by Biorhythm · 行止集
           </p>
         </div>
       </div>

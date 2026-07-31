@@ -6,25 +6,25 @@ import { Server, Globe, ShieldCheck, ArrowRight } from "lucide-react";
  * Deployment Section — v2.0 新增章节
  *
  * 展示两块内容：
- *   1. 阿里云 ECS 实例规格（2 vCPU / 2 GiB / 40 GiB ESSD / CentOS 7）
+ *   1. 阿里云 ECS 云主机部署概述（不暴露具体规格）
  *   2. URL 策略三阶段（IP+端口 → 域名+Caddy+HTTPS → 子域名分别绑定）
  *
  * 配色与 burgundy 期刊风一致：scholarly-card + burgundy 强调色。
  */
-const ECS_SPECS = [
-  { label: "实例规格", en: "Instance", value: "ecs.t6-c1m1.large", note: "2 vCPU · 2 GiB" },
-  { label: "系统盘", en: "System Disk", value: "ESSD PL1 40 GiB", note: "通用云盘" },
-  { label: "操作系统", en: "OS", value: "CentOS 7.9", note: "Aliyun Linux 兼容" },
-  { label: "公网带宽", en: "Bandwidth", value: "按使用流量 5 Mbps", note: "峰值可调" },
-  { label: "地域", en: "Region", value: "新加坡 (ap-southeast-1)", note: "海外节点 · 免备案" },
-  { label: "安全组", en: "Security Group", value: "0.0.0.0/0:3000", note: "仅放行 3000 端口" },
+const ECS_HIGHLIGHTS = [
+  { label: "云服务商", en: "Provider", value: "阿里云 ECS", note: "Aliyun Elastic Compute Service" },
+  { label: "部署形态", en: "Topology", value: "单机容器化", note: "Docker Compose 一键拉起" },
+  { label: "反向代理", en: "Reverse Proxy", value: "Caddy 2.x", note: "自动 HTTPS · Let's Encrypt" },
+  { label: "进程编排", en: "Orchestration", value: "tini + Next.js standalone", note: "PID 1 信号转发" },
+  { label: "数据持久化", en: "Persistence", value: "Volume 挂载", note: "SQLite + 上传文件" },
+  { label: "健康检查", en: "Health Check", value: "GET / · 30s 间隔", note: "3 次失败自动重启" },
 ];
 
 const URL_STAGES = [
   {
     stage: "v2.0",
     period: "当前 · 已交付",
-    pattern: "http://47.253.133.131:3000",
+    pattern: "http://<your-ecs-ip>:3000",
     desc: "IP + 端口直连 Docker 容器，无域名无 HTTPS。适合内部测试与冒烟验收。",
     status: "active",
   },
@@ -61,7 +61,7 @@ export function DeploymentSection() {
           </div>
           <div className="col-span-12 lg:col-span-9">
             <h2 className="journal-heading text-3xl md:text-4xl lg:text-5xl mb-3">
-              一台 2 核 2G 的云主机，跑得起一个 AI 文献阅读 Agent
+              一台云主机，跑得起一个 AI 文献阅读 Agent
             </h2>
             <p className="font-serif-cn text-[var(--ink-soft)] text-lg leading-relaxed max-w-3xl">
               全栈容器化部署到阿里云 ECS。Docker Compose 一键拉起，Prisma
@@ -71,18 +71,18 @@ export function DeploymentSection() {
           </div>
         </div>
 
-        {/* ECS 实例规格表 */}
+        {/* 阿里云 ECS 部署概览 */}
         <div className="scholarly-card p-8 lg:p-10 mb-10">
           <div className="flex items-center gap-3 mb-8">
             <Server className="w-5 h-5 text-[var(--burgundy)]" />
-            <h3 className="journal-heading text-xl">阿里云 ECS 实例规格</h3>
+            <h3 className="journal-heading text-xl">阿里云 ECS 部署概览</h3>
             <span className="font-serif-en italic text-xs text-[var(--ink-muted)] ml-auto">
-              ap-southeast-1 · singapore
+              Powered by Aliyun · Open Source
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-6">
-            {ECS_SPECS.map((s) => (
+            {ECS_HIGHLIGHTS.map((s) => (
               <div
                 key={s.label}
                 className="pb-4 border-b border-dotted border-[var(--rule)]"

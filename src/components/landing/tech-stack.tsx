@@ -157,7 +157,7 @@ export function TechStack() {
               “From a flat PDF to a conversational knowledge artifact — in one pass.”
             </p>
             <p className="font-sans-ui text-[10px] tracking-[0.18em] uppercase text-[var(--ink-muted)]">
-              Deployable via Docker Compose · 2 vCPU / 2 GiB sufficient
+              Deployable via Docker Compose · runs on a single Aliyun ECS instance
             </p>
           </div>
         </div>

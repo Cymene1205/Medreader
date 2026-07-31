@@ -89,12 +89,12 @@ export function SiteFooter() {
             </div>
             <ul className="reference-list space-y-1">
               <li>
-                <span className="cite-num">[1]</span> 陈禹墨. MedReader Agent:
+                <span className="cite-num">[1]</span> 行止集 Biorhythm. MedReader Agent:
                 面向医学研究者的 AI 文献阅读 Agent [EB/OL]. 2026.
               </li>
               <li>
-                <span className="cite-num">[2]</span> Huazhong University of
-                Science and Technology, Tongji Medical College.
+                <span className="cite-num">[2]</span> 阿里云开发者计划 ·
+                Aliyun Developer Program.
               </li>
               <li>
                 <span className="cite-num">[3]</span> 公众号「行止集」 ·
@@ -111,7 +111,7 @@ export function SiteFooter() {
         {/* 版权条 */}
         <div className="mt-12 pt-6 border-t border-[var(--rule)] flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
           <p className="font-sans-ui text-[11px] tracking-[0.1em] text-[var(--ink-muted)]">
-            © 2026 MedReader Agent · MIT License · 由陈禹墨设计与开发
+            © 2026 MedReader Agent · MIT License · 由行止集 Biorhythm 设计与开发
           </p>
           <p className="font-serif-en italic text-xs text-[var(--ink-muted)]">
             Set in EB Garamond × Noto Serif SC · Printed digitally.

@@ -28,15 +28,15 @@ export function Author() {
             <div className="scholarly-card p-8 lg:p-10">
               {/* 头像占位 */}
               <div className="flex items-center gap-5 mb-6 pb-6 border-b border-[var(--rule)]">
-                <div className="w-20 h-20 rounded-sm bg-[var(--burgundy)] text-[var(--paper)] flex items-center justify-center font-serif-en text-3xl font-semibold shrink-0">
-                  陈
+                <div className="w-20 h-20 rounded-sm bg-[var(--burgundy)] text-[var(--paper)] flex items-center justify-center font-serif-cn text-3xl font-semibold shrink-0">
+                  止
                 </div>
                 <div>
                   <div className="font-serif-cn text-2xl font-semibold text-[var(--ink)]">
-                    陈禹墨
+                    行止集
                   </div>
                   <div className="font-serif-en italic text-sm text-[var(--burgundy)] mt-1">
-                    Chen Yumo
+                    Biorhythm
                   </div>
                   <div className="font-sans-ui text-[10px] tracking-[0.15em] uppercase text-[var(--ink-muted)] mt-1.5">
                     Builder · Reader · Author
@@ -49,10 +49,10 @@ export function Author() {
                   <GraduationCap className="w-4 h-4 text-[var(--burgundy)] mt-0.5 shrink-0" />
                   <div>
                     <div className="font-serif-cn text-sm font-semibold text-[var(--ink)]">
-                      华中科技大学 · 同济医学院
+                      医学研究背景
                     </div>
                     <div className="font-serif-en italic text-xs text-[var(--ink-muted)]">
-                      Huazhong University of Science and Technology · Tongji Medical College
+                      Medical research background · 工医交叉
                     </div>
                   </div>
                 </li>
@@ -86,7 +86,7 @@ export function Author() {
                   能让这份劳动稍微不那么孤独。&rdquo;
                 </p>
                 <p className="font-serif-en italic text-xs text-[var(--ink-muted)] mt-3 text-right">
-                  — Chen Yumo, 2026
+                  — Biorhythm, 2026
                 </p>
               </div>
             </div>
@@ -104,7 +104,7 @@ export function Author() {
                   </span>
                 </div>
                 <p className="font-serif-cn text-[16px] leading-[1.95] text-[var(--ink-soft)]">
-                  本项目的开发与维护，得到<span className="font-semibold text-[var(--ink)]">华中科技大学同济医学院基础医学院</span>的资助与支持。感谢学院为青年研究者提供的开放技术探索空间，让"工医交叉"的小型实验成为可能。亦感谢所有在公众号「行止集」留言、提建议、报 bug 的读者——是你们让这个项目从一份个人脚本，逐步生长为一个可被同行使用的工具。
+                  本项目的开发与维护得到<span className="font-semibold text-[var(--ink)]">阿里云开发者计划</span>的算力支持。感谢阿里云为开源教育工具提供的云资源赞助，让一个个人项目能够稳定地服务医学研究者群体。亦感谢所有在公众号「行止集」留言、提建议、报 bug 的读者——是你们让这个项目从一份个人脚本，逐步生长为一个可被同行使用的工具。
                 </p>
               </div>
 

@@ -37,9 +37,10 @@ export const metadata: Metadata = {
     "DeepSeek",
     "Next.js",
     "学术工具",
-    "陈禹墨",
+    "行止集",
+    "Biorhythm",
   ],
-  authors: [{ name: "陈禹墨" }],
+  authors: [{ name: "行止集 Biorhythm" }],
   openGraph: {
     title: "MedReader Agent — 让 AI 帮你真正读懂一篇医学文献",
     description:

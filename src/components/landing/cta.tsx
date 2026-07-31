@@ -100,7 +100,7 @@ export function CTA() {
                       自托管部署
                     </div>
                     <div className="font-serif-en italic text-xs opacity-70">
-                      Docker Compose · 阿里云 ECS · 2 vCPU / 2 GiB
+                      Docker Compose · 阿里云 ECS · 一键部署
                     </div>
                   </div>
                 </div>
