@@ -6,7 +6,8 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Bun is used by the project's `start` script. Install it on top of Node.
+# Bun is used by the project's `start` script in dev. Keep it for parity
+# with the local dev workflow.
 RUN npm install -g bun
 
 # Copy lockfile + package.json first to maximise Docker layer caching.
@@ -35,7 +36,7 @@ COPY . .
 # generated Prisma Client.
 RUN npx prisma generate
 
-# Build the standalone output. The package.json build script already
+# Build the standalone output. The package.json build script also
 # copies .next/static and public into the standalone dir.
 RUN npm run build
 
@@ -45,24 +46,43 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Install only what the runtime needs:
-#  - bun (the start script invokes `bun .next/standalone/server.js`)
-#  - tini (PID 1 init, properly forwards signals & reaps zombies)
-#  - ca-certificates (TLS for MinerU / DeepSeek / OAuth calls)
-RUN apk add --no-cache tini ca-certificates \
- && npm install -g bun
+# Runtime needs:
+#   - tini            PID 1 init, properly forwards signals & reaps zombies
+#   - ca-certificates TLS for MinerU / DeepSeek / OAuth calls
+# We no longer install bun in the runner — the standalone server.js is
+# plain Node.js, and `npx prisma db push` runs through node too.
+# (Bun was previously installed for `bun .next/standalone/server.js`, but
+# that path was wrong AND bun compatibility with Next.js standalone has
+# edge cases — see fix #4 in the production fix pack.)
+RUN apk add --no-cache tini ca-certificates
 
 ENV NODE_ENV=production
 # Port the standalone server listens on. docker-compose maps 3000:3000.
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Copy the standalone build (already contains server.js + static + public).
+# Copy the standalone build — `server.js` lands at /app/server.js.
+# `COPY --from=builder /app/.next/standalone ./` copies the CONTENTS of
+# `.next/standalone/` into the current WORKDIR (/app), so we end up with:
+#   /app/server.js
+#   /app/package.json
+#   /app/node_modules/...   (only the deps Next.js traced as needed)
+#   /app/.next/...          (server chunks, etc.)
 COPY --from=builder /app/.next/standalone ./
+
+# Next.js standalone does NOT include `.next/static` or `public/` by
+# default — copy them explicitly (fix #4 standard recipe).
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
 # Prisma needs its schema + generated client at runtime for `db push`.
+# Also copy the `prisma` CLI itself so `npx prisma` doesn't have to
+# download it on every container start (which would require network
+# access and slow down cold starts).
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
 # Data directories — mounted as volumes in docker-compose, but we create
 # them here so the image is also runnable standalone without mounting.
@@ -74,9 +94,13 @@ EXPOSE 3000
 # to the Next.js server (otherwise it waits 10s for SIGKILL).
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# Run migrations on container start, then start the server.
-# `prisma db push` is idempotent — if the schema is already in sync it
-# does nothing; if there are new models it applies them. The
-# `--accept-data-loss` flag is needed because SQLite has no real
-# migration history and Prisma refuses to push otherwise.
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && exec bun .next/standalone/server.js"]
+# Run migrations on container start, then start the standalone server.
+#   - `prisma db push` is idempotent: if schema is in sync it does
+#     nothing; if there are new models it applies them.
+#   - We deliberately do NOT pass `--accept-data-loss` (fix #4):
+#     if Prisma ever decides a schema change would destroy data, we want
+#     the container to fail loudly so a human can intervene, rather than
+#     silently wipe the production database.
+#   - `exec node server.js` replaces the sh process so signals reach
+#     Next.js directly.
+CMD ["sh", "-c", "npx prisma db push && exec node server.js"]

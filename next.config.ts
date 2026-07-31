@@ -2,7 +2,6 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -14,6 +13,13 @@ const nextConfig: NextConfig = {
     "https://*.space-z.ai",
     "http://*.space-z.ai",
   ],
+  // 医学 PDF 普遍 5-30 MB，Next.js 默认 1 MB body 限制会让上传必挂。
+  // 上限 50 MB 与 src/app/api/upload/route.ts 的 MAX_UPLOAD_BYTES 一致。
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "50mb",
+    },
+  },
 };
 
 export default nextConfig;

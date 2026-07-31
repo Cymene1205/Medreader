@@ -62,4 +62,10 @@ server.log
 .env.production
 .zscripts/
 agent-ctx/
-upload/
+# Local prompt files + screenshots uploaded by the user during dev
+# (the IM gateway saves them to /home/z/my-project/upload/). Top-level
+# only — must NOT match `src/app/api/upload/` (the PDF upload route).
+/upload/
+# NOTE: do NOT add `upload/` (no leading slash) here — it would also
+# match `src/app/api/upload/` and silently break the PDF upload route.
+# The user-uploads directory is already covered by `/uploads/` above.

@@ -410,6 +410,17 @@ export default function Home() {
         alert("目前仅支持 PDF 格式");
         return;
       }
+      // 50 MB hard cap — matches server-side MAX_UPLOAD_BYTES in
+      // src/app/api/upload/route.ts and `bodySizeLimit` in next.config.ts.
+      // Rejecting on the client avoids a wasted round-trip for files the
+      // server will refuse anyway.
+      const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+      if (file.size > MAX_UPLOAD_BYTES) {
+        alert(
+          `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），单文件上限 50 MB。请拆分或压缩后上传。`
+        );
+        return;
+      }
       const buf = await file.arrayBuffer();
       const bufForText = buf.slice(0);
       setFileData(buf);
@@ -453,6 +464,16 @@ export default function Home() {
         const fd = new FormData();
         fd.append("file", file);
         const upRes = await fetch("/api/upload", { method: "POST", body: fd });
+        if (upRes.status === 401) {
+          const j = await upRes.json().catch(() => ({}));
+          // Session expired mid-session — bounce to login.
+          window.location.href = `/login?callbackUrl=${encodeURIComponent("/app")}`;
+          throw new Error(j.error || "请先登录");
+        }
+        if (upRes.status === 413) {
+          const j = await upRes.json().catch(() => ({}));
+          throw new Error(j.error || "文件过大（上限 50 MB），请拆分或压缩后上传");
+        }
         if (upRes.status === 429) {
           const j = await upRes.json().catch(() => ({}));
           throw new Error(j.error || "今日解析额度已用尽");
