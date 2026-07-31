@@ -76,7 +76,14 @@ export async function POST(req: NextRequest) {
     }
     if (paper.figures.length === 0) {
       // No figures extracted (likely pdfjs fallback mode or a review paper).
-      // Return empty array — the frontend will show the "no figures" state.
+      // Still trigger text-only argumentSpine generation so the UI has something
+      // to show in the "论证主线" section instead of "无图表数据".
+      try {
+        const { updateArgumentSpine } = await import("@/lib/analyze-stage2");
+        await updateArgumentSpine(paperId, cfg, userId);
+      } catch (e) {
+        console.warn("[figures] text-only argumentSpine update failed (non-fatal):", e);
+      }
       return NextResponse.json({ figures: [], cached: true });
     }
 

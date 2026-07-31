@@ -117,71 +117,125 @@ export async function updateArgumentSpine(
   const linchpinFig = sortedFigs.find((f) => f.isLinchpin) || null;
   const figsWithQ = sortedFigs.filter((f) => f.question);
 
-  // If no figures have questions, we can't build a spine — leave it null.
-  if (figsWithQ.length === 0) {
-    return;
-  }
-
   let summary = "";
   let llmSucceeded = false;
 
-  // Try LLM first
-  try {
-    const systemPrompt =
-      "你是科研论文论证主线总结助手。请根据论文每张主图回答的科学问题，生成一段 80-150 字的论证主线。" +
-      "格式参考：'本文先通过 Fig 1 发现…，进而 Fig 2 证实…，命门在 Fig 3…'。" +
-      "命门图（isLinchpin=true）必须在文中明确点出，并在该句末尾用【】标记图号。\n" +
-      "只输出主线一段话，不要任何额外文字、不要换行。";
+  // === Strategy A: figures with questions available — figure-anchored spine ===
+  if (figsWithQ.length > 0) {
+    // Try LLM first
+    try {
+      const systemPrompt =
+        "你是科研论文论证主线总结助手。请根据论文每张主图回答的科学问题，生成一段 80-150 字的论证主线。" +
+        "格式参考：'本文先通过 Fig 1 发现…，进而 Fig 2 证实…，命门在 Fig 3…'。" +
+        "命门图（isLinchpin=true）必须在文中明确点出，并在该句末尾用【】标记图号。\n" +
+        "只输出主线一段话，不要任何额外文字、不要换行。";
 
-    const figContext = figsWithQ
-      .map(
-        (f) =>
-          `${f.label}（${f.role || "未分类"}${f.isLinchpin ? "，命门" : ""}）：${f.question}`
-      )
-      .join("\n");
+      const figContext = figsWithQ
+        .map(
+          (f) =>
+            `${f.label}（${f.role || "未分类"}${f.isLinchpin ? "，命门" : ""}）：${f.question}`
+        )
+        .join("\n");
 
-    const raw = await callLLM(
-      cfg,
-      [
-        { role: "system", content: systemPrompt },
+      const raw = await callLLM(
+        cfg,
+        [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `论文标题：${paper.title}\n\n各图问句：\n${figContext}`,
+          },
+        ],
         {
-          role: "user",
-          content: `论文标题：${paper.title}\n\n各图问句：\n${figContext}`,
-        },
-      ],
-      {
-        temperature: 0.3,
-        maxTokens: 500,
-        usage: {
-          userId,
-          action: "argument_spine",
-          paperId,
-        },
-      }
-    );
-    summary = raw.trim().slice(0, 300);
-    if (summary.length >= 20) llmSucceeded = true;
-  } catch (e) {
-    console.warn("[analyze-stage2] spine LLM failed, falling back to template:", e);
-  }
+          temperature: 0.3,
+          maxTokens: 500,
+          usage: {
+            userId,
+            action: "argument_spine",
+            paperId,
+          },
+        }
+      );
+      summary = raw.trim().slice(0, 300);
+      if (summary.length >= 20) llmSucceeded = true;
+    } catch (e) {
+      console.warn("[analyze-stage2] spine LLM failed, falling back to template:", e);
+    }
 
-  // Template fallback
-  if (!llmSucceeded) {
-    const parts: string[] = [];
-    figsWithQ.forEach((f, i) => {
-      const short = (f.question || "").slice(0, 40);
-      const connector =
-        i === 0
-          ? `本文先通过 ${f.label} 发现`
-          : i === figsWithQ.length - 1 && figsWithQ.length > 1
-          ? `，最终 ${f.label} 证实`
-          : `，进而 ${f.label} 证实`;
-      parts.push(`${connector}${short}`);
-      if (f.isLinchpin) {
-        parts.push(`（命门在 ${f.label}）`);
-      }
+    // Template fallback (figure-anchored)
+    if (!llmSucceeded) {
+      const parts: string[] = [];
+      figsWithQ.forEach((f, i) => {
+        const short = (f.question || "").slice(0, 40);
+        const connector =
+          i === 0
+            ? `本文先通过 ${f.label} 发现`
+            : i === figsWithQ.length - 1 && figsWithQ.length > 1
+            ? `，最终 ${f.label} 证实`
+            : `，进而 ${f.label} 证实`;
+        parts.push(`${connector}${short}`);
+        if (f.isLinchpin) {
+          parts.push(`（命门在 ${f.label}）`);
+        }
+      });
+      summary = parts.join("") + "。";
+    }
+  } else {
+    // === Strategy B: NO figures (or no questions) — text-only spine ===
+    // 之前会直接 return 不生成 spine，UI 显示"无图表数据"。
+    // 现在改用论文文字（markdown 或 parsedText）生成纯文字版论证主线。
+    console.log("[analyze-stage2] no figures with questions, falling back to text-only spine");
+
+    // Load paper text content
+    const paperWithText = await db.paper.findUnique({
+      where: { id: paperId },
+      select: { markdown: true, parsedText: true, title: true },
     });
-    summary = parts.join("") + "。";
+    const fullText = (paperWithText?.markdown || paperWithText?.parsedText || "").slice(0, 8000);
+
+    if (fullText.length < 50) {
+      // Truly nothing to summarize — give up
+      console.warn("[analyze-stage2] no text content available, cannot build spine");
+      return;
+    }
+
+    try {
+      const systemPrompt =
+        "你是科研论文论证主线总结助手。请根据论文原文，生成一段 100-200 字的论证主线总结。" +
+        "要求：\n" +
+        "1. 用流畅的中文叙述论文的核心论证逻辑（提出什么问题 → 用什么方法 → 发现什么 → 结论是什么）\n" +
+        "2. 不要罗列图表，聚焦在论证脉络上\n" +
+        "3. 只输出主线一段话，不要任何额外文字、不要换行、不要标题";
+
+      const raw = await callLLM(
+        cfg,
+        [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `论文标题：${paper.title}\n\n论文原文（截断）：\n${fullText}`,
+          },
+        ],
+        {
+          temperature: 0.3,
+          maxTokens: 600,
+          usage: {
+            userId,
+            action: "argument_spine_text",
+            paperId,
+          },
+        }
+      );
+      summary = raw.trim().slice(0, 400);
+      if (summary.length >= 20) llmSucceeded = true;
+    } catch (e) {
+      console.warn("[analyze-stage2] text-only spine LLM failed:", e);
+    }
+
+    // Final fallback: first 150 chars of paper text
+    if (!llmSucceeded) {
+      summary = `（文字摘要模式）${fullText.slice(0, 150).replace(/\s+/g, " ").trim()}…`;
+    }
   }
 
   // Write back

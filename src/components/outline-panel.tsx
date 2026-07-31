@@ -494,8 +494,8 @@ export default function OutlinePanel({
                               ) : (
                                 <div className="text-center py-3 text-[10px] text-muted-foreground/60">
                                   {loading
-                                    ? "图表分析中…"
-                                    : "（无图表数据 — 当前解析模式不支持）"}
+                                    ? "论证主线生成中…"
+                                    : "（本文无主图，已基于原文生成文字版论证主线 — 详见上方摘要）"}
                                 </div>
                               )}
                             </>
