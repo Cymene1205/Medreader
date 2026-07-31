@@ -1280,3 +1280,43 @@ Notes:
 ### Files NOT touched (per user request — "又杀进程了")
 - 没有重启用户运行中的 production server
 - 没有改 `src/app/app/page.tsx`（保持上一轮的 outline.title 显示逻辑）
+
+---
+Task ID: resume-2
+Agent: main
+Task: 启动 dev server + 修「智能解析字符串残留/展示完整」+ 排查「其他人 PDF 导入显示问题」
+
+Work Log:
+- 检查无运行中的 next 进程，启动新 dev server（detached，HTTP 307 → ready in 833ms）
+- 在 src/lib/utils.ts 新增 stripMarkdownInline() 辅助函数：剥掉 **、###、[1]、HTML 标签、代码围栏、显式 \n 转义 等所有常见 LLM 漏到字符串字段的 markdown 残留，保留 markdown 链接 [text](url)
+- src/components/mindmap-view.tsx（海报式展示）根因定位 + 修复：
+  * parseDetailBullets 旧版只识别 ###、-、*、1. 开头的行，正文章节段落被直接丢弃 —— 用户只看到标题+列表，看不到论文核心论述，这才是「字符串残留/希望展示完整」的真凶
+  * 改为先按双换行切段，再按单换行拆行，每行单独判类型（标题/列表/正文），正文段落也作为条目输出，全部过 stripMarkdownInline
+  * summary（3 处：questionBackground/argumentSpine/limitsOpportunities）从纯文本渲染改为 stripMarkdownInline
+  * pairs.limitation/opportunity 同样套 stripMarkdownInline
+  * fig.question / fig.caption 也套上
+  * fig.caption 的 line-clamp-2 改为完整展示（截到 200 字才加 …）
+- src/components/outline-panel.tsx（全文框架侧栏）修复：
+  * 去掉 summary 的 line-clamp-2 折叠截断（用户要「展示完整」）
+  * summary / argumentSpine.summary / pairs 全部套 stripMarkdownInline
+  * 加 whitespace-pre-wrap + break-words，确保任何换行/长字符串都能正确折行
+- src/components/figure-chain.tsx 修复：
+  * fig.question、detail.closure、layer.title、layer.conclusion、layer.purpose、pd.text、pd.relation、detail.bridge 全部套 stripMarkdownInline
+  * fig.caption 的 line-clamp-2 改为完整展示
+  * caption dialog 里的 question 也套上
+- src/app/api/upload/route.ts 加 bodySizeLimit = "50mb"（Next.js 16 默认 4MB，大 PDF 可能被静默拒）
+- src/app/app/page.tsx polling loop 加固：
+  * try/catch 包 fetch，网络错误不中断轮询但记录原因
+  * !sRes.ok 时记录 HTTP 状态码不中断
+  * 4 分钟超时不再静默——抛出明确错误「MinerU 解析超时（4 分钟未返回结果）。最后状态：xxx」
+  * polling 成功但 serverMarkdown=null && serverBlocks=null（MinerU 失败 pdfjs 兜底）→ setMineruStatus 警告用户当前是简化模式
+- src/components/block-reader.tsx 在 fallback 视图（无 blocks 但有 fallbackText）非 loading 态也显示 statusMessage（amber 警告框），让用户知道为什么看到的是纯文本
+- npx next build 验证：✓ Compiled successfully in 19.4s
+- 启动 dev server（HTTP 307 → ready）
+
+Stage Summary:
+- 智能解析字符串残留：根因是 mindmap-view 的 parseDetailBullets 把正文段落全丢了，加上 summary/pairs 纯文本渲染漏出 markdown。全部通过 stripMarkdownInline + 改进 parseDetailBullets 解决
+- 展示完整：去掉 line-clamp-2，summary 全文展示
+- PDF 导入显示问题：根因可能是 (1) 大 PDF 被 4MB 默认 bodySizeLimit 拒；(2) polling 静默超时；(3) MinerU 失败 pdfjs 兜底但用户不知道。三者都已加固
+- 关键文件：lib/utils.ts (新增 stripMarkdownInline)、mindmap-view.tsx、outline-panel.tsx、figure-chain.tsx、api/upload/route.ts、app/app/page.tsx、block-reader.tsx
+- 编译通过，dev server 已重启

@@ -603,6 +603,11 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
                   ⚡ 快速预览（基于 PDF 文本层），MinerU 结构化解析仍在进行中…
                 </div>
               )}
+              {!loading && statusMessage && (
+                <div className="mb-3 px-3 py-2 rounded border border-amber-300/60 bg-amber-50 text-[11.5px] text-amber-800 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-700/50 leading-relaxed">
+                  {statusMessage}
+                </div>
+              )}
               {fallbackText}
             </div>
           )}

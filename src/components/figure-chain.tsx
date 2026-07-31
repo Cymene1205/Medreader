@@ -13,7 +13,7 @@ import { Loader2, ChevronRight, Image as ImageIcon, AlertCircle } from "lucide-r
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/utils";
+import { cn, stripMarkdownInline } from "@/lib/utils";
 
 /**
  * Figure chain — the visual narrative of figures strung along a vertical
@@ -310,12 +310,12 @@ export default function FigureChain({
                     {fig.question ? (
                       <div className="flex items-start gap-1 text-[12px] leading-snug text-foreground/90">
                         <span className="text-primary font-bold flex-shrink-0">Q</span>
-                        <span className="flex-1">{fig.question}</span>
+                        <span className="flex-1 whitespace-pre-wrap break-words">{stripMarkdownInline(fig.question)}</span>
                       </div>
                     ) : (
-                      <div className="text-[11px] text-muted-foreground/80 italic line-clamp-2">
-                        {fig.caption.slice(0, 80)}
-                        {fig.caption.length > 80 ? "…" : ""}
+                      <div className="text-[11px] text-muted-foreground/80 italic">
+                        {stripMarkdownInline(fig.caption).slice(0, 200)}
+                        {fig.caption.length > 200 ? "…" : ""}
                       </div>
                     )}
                     {/* Meta row */}
@@ -369,8 +369,8 @@ export default function FigureChain({
                         {/* Closure bar */}
                         <div className="rounded bg-primary text-primary-foreground px-2 py-1.5 relative">
                           <div className="text-[9px] opacity-70 mb-0.5">逻辑闭环</div>
-                          <div className="text-[11px] font-medium leading-snug">
-                            {detail.closure}
+                          <div className="text-[11px] font-medium leading-snug whitespace-pre-wrap break-words">
+                            {stripMarkdownInline(detail.closure)}
                           </div>
                         </div>
 
@@ -403,7 +403,7 @@ export default function FigureChain({
                                   {idx + 1}
                                 </span>
                                 <span className="text-[11px] font-medium flex-1 truncate">
-                                  {layer.title}
+                                  {stripMarkdownInline(layer.title)}
                                 </span>
                                 <span
                                   className="px-1 py-px rounded text-[8px] font-mono"
@@ -425,18 +425,18 @@ export default function FigureChain({
                               {/* Layer conclusion (always visible) */}
                               {!isLayerExpanded && (
                                 <div
-                                  className="px-2 pb-1.5 pl-7 text-[10px] leading-snug"
+                                  className="px-2 pb-1.5 pl-7 text-[10px] leading-snug whitespace-pre-wrap break-words"
                                   style={{ color: layerColor }}
                                 >
-                                  {layer.conclusion}
+                                  {stripMarkdownInline(layer.conclusion)}
                                 </div>
                               )}
 
                               {/* Expanded layer detail */}
                               {isLayerExpanded && (
                                 <div className="px-2 pb-2 pl-7 space-y-1.5">
-                                  <div className="border-l-2 pl-2 text-[10.5px] text-muted-foreground leading-relaxed">
-                                    {layer.purpose}
+                                  <div className="border-l-2 pl-2 text-[10.5px] text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+                                    {stripMarkdownInline(layer.purpose)}
                                   </div>
                                   {layer.panelDetails.map((pd, i) => {
                                     const quote = findPanelQuote(fig.label, pd.panel);
@@ -460,12 +460,12 @@ export default function FigureChain({
                                           {pd.panel}
                                         </span>
                                         <div className="flex-1 min-w-0">
-                                          <div className="text-[10.5px] leading-snug text-foreground/80">
-                                            {pd.text}
+                                          <div className="text-[10.5px] leading-snug text-foreground/80 whitespace-pre-wrap break-words">
+                                            {stripMarkdownInline(pd.text)}
                                           </div>
                                           {pd.relation && (
                                             <span className="inline-block mt-0.5 px-1 py-px rounded text-[8px] bg-muted text-muted-foreground">
-                                              {pd.relation}
+                                              {stripMarkdownInline(pd.relation)}
                                             </span>
                                           )}
                                         </div>
@@ -473,10 +473,10 @@ export default function FigureChain({
                                     );
                                   })}
                                   <div
-                                    className="text-[10.5px] font-medium pt-0.5"
+                                    className="text-[10.5px] font-medium pt-0.5 whitespace-pre-wrap break-words"
                                     style={{ color: layerColor }}
                                   >
-                                    {layer.conclusion}
+                                    {stripMarkdownInline(layer.conclusion)}
                                   </div>
                                 </div>
                               )}
@@ -489,8 +489,8 @@ export default function FigureChain({
                           <div className="text-[9px] uppercase tracking-wide text-muted-foreground mb-0.5">
                             承上启下
                           </div>
-                          <div className="text-[10.5px] leading-snug text-foreground/80">
-                            {detail.bridge}
+                          <div className="text-[10.5px] leading-snug text-foreground/80 whitespace-pre-wrap break-words">
+                            {stripMarkdownInline(detail.bridge)}
                           </div>
                         </div>
 
@@ -569,9 +569,9 @@ export default function FigureChain({
                   </ReactMarkdown>
                 </div>
                 {captionDialogFigure.question && (
-                  <div className="mx-4 mb-3 px-3 py-2 rounded bg-primary/5 border-l-2 border-primary/40 text-[11.5px]">
+                  <div className="mx-4 mb-3 px-3 py-2 rounded bg-primary/5 border-l-2 border-primary/40 text-[11.5px] whitespace-pre-wrap break-words">
                     <span className="text-primary font-bold mr-1">Q</span>
-                    {captionDialogFigure.question}
+                    {stripMarkdownInline(captionDialogFigure.question)}
                   </div>
                 )}
               </div>

@@ -21,7 +21,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/utils";
+import { cn, stripMarkdownInline } from "@/lib/utils";
 import FigureChain, {
   type Figure,
   type FigureDetail,
@@ -336,18 +336,14 @@ export default function OutlinePanel({
                           {hasContent && (part as any)?.summary && (
                             <div
                               className={cn(
-                                "text-muted-foreground mt-0.5",
-                                // When collapsed: show 2-line preview.
-                                // When expanded: show full summary (the body
-                                // below also has the detail, but having the
-                                // full summary visible in the header is
-                                // useful when the user has scrolled down
-                                // past the section heading).
-                                isOpen ? "line-clamp-none" : "line-clamp-2"
+                                "text-muted-foreground mt-0.5 whitespace-pre-wrap break-words",
+                                // 旧版折叠态会 line-clamp-2 截断 summary，
+                                // 用户反馈「希望展示完整」——现在无论开合都完整展示。
+                                "line-clamp-none"
                               )}
                               style={{ fontSize: fs(11) }}
                             >
-                              {(part as any).summary}
+                              {stripMarkdownInline((part as any).summary)}
                             </div>
                           )}
                           {!hasContent && !isFailed && sec.key !== "argumentSpine" && (
@@ -402,8 +398,8 @@ export default function OutlinePanel({
                           {sec.key === "argumentSpine" && (
                             <>
                               {outline.argumentSpine?.summary && (
-                                <div className="rounded bg-muted/40 px-2.5 py-2 text-[11.5px] leading-relaxed text-foreground/85">
-                                  {outline.argumentSpine.summary}
+                                <div className="rounded bg-muted/40 px-2.5 py-2 text-[11.5px] leading-relaxed text-foreground/85 whitespace-pre-wrap break-words">
+                                  {stripMarkdownInline(outline.argumentSpine.summary)}
                                 </div>
                               )}
                               {figures.length > 0 ? (
@@ -454,8 +450,8 @@ export default function OutlinePanel({
                                       >
                                         L{i + 1}
                                       </span>
-                                      <span className="flex-1 text-foreground/85">
-                                        {p.limitation}
+                                      <span className="flex-1 text-foreground/85 whitespace-pre-wrap break-words">
+                                        {stripMarkdownInline(p.limitation)}
                                       </span>
                                     </div>
                                     <div className="text-[11px] flex items-start gap-1.5 mt-0.5 pl-4">
@@ -465,8 +461,8 @@ export default function OutlinePanel({
                                       >
                                         →
                                       </span>
-                                      <span className="flex-1 text-muted-foreground">
-                                        {p.opportunity}
+                                      <span className="flex-1 text-muted-foreground whitespace-pre-wrap break-words">
+                                        {stripMarkdownInline(p.opportunity)}
                                       </span>
                                     </div>
                                   </div>

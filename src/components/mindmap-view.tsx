@@ -17,6 +17,7 @@ import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import type { Outline, OutlineChild, OutlineSection } from "@/components/outline-panel";
 import type { Figure } from "@/components/figure-chain";
+import { stripMarkdownInline } from "@/lib/utils";
 
 type MindmapViewProps = {
   outline: Outline | null;
@@ -71,41 +72,60 @@ const SECTION_THEME = {
 
 type SectionKey = keyof typeof SECTION_THEME;
 
-// ── Bullet parsing (kept from old mindmap logic) ───────────────────────────
-//   Recognizes `-`, `*`, numbered `1.`, and `### subtitle` lines.
+// ── Bullet parsing ─────────────────────────────────────────────────────────
+//   detail 是 LLM 返回的 markdown 字符串。我们把它拆成「条目列表」用于海报展示：
+//   - ### / ## 开头 → 副标题条目（isSubtitle=true）
+//   - - / * / 1. 开头 → 列表条目（isSubtitle=false）
+//   - 普通正文段落 → 也作为条目展示（isSubtitle=false）
+//     ↑ 旧版直接丢弃正文，导致用户只看到标题+列表，看不到论文核心论述。
+//     用户反馈「还有一些字符串/希望展示完整」就是这个问题。
+//   所有条目文本都过 stripMarkdownInline，剥掉 **、###、[1] 等残留标记。
 
 type ParsedBullet = { text: string; isSubtitle: boolean; order: number };
 
 function parseDetailBullets(detail: string | undefined): ParsedBullet[] {
   if (!detail) return [];
-  const lines = detail.split(/\n/).map((l) => l.trim());
+  // 先按双换行切段（markdown 段落），再按单换行拆行
+  const paragraphs = detail.split(/\n{2,}/);
   const out: ParsedBullet[] = [];
   let order = 0;
-  for (const l of lines) {
-    if (!l) continue;
-    const subMatch = l.match(/^#{2,3}\s+(.+)$/);
-    if (subMatch) {
-      const t = subMatch[1].replace(/\*\*/g, "").trim();
-      if (t.length > 2) {
-        out.push({ text: t, isSubtitle: true, order: order++ });
+  for (const para of paragraphs) {
+    const lines = para.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+    // 段内每行单独判断类型（标题行 vs 列表行 vs 正文行）
+    for (const l of lines) {
+      // 标题：### / ## 开头
+      const subMatch = l.match(/^#{2,3}\s+(.+)$/);
+      if (subMatch) {
+        const t = stripMarkdownInline(subMatch[1]);
+        if (t.length > 2) {
+          out.push({ text: t, isSubtitle: true, order: order++ });
+        }
+        continue;
       }
-      continue;
-    }
-    const bulMatch = l.match(/^[-*]\s+(.+)$/);
-    if (bulMatch) {
-      const t = bulMatch[1].replace(/\*\*/g, "").trim();
+      // 列表：- / * 开头
+      const bulMatch = l.match(/^[-*]\s+(.+)$/);
+      if (bulMatch) {
+        const t = stripMarkdownInline(bulMatch[1]);
+        if (t.length > 2) {
+          out.push({ text: t, isSubtitle: false, order: order++ });
+        }
+        continue;
+      }
+      // 编号列表：1. 开头
+      const numMatch = l.match(/^\d+\.\s+(.+)$/);
+      if (numMatch) {
+        const t = stripMarkdownInline(numMatch[1]);
+        if (t.length > 2) {
+          out.push({ text: t, isSubtitle: false, order: order++ });
+        }
+        continue;
+      }
+      // 正文段落：直接作为一条条目（旧版会丢弃，导致内容缺失）
+      const t = stripMarkdownInline(l);
       if (t.length > 5) {
         out.push({ text: t, isSubtitle: false, order: order++ });
       }
-      continue;
-    }
-    const numMatch = l.match(/^\d+\.\s+(.+)$/);
-    if (numMatch) {
-      const t = numMatch[1].replace(/\*\*/g, "").trim();
-      if (t.length > 5) {
-        out.push({ text: t, isSubtitle: false, order: order++ });
-      }
-      continue;
     }
   }
   return out;
@@ -319,13 +339,13 @@ function PosterSection({
         {/* Summary callout */}
         {summary && (
           <div
-            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px] whitespace-pre-wrap"
             style={{
               background: theme.accentSoft,
               borderColor: theme.accent,
             }}
           >
-            {summary}
+            {stripMarkdownInline(summary)}
           </div>
         )}
 
@@ -437,13 +457,13 @@ function ArgumentSpineSection({
         {/* Summary callout */}
         {summary && (
           <div
-            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px] whitespace-pre-wrap"
             style={{
               background: theme.accentSoft,
               borderColor: theme.accent,
             }}
           >
-            {summary}
+            {stripMarkdownInline(summary)}
           </div>
         )}
 
@@ -522,12 +542,12 @@ function ArgumentSpineSection({
                           >
                             Q
                           </span>
-                          <span className="flex-1">{fig.question}</span>
+                          <span className="flex-1 whitespace-pre-wrap">{stripMarkdownInline(fig.question)}</span>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-muted-foreground/70 italic line-clamp-2">
-                          {fig.caption.slice(0, 100)}
-                          {fig.caption.length > 100 ? "…" : ""}
+                        <div className="text-[11px] text-muted-foreground/70 italic">
+                          {stripMarkdownInline(fig.caption).slice(0, 200)}
+                          {fig.caption.length > 200 ? "…" : ""}
                         </div>
                       )}
                       {/* Footer hint */}
@@ -607,13 +627,13 @@ function LimitsOpportunitiesSection({
         {/* Summary callout */}
         {summary && (
           <div
-            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px]"
+            className="text-[13px] leading-[1.7] text-foreground/85 rounded-lg px-3.5 py-2.5 border-l-[3px] whitespace-pre-wrap"
             style={{
               background: theme.accentSoft,
               borderColor: theme.accent,
             }}
           >
-            {summary}
+            {stripMarkdownInline(summary)}
           </div>
         )}
 
@@ -629,16 +649,16 @@ function LimitsOpportunitiesSection({
                   <span className="flex-shrink-0 w-5 h-5 rounded text-[10px] font-bold text-white flex items-center justify-center mt-0.5" style={{ background: "#C8556C" }}>
                     L{i + 1}
                   </span>
-                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-foreground/85">
-                    {p.limitation}
+                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-foreground/85 whitespace-pre-wrap">
+                    {stripMarkdownInline(p.limitation)}
                   </div>
                 </div>
                 <div className="flex items-start gap-2 px-3 py-2">
                   <span className="flex-shrink-0 w-5 h-5 rounded text-[10px] text-white flex items-center justify-center mt-0.5" style={{ background: theme.accent }}>
                     <ArrowRight className="h-2.5 w-2.5" />
                   </span>
-                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-muted-foreground">
-                    {p.opportunity}
+                  <div className="flex-1 min-w-0 text-[12px] leading-snug text-muted-foreground whitespace-pre-wrap">
+                    {stripMarkdownInline(p.opportunity)}
                   </div>
                 </div>
               </div>

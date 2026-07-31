@@ -244,25 +244,54 @@ export default function Home() {
         setMineruStatus("MinerU 解析中（30-90 秒）…");
 
         // Poll for parse status
+        let pollTimeoutReached = true;
+        let pollLastError: string | null = null;
         for (let i = 0; i < 120; i++) {
           await new Promise((r) => setTimeout(r, 2000));
-          const sRes = await fetch(`/api/paper/${upData.paperId}`);
-          if (sRes.ok) {
-            const sData = await sRes.json();
-            if (sData.parseStatus === "done") {
-              serverParsedText = sData.parsedText;
-              serverMarkdown = sData.markdown;
-              serverBlocks = sData.blocks;
-              serverImagesDir = sData.imagesDir;
-              break;
-            }
-            if (sData.parseStatus === "error") {
-              throw new Error("MinerU 解析失败，已尝试 pdfjs 兜底");
-            }
+          let sRes: Response;
+          try {
+            sRes = await fetch(`/api/paper/${upData.paperId}`);
+          } catch (netErr) {
+            // 网络抖包或服务重启——记下来，但不中断轮询
+            pollLastError = `网络错误：${netErr instanceof Error ? netErr.message : String(netErr)}`;
             if (i % 5 === 0) {
-              setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
+              setMineruStatus(`解析中…（已等 ${(i + 1) * 2}s· 重连中）`);
             }
+            continue;
           }
+          if (!sRes.ok) {
+            // 5xx / 4xx——同样记下来不中断，后台解析可能仍在走
+            pollLastError = `HTTP ${sRes.status}`;
+            if (i % 5 === 0) {
+              setMineruStatus(`解析中…（已等 ${(i + 1) * 2}s· 状态查询 ${sRes.status}）`);
+            }
+            continue;
+          }
+          const sData = await sRes.json();
+          if (sData.parseStatus === "done") {
+            serverParsedText = sData.parsedText;
+            serverMarkdown = sData.markdown;
+            serverBlocks = sData.blocks;
+            serverImagesDir = sData.imagesDir;
+            pollTimeoutReached = false;
+            break;
+          }
+          if (sData.parseStatus === "error") {
+            pollTimeoutReached = false;
+            throw new Error("MinerU 解析失败且 pdfjs 兜底也失败，请重试或换一份 PDF");
+          }
+          pollLastError = null;
+          if (i % 5 === 0) {
+            setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
+          }
+        }
+        if (pollTimeoutReached) {
+          // 4 分钟没拿到 done/error——后台可能仍在跑或已哑死
+          throw new Error(
+            `MinerU 解析超时（4 分钟未返回结果）。${
+              pollLastError ? `最后状态：${pollLastError}。` : ""
+            }请重试，或刷新后从历史记录中查看。`
+          );
         }
       } catch (e) {
         setOutlineError(e instanceof Error ? e.message : String(e));
@@ -275,6 +304,17 @@ export default function Home() {
       let full = "";
       if (serverParsedText) {
         full = serverParsedText;
+        // 检测「MinerU 失败但 pdfjs 兜底成功」的情形：
+        // polling 返回 done + parsedText，但 markdown / blocks 仍是 null。
+        // 这种情况下用户看到的是纯文本视图，没有任何图表/分块/标题结构，
+        // 必须明确告诉用户发生了什么，否则会被当成「PDF 显示有问题」。
+        if (!serverMarkdown && !serverBlocks) {
+          setMineruStatus(
+            "⚠️ MinerU 结构化解析失败，已切换到 pdfjs 简化模式（仅纯文本，无图表/分块视图）。可重试上传以获得完整结构。"
+          );
+        } else {
+          setMineruStatus("");
+        }
       } else {
         try {
           const lib = await import("pdfjs-dist");
