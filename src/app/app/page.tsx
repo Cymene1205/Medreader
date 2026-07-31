@@ -69,6 +69,9 @@ export default function Home() {
 
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [highlightToken, setHighlightToken] = useState<HighlightToken | null>(null);
+  // Direct page jump signal for PdfViewer — fires when user clicks
+  // "跳到原图 p.N" on a figure card. Nonce makes the same page re-jumpable.
+  const [jumpToPage, setJumpToPage] = useState<{ pageIndex: number; nonce: number } | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | undefined>();
   const [activeView, setActiveView] = useState<"blocks" | "pdf" | "mindmap">("pdf");
 
@@ -635,14 +638,21 @@ export default function Home() {
                   figures={figures}
                   citations={citations}
                   figuresStatus={figuresStatus}
-                  onPanelChipClick={(quote, _pageIndex) => {
-                    // Re-use the existing quote-jump mechanism.
+                  onPanelChipClick={(quote, pageIndex) => {
+                    // Jump to the citing sentence in BOTH views:
+                    //  - 智能解析 (blocks): use highlightToken (quote-based match)
+                    //  - 原文 PDF: use jumpToPage (direct page scroll)
                     setHighlightToken({
                       quote,
                       keywords: [],
                       nonce: Date.now(),
                     });
-                    if (activeView === "mindmap") {
+                    if (pageIndex && pageIndex > 0) {
+                      setJumpToPage({ pageIndex, nonce: Date.now() });
+                    }
+                    // Stay in current view if user is in blocks; otherwise
+                    // switch to blocks so they see the highlight.
+                    if (activeView === "mindmap" || activeView === "pdf") {
                       setActiveView("blocks");
                     }
                     setTimeout(() => {
@@ -650,15 +660,13 @@ export default function Home() {
                     }, 50);
                   }}
                   onJumpToPage={(pageIndex) => {
-                    // Switch to PDF view and scroll to page
+                    // Switch to PDF view + signal PdfViewer to scroll to that page.
                     setActiveView("pdf");
+                    // Defer the jump so PdfViewer has mounted before it tries
+                    // to scroll (otherwise pagesRef is empty).
                     setTimeout(() => {
-                      // PdfViewer doesn't expose imperative scroll, but it
-                      // listens to highlightToken with a page-number-ish quote.
-                      // For now we just switch tabs; the user can scroll.
-                      // TODO: add a page-jump prop to PdfViewer.
-                      console.log(`[onJumpToPage] jump to page ${pageIndex}`);
-                    }, 50);
+                      setJumpToPage({ pageIndex, nonce: Date.now() });
+                    }, 80);
                   }}
                 />
               </div>
@@ -727,6 +735,7 @@ export default function Home() {
                     onTextSelect={onTextSelect}
                     onImageSelect={onImageSelect}
                     highlightToken={highlightToken}
+                    jumpToPage={jumpToPage}
                   />
                 </TabsContent>
 

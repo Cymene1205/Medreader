@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, ChevronRight, Image as ImageIcon, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
 import { cn } from "@/lib/utils";
 
 /**
@@ -129,12 +130,14 @@ export default function FigureChain({
   const [captionDialogFigure, setCaptionDialogFigure] = useState<Figure | null>(null);
   const fetchedRef = useRef<Set<string>>(new Set());
 
-  // Sort figures by chainIndex (nulls last)
+  // Sort figures by FIGURE NUMBER (Figure 1 → 2 → 3 ...).
+  // We used to sort by chainIndex (LLM-assigned argument-chain order), but
+  // the user expects figures to appear in document order. chainIndex is still
+  // shown as a badge on each card ("第 N 环") so the argument chain is visible.
   const sortedFigures = [...figures].sort((a, b) => {
-    if (a.chainIndex == null && b.chainIndex == null) return a.order - b.order;
-    if (a.chainIndex == null) return 1;
-    if (b.chainIndex == null) return -1;
-    return a.chainIndex - b.chainIndex;
+    const an = parseInt(a.label.replace(/\D/g, ""), 10) || 0;
+    const bn = parseInt(b.label.replace(/\D/g, ""), 10) || 0;
+    return an - bn;
   });
 
   const totalChains = sortedFigures.filter((f) => f.chainIndex != null).length;
@@ -209,8 +212,9 @@ export default function FigureChain({
       );
       if (matches.length === 0) return null;
       const m = matches[0];
-      const quote = m.sentence.slice(0, 60).trim();
-      return { quote, pageIndex: m.pageIndex };
+      // ⚠️ Don't truncate the quote — findBlockIndex uses substring match,
+      // a longer quote gives a stronger signal and avoids wrong-block jumps.
+      return { quote: m.sentence, pageIndex: m.pageIndex };
     },
     [citations]
   );
@@ -543,7 +547,19 @@ export default function FigureChain({
                   </div>
                 )}
                 <div className="px-4 py-3 text-[12px] leading-relaxed text-foreground/85">
-                  {captionDialogFigure.caption}
+                  {/* Caption may contain <sup>/<sub>/<i> HTML tags from MinerU.
+                      Use ReactMarkdown + rehypeRaw to render them properly.
+                      Also handles **bold** and *italic* markdown. */}
+                  <ReactMarkdown
+                    rehypePlugins={[rehypeRaw]}
+                    components={{
+                      // Inline-only rendering — captions shouldn't have block elements
+                      p: ({ children }) => <span>{children}</span>,
+                      br: () => <span> </span>,
+                    }}
+                  >
+                    {captionDialogFigure.caption}
+                  </ReactMarkdown>
                 </div>
                 {captionDialogFigure.question && (
                   <div className="mx-4 mb-3 px-3 py-2 rounded bg-primary/5 border-l-2 border-primary/40 text-[11.5px]">

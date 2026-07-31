@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -385,7 +387,7 @@ export default function ChatPanel({
               )}
               {m.role === "assistant" && !m.error ? (
                 <div className="chat-markdown break-words">
-                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{m.content}</ReactMarkdown>
                 </div>
               ) : (
                 <div className="whitespace-pre-wrap break-words">{m.content}</div>
@@ -515,7 +517,7 @@ export default function ChatPanel({
             </div>
             <div className="max-w-[80%] rounded-lg px-3 py-2 text-[13px] leading-relaxed bg-muted">
               <div className="chat-markdown break-words">
-                <ReactMarkdown>{streaming}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{streaming}</ReactMarkdown>
               </div>
               <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse align-middle" />
             </div>

@@ -18,6 +18,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import FigureChain, {
   type Figure,
@@ -391,7 +393,12 @@ export default function OutlinePanel({
                           {/* Standard sections: render Markdown detail */}
                           {sec.key !== "argumentSpine" && part && (part as any).detail && (
                             <div className="chat-markdown text-[12px] leading-[1.7] px-1">
-                              <ReactMarkdown>{(part as any).detail}</ReactMarkdown>
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                rehypePlugins={[rehypeRaw]}
+                              >
+                                {(part as any).detail}
+                              </ReactMarkdown>
                             </div>
                           )}
 

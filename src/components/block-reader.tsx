@@ -672,8 +672,17 @@ function BlockView({
           />
         )}
         {caption && (
-          <div className="text-[11px] text-muted-foreground italic mt-1.5 text-center max-w-[600px]">
-            {caption}
+          <div className="text-[11px] text-muted-foreground italic mt-1.5 text-center max-w-[600px] prose-inline-sm">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
+              components={{
+                p: ({ children }) => <span>{children}</span>,
+                br: () => <span> </span>,
+              }}
+            >
+              {caption}
+            </ReactMarkdown>
           </div>
         )}
       </div>
@@ -774,8 +783,15 @@ function findBlockIndex(
 ): number {
   if (!blocks || blocks.length === 0) return -1;
 
-  // Normalize a string for matching: lowercase, collapse whitespace
-  const norm = (s: string) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  // Normalize a string for matching: lowercase, collapse whitespace.
+  // Also strip <sup>/<sub>/<i> HTML tags so e.g. "SiglecF<sup>hi</sup>"
+  // matches a search for "siglecfhi".
+  const norm = (s: string) =>
+    (s || "")
+      .toLowerCase()
+      .replace(/<\/?(?:sup|sub|i|b|em|strong|span)[^>]*>/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
 
   const q = norm(quote || "");
   const qHead = q.slice(0, 25);
@@ -783,6 +799,23 @@ function findBlockIndex(
     .filter((k) => k && k.length >= 2)
     .map(norm)
     .sort((a, b) => b.length - a.length); // longest first
+
+  // Extract any "Figure N" / "Fig N" / "Fig NA" references from the quote
+  // itself — if the LLM included the figure callout in its quote, we want
+  // blocks that mention the same figure to score higher.
+  const figRefsInQuote = new Set<string>();
+  const figRefRe = /\b(?:fig(?:ure|\.)?)\s*(\d+)\s*([a-z])?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = figRefRe.exec(q)) !== null) {
+    const num = m[1];
+    const panel = m[2] || "";
+    figRefsInQuote.add(`figure ${num}`);
+    if (panel) {
+      figRefsInQuote.add(`figure ${num}${panel}`);
+      figRefsInQuote.add(`fig. ${num}`);
+      figRefsInQuote.add(`fig ${num}${panel}`);
+    }
+  }
 
   let bestIdx = -1;
   let bestScore = 0;
@@ -819,6 +852,18 @@ function findBlockIndex(
       }
       if (tokens.length > 0) {
         score += Math.round((hits / tokens.length) * 200);
+      }
+    }
+
+    // 5) Figure-reference bonus — if the quote mentions "Figure 1A", boost
+    // blocks that also mention "Figure 1" / "Fig. 1A". This is the panel
+    // jump fallback when the LLM's quote is too short or paraphrased.
+    if (figRefsInQuote.size > 0) {
+      for (const ref of figRefsInQuote) {
+        if (t.includes(ref)) {
+          score += 150;
+          break;
+        }
       }
     }
 

@@ -21,6 +21,9 @@ type Props = {
   onImageSelect?: (imageBase64: string) => void;
   /** keyword to highlight & scroll to (from outline click) */
   highlightToken?: { quote: string; keywords: string[]; nonce: number } | null;
+  /** Direct page jump — when this changes (via nonce), scroll the PDF to
+   *  the given page (1-indexed). Used by "跳到原图 p.N" buttons. */
+  jumpToPage?: { pageIndex: number; nonce: number } | null;
 };
 
 type PageInfo = {
@@ -36,6 +39,7 @@ export default function PdfViewer({
   onTextSelect,
   onImageSelect,
   highlightToken,
+  jumpToPage,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement[]>([]);
@@ -208,6 +212,21 @@ export default function PdfViewer({
       }
     }
   }, [highlightToken, pages]);
+
+  // Direct page jump — for "跳到原图 p.N" button on figure cards.
+  // Scrolls the target page into view + flashes it. Doesn't need text matching
+  // because we already know the page number.
+  useEffect(() => {
+    if (!jumpToPage || pages.length === 0) return;
+    const target = jumpToPage.pageIndex;
+    if (target < 1 || target > pages.length) return;
+    const pageDiv = pagesRef.current[target - 1];
+    if (pageDiv) {
+      pageDiv.scrollIntoView({ behavior: "smooth", block: "center" });
+      pageDiv.classList.add("page-flash");
+      setTimeout(() => pageDiv.classList.remove("page-flash"), 1800);
+    }
+  }, [jumpToPage, pages]);
 
   // Text selection listener
   useEffect(() => {

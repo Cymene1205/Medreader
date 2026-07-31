@@ -922,3 +922,91 @@ Files Created:
 - scripts/test-extract.mjs / test-extract2.mjs（提取逻辑测试）
 - scripts/reextract-and-enrich.mjs（端到端修复脚本）
 - scripts/check-spine.mjs（spine 验证）
+
+---
+Task ID: figure-display-jump-markdown-fix
+Agent: main (Super Z)
+Task: 修复图表显示与跳转的 6 个问题（图被拆分 / 排序乱 / caption 截断 / 跳转不准 / 跳原图没真跳 / markdown 标签未渲染）
+
+Work Log:
+- 用户反馈 6 个问题：
+  1. MinerU 返回的图有时是拆分小图，有时是一整张，需约束只显示完整图
+  2. Figure 解析出来顺序乱（1 之后是 3 才是 2，没按数字排序）
+  3. 图注显示不对，应该是完整一整张图
+  4. 定位不准，有的没法锁定位置，智能解析界面应能找到 fig1a 这样的位置
+  5. 跳转原图效果不好，没真的锁定到哪一页
+  6. 智能解析里复杂格式（<sup>/<sub> 等 HTML 标签）没转换成正常上标符号，还有很多代码
+
+- 读现有代码定位问题：
+  - src/lib/extract-figures.ts：旧逻辑是"一个 image/chart block 一张图"，没合并相邻 block
+  - src/components/figure-chain.tsx：sortedFigures 按 chainIndex 排序（LLM 入链顺序），不是按数字
+  - src/components/figure-chain.tsx findPanelQuote：把 sentence 截到 60 字，丢失上下文
+  - src/app/app/page.tsx onJumpToPage：只 console.log，没传任何信号给 PdfViewer
+  - src/components/block-reader.tsx findBlockIndex：用 quote 整体匹配，不识别 "Fig 1A" panel 引用
+  - src/components/outline-panel.tsx + chat-panel.tsx：ReactMarkdown 没传 rehypePlugins，<sup> 等不渲染
+
+- 修复 src/lib/extract-figures.ts（重写 extractFiguresFromBlocks）：
+  - 三阶段算法
+    - Phase 1：扫描 blocks，把同一页连续的 image/chart block 合并成一个 "figure candidate"
+    - Phase 2：每个 candidate 从最后一个 block 开始倒序找 caption（caption 通常挂在最后一个 panel），找到就 emit
+    - Phase 3：扫描独立 text block 开头是 "Figure N"（覆盖 caption 不在 image block 上的少见情况）
+  - 最后按 figure 数字排序（不是 page_idx 也不是 chainIndex）
+  - 测试 vafadarnejad：64 个原始 image/chart block 合并成 7 张图，按 Figure 1→2→3→4→5→6→7 排序
+
+- 修复 src/components/figure-chain.tsx：
+  - sortedFigures 改成按 label 数字排序（不再按 chainIndex）
+  - findPanelQuote 不再截 60 字，返回完整 sentence（让 findBlockIndex 有更强信号）
+
+- 修复 src/components/block-reader.tsx findBlockIndex：
+  - norm() 函数加 HTML 标签剥离（<sup>/<sub>/<i> 等），让 "SiglecF<sup>hi</sup>" 能匹配
+  - 新增 figRefsInQuote：从 quote 里提取 "Figure 1A" / "Fig 3" 等引用
+  - 新增评分分支 #5：block 文本里如果包含相同 figure 引用，加 150 分（panel jump fallback）
+
+- 修复 src/components/pdf-viewer.tsx：
+  - 加 jumpToPage prop：{ pageIndex, nonce }
+  - 新 useEffect 监听 jumpToPage，直接按页码 scrollIntoView + page-flash
+  - 不需要 text matching（已经有页码）
+
+- 修复 src/app/app/page.tsx：
+  - 加 jumpToPage state
+  - onJumpToPage 真正实现：setActiveView("pdf") + setJumpToPage({pageIndex, nonce})
+  - onPanelChipClick 改进：同时 setHighlightToken（给 blocks view）+ setJumpToPage（给 pdf view）
+  - 传 jumpToPage prop 给 PdfViewer
+
+- 修复 markdown 渲染（4 处加 rehype-raw）：
+  - src/components/block-reader.tsx caption 渲染（line 674）
+  - src/components/figure-chain.tsx caption dialog（line 548）
+  - src/components/outline-panel.tsx 章节详情（line 394）
+  - src/components/chat-panel.tsx 助手消息 + 流式消息（2 处）
+  - 都用 ReactMarkdown + remarkGfm + rehypeRaw，caption 用 inline-only components（p→span）
+
+- 端到端验证（vafadarnejad 2020 那篇）：
+  - 重提取 figures：7 张主图（之前 1 张），按数字 1→7 排序
+  - POST /api/figures：HTTP 200, 4.8s
+  - 7 张 figures 全部 enrich（question/method/role/isLinchpin/chainIndex）
+  - argumentSpine 完整：Fig 1→2→3→4→5→6→7 论证链
+  - linchpinFigure = "Figure 1"
+  - failedParts = []
+
+Stage Summary:
+- ✅ 图被拆分问题：64 个 raw image/chart block 合并成 7 张完整图
+- ✅ Figure 排序：按数字 1→2→3→4→5→6→7（不再按 chainIndex）
+- ✅ caption 完整：Figure 3 caption 1514 字全保留（之前会被截）
+- ✅ caption HTML 渲染：<sup>hi</sup> → 上标 hi（rehype-raw）
+- ✅ panel 跳转 fallback：findBlockIndex 识别 "Fig 1A" 引用
+- ✅ 跳转原图：onJumpToPage 真的跳到那一页（PdfViewer jumpToPage prop）
+- ✅ 智能解析 / 聊天 / 图注 markdown：<sup>/<sub>/<i>/bold/italic 全部正常渲染
+
+Files Modified:
+- src/lib/extract-figures.ts（重写 extractFiguresFromBlocks 三阶段算法）
+- src/components/figure-chain.tsx（按数字排序 + 不截 quote）
+- src/components/block-reader.tsx（findBlockIndex HTML 剥离 + fig-ref bonus + caption 渲染）
+- src/components/pdf-viewer.tsx（加 jumpToPage prop + useEffect）
+- src/app/app/page.tsx（加 jumpToPage state + 真正实现 onJumpToPage + onPanelChipClick 双视图跳转）
+- src/components/outline-panel.tsx（ReactMarkdown + rehypeRaw）
+- src/components/chat-panel.tsx（ReactMarkdown + rehypeRaw）
+
+Files Created:
+- scripts/test-extract3.mjs（测试新合并逻辑）
+- scripts/reextract-v2.mjs（用新算法重提取 + 清 spine）
+- scripts/list-papers.mjs（看 DB 里重复论文）
