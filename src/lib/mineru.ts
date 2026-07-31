@@ -16,7 +16,9 @@ import { readFile, mkdir, writeFile, rm, readdir } from "fs/promises";
 import { join, basename, dirname } from "path";
 
 const MINERU_BASE = "https://mineru.net";
-const MINERU_TOKEN = process.env.MINERU_API_TOKEN || "sk-X5ufJB2CZjaU9OezQps3SvNbbMtY3RdeB7VrrzBWYcKYZuad";
+// No hardcoded fallback — must be supplied via env var.
+// On missing token, calls will fail fast with a clear auth error.
+const MINERU_TOKEN = process.env.MINERU_API_TOKEN || "";
 const POLL_INTERVAL_MS = 3500;
 const POLL_TIMEOUT_MS = 180_000; // 3 min cap
 

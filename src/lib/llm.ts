@@ -195,7 +195,8 @@ function extractUsage(data: any): {
 const ENV_DEFAULTS: Record<LLMProvider, { baseUrl: string; apiKey: string; model: string }> = {
   deepseek: {
     baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
-    apiKey: process.env.DEEPSEEK_API_KEY || "sk-edb16a1b2daa4982a45307247934cd91",
+    // No hardcoded fallback — must be supplied via env var.
+    apiKey: process.env.DEEPSEEK_API_KEY || "",
     model: "deepseek-chat",
   },
   openai: {
