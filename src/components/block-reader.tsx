@@ -116,9 +116,19 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
   // the side drawer. No LLM involved, just MinerU's structural metadata.
   // Each entry carries the original block index so clicking it can scroll
   // the reader to that exact block via blockRefs.
+  //
+  // ⚠️ Re-levelling: MinerU's text_level is unreliable for scientific PDFs
+  //    (e.g. it often marks every Results subheading as level 1, making the
+  //    navigator look like a flat list). We re-derive a 2-level hierarchy:
+  //      - H1 = top-level structural sections (Introduction / Results /
+  //        Discussion / Methods / References / Acknowledgements / ...)
+  //      - H2 = sub-headings under an H1
+  //    level >= 3 is collapsed into H2 (kept so the user can still click
+  //    deep subsections, but rendered identically to H2 to avoid the
+  //    "everything is one level" flat look).
   const headings = useMemo(() => {
     if (!blocks) return [];
-    return blocks
+    const raw = blocks
       .map((b, i) => ({ block: b, idx: i }))
       .filter(({ block }) => {
         const t = (block.type || "").toLowerCase();
@@ -126,10 +136,40 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
       })
       .map(({ block, idx }) => ({
         idx,
-        level: block.text_level || 1,
+        origLevel: block.text_level || 1,
+        level: 1, // placeholder — re-derived below
         text: (block.text || "").trim(),
       }))
       .filter((h) => h.text.length > 0);
+
+    if (raw.length === 0) return [];
+
+    // Re-derive H1/H2 based on the MINIMUM level seen in the document.
+    // Whatever the lowest level MinerU emitted is, treat it as H1.
+    // Everything strictly greater becomes H2.
+    const minLevel = raw.reduce((m, h) => Math.min(m, h.origLevel), raw[0].origLevel);
+    for (const h of raw) {
+      h.level = h.origLevel === minLevel ? 1 : 2;
+    }
+
+    // Heuristic: if the document has TOO FEW H1s (≤ 1), demote some H2s
+    // to H1 by treating the second-lowest level as H1 too. This handles
+    // papers where MinerU put the article title at level 1 and everything
+    // else at level 2 — we want at least 3-4 H1 sections to navigate.
+    const h1Count = raw.filter((h) => h.level === 1).length;
+    if (h1Count <= 1 && raw.some((h) => h.level === 2)) {
+      const h2Levels = raw
+        .filter((h) => h.level === 2)
+        .map((h) => h.origLevel)
+        .sort((a, b) => a - b);
+      const secondMin = h2Levels[0];
+      for (const h of raw) {
+        if (h.origLevel <= secondMin) h.level = 1;
+        else h.level = 2;
+      }
+    }
+
+    return raw;
   }, [blocks]);
 
   // Filter blocks to only render the readable content (skip page_number, footer noise).
@@ -371,11 +411,10 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
                 </div>
               </div>
             ) : (
-              <ul className="space-y-0.5">
+              <ul className="space-y-0">
                 {headings.map((h, i) => {
                   const isActive = activeHeadingIdx === h.idx;
-                  // Indent by level (max 4 levels visually)
-                  const indent = Math.min(h.level - 1, 3) * 12;
+                  const isH1 = h.level === 1;
                   return (
                     <li key={i}>
                       <button
@@ -384,26 +423,52 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
                           jumpToHeading(h.idx);
                           // Don't auto-close — let user click multiple headings
                         }}
+                        title={h.text}
                         className={cn(
-                          "w-full text-left px-2 py-1.5 rounded text-[12px] leading-snug transition-colors flex items-start gap-1.5",
+                          "w-full text-left rounded transition-colors flex items-stretch gap-2",
+                          // H1: bigger padding, separator above
+                          isH1
+                            ? "mt-2 first:mt-0 px-1.5 py-2"
+                            : "px-1.5 py-1.5",
                           isActive
-                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
-                            : "hover:bg-muted/60 text-foreground/80"
+                            ? "bg-sky-50 dark:bg-sky-950/40"
+                            : "hover:bg-muted/60"
                         )}
-                        style={{ paddingLeft: `${8 + indent}px` }}
                       >
-                        {/* Level marker */}
+                        {/* H1: left vertical bar. H2: small dot. */}
                         <span
                           className={cn(
-                            "flex-shrink-0 mt-0.5 w-1 h-1 rounded-full",
-                            h.level === 1
-                              ? "bg-sky-500"
-                              : h.level === 2
-                              ? "bg-sky-400/60"
-                              : "bg-muted-foreground/40"
+                            "flex-shrink-0 rounded-full self-stretch",
+                            isH1
+                              ? isActive
+                                ? "w-[3px] bg-sky-600 dark:bg-sky-400"
+                                : "w-[3px] bg-sky-400/70 dark:bg-sky-700/70"
+                              : cn(
+                                  "w-1 h-1 mt-[7px] rounded-full",
+                                  isActive ? "bg-sky-500" : "bg-muted-foreground/40"
+                                )
                           )}
                         />
-                        <span className="flex-1 line-clamp-2">{h.text}</span>
+                        <span
+                          className={cn(
+                            "flex-1 min-w-0",
+                            isH1
+                              ? cn(
+                                  "text-[13px] font-semibold leading-snug line-clamp-2",
+                                  isActive
+                                    ? "text-sky-700 dark:text-sky-300"
+                                    : "text-foreground"
+                                )
+                              : cn(
+                                  "text-[12px] font-normal leading-snug line-clamp-2",
+                                  isActive
+                                    ? "text-sky-700 dark:text-sky-300"
+                                    : "text-foreground/75"
+                                )
+                          )}
+                        >
+                          {h.text}
+                        </span>
                       </button>
                     </li>
                   );

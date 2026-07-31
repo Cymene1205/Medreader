@@ -2,10 +2,28 @@
  * Figure extraction — runs once after MinerU parse completes.
  *
  * Walks the MinerU content_list.json (blocks) and pulls out every "main"
- * figure block:
- *   - Block type is "image" or "chart"
- *   - The caption (chart_caption) starts with "Figure N" / "Fig. N" (not "Fig. S",
- *     not "Extended Data", not "Supplementary")
+ * figure caption, then pairs each caption with the nearest image/chart
+ * block so we can show the actual image.
+ *
+ * ⚠️ Caption-anchored strategy (the OLD image-block-anchored strategy failed
+ *    because MinerU vlm mode does NOT populate chart_caption on image blocks
+ *    — captions are emitted as SEPARATE text blocks immediately after the
+ *    image/chart blocks they describe).
+ *
+ * Algorithm:
+ *   1. Walk all blocks looking for text blocks whose content starts with
+ *      "Figure N" / "Fig. N" (excluding supplementary / Extended Data).
+ *   2. Skip TOC-like entries (caption shorter than 30 chars, or containing
+ *      URLs — these are paper-front-matter "Figure 1: Neutrophils alone:
+ *      https://infection-atlas.org/..." index entries, not real captions).
+ *   3. For each surviving caption, look BACKWARDS up to 5 blocks for the
+ *      nearest image/chart block. If found, pair them. If a backward walk
+ *      hits another caption or an H1 heading, stop (the caption likely has
+ *      no associated image — keep the caption-only record).
+ *   4. If no image found backward, look FORWARD up to 2 blocks as a
+ *      fallback (some papers put caption above the figure).
+ *   5. Even if no image block is found, the caption-only record is kept —
+ *      Call A can still analyse the figure from caption + citing sentences.
  *
  * For each main figure, writes one row to the Figure table:
  *   { label, caption, imagePath, pageIndex, order, panelCount }
@@ -35,13 +53,16 @@ export type ExtractedFigure = {
 };
 
 /**
- * Regex to identify a main-figure caption.
- * Matches "Figure 1", "Fig. 2", "Fig 3", "Figure 1A" — but NOT
+ * Regex to identify a main-figure caption at the START of a text block.
+ * Matches "Figure 1", "Fig. 2", "Fig 3", "Figure 1A", "Figure 1:" — but NOT
  * "Fig. S1", "Figure S1", "Extended Data Figure 1", "Supplementary Figure 1".
  *
  * Captures the number so we can normalise the label.
+ *
+ * Note: this is anchored to the start (^\s*) — we don't want to pick up
+ * in-text references like "...as shown in Figure 3, the cells...".
  */
-const MAIN_FIGURE_RE = /^(?!.*(?:Supplementary|Extended\s+Data|\bS\d))\s*(?:Fig(?:ure|\.)?)\s*(\d+)/i;
+const MAIN_FIGURE_RE = /^\s*(?!.*(?:Supplementary|Extended\s+Data|\bS\d))(?:Fig(?:ure|\.)?)\s*(\d+)/i;
 
 /**
  * Normalise a label like "Fig. 3" / "Figure 3A" / "Fig 3" → "Figure 3".
@@ -95,8 +116,12 @@ export function countPanels(caption: string): number {
 }
 
 /**
- * Pull all main-figure blocks out of the MinerU blocks array.
+ * Pull all main-figure captions out of the MinerU blocks array and pair each
+ * one with the nearest image/chart block.
+ *
  * Pure function — no DB. Returns the figures in document order.
+ *
+ * Strategy: caption-anchored (see file header for rationale).
  */
 export function extractFiguresFromBlocks(
   blocks: MinerUBlock[],
@@ -104,39 +129,76 @@ export function extractFiguresFromBlocks(
 ): ExtractedFigure[] {
   const out: ExtractedFigure[] = [];
   let order = 0;
-  for (const b of blocks) {
-    if (b.type !== "image" && b.type !== "chart") continue;
-    const rawCap =
-      (typeof b.chart_caption === "string" && b.chart_caption) ||
-      (typeof b.text === "string" && b.text) ||
-      "";
-    if (!rawCap) continue;
-    const label = normaliseFigureLabel(rawCap);
-    if (!label) continue;
 
-    // De-duplicate: MinerU sometimes emits two adjacent blocks for the same
-    // figure (one for the image, one for the caption). Skip if we already
-    // have this label within the last 3 entries (close document position).
-    if (out.length > 0 && out[out.length - 1].label === label) {
-      // Merge caption text if the duplicate has a longer caption
-      if (rawCap.length > out[out.length - 1].caption.length) {
-        out[out.length - 1].caption = rawCap;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type !== "text") continue;
+    const rawCap = (typeof b.text === "string" ? b.text : "").trim();
+    if (!rawCap) continue;
+
+    // Must start with "Figure N" / "Fig. N" / etc.
+    const m = rawCap.match(MAIN_FIGURE_RE);
+    if (!m) continue;
+    const num = m[1];
+    if (!num) continue;
+    const label = `Figure ${num}`;
+
+    // Filter out TOC / front-matter pseudo-captions:
+    //   - Too short (real captions are usually 60+ chars)
+    //   - Contains URL (TOC entries like "Figure 1: Neutrophils alone: https://...")
+    if (rawCap.length < 30) continue;
+    if (/https?:\/\//i.test(rawCap)) continue;
+
+    // Dedup: if we already have this label, prefer the longer caption
+    const existing = out.find((f) => f.label === label);
+    if (existing) {
+      if (rawCap.length > existing.caption.length) {
+        existing.caption = rawCap;
       }
       continue;
     }
 
+    // ── Look BACKWARD (up to 5 blocks) for the nearest image/chart block ──
+    // MinerU usually emits: [image, image, image, ..., text="Figure N. ..."]
+    // so the caption comes AFTER the last panel of the figure.
+    let imgBlock: MinerUBlock | null = null;
+    for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+      const nb = blocks[j];
+      if (nb.type === "image" || nb.type === "chart") {
+        imgBlock = nb;
+        break;
+      }
+      // Stop the backward walk if we hit another caption or an H1 heading —
+      // it means our caption has no associated image block, which is fine
+      // (we'll keep the caption-only record below).
+      if (nb.type === "text") {
+        const prevText = (nb.text || "").trim();
+        if (/^\s*(?:Fig(?:ure|\.)?)\s*\d+/i.test(prevText)) break;
+        if (typeof nb.text_level === "number" && nb.text_level === 1) break;
+      }
+    }
+
+    // ── Fallback: look FORWARD (up to 2 blocks) ──
+    // Some papers put caption above the figure. Rare but worth handling.
+    if (!imgBlock) {
+      for (let j = i + 1; j <= Math.min(blocks.length - 1, i + 2); j++) {
+        const nb = blocks[j];
+        if (nb.type === "image" || nb.type === "chart") {
+          imgBlock = nb;
+          break;
+        }
+      }
+    }
+
     // Resolve image path. MinerU gives us "images/xxxxx.jpg" relative to
-    // the extracted imagesDir. We store the absolute path on the row so
-    // /api/figure-image/[figureId] can stream it without recomputing.
+    // the extracted imagesDir.
     let imagePath: string | null = null;
-    if (b.img_path && imagesDir) {
-      // Strip "images/" prefix if present, then join with imagesDir
-      const cleanName = b.img_path.replace(/^images\//, "").replace(/^\//, "");
+    if (imgBlock?.img_path && imagesDir) {
+      const cleanName = imgBlock.img_path
+        .replace(/^images\//, "")
+        .replace(/^\//, "");
       const basename = cleanName.split("/").pop();
       if (basename) {
-        // We can't import "path" here cleanly in browser-built code paths,
-        // but this lib is server-only (only called from upload route which
-        // runs in nodejs runtime). Use a simple string concat.
         imagePath = `${imagesDir.replace(/\/$/, "")}/${basename}`;
       }
     }
@@ -145,11 +207,12 @@ export function extractFiguresFromBlocks(
       label,
       caption: rawCap,
       imagePath,
-      pageIndex: (b.page_idx ?? 0) + 1, // store as 1-indexed (matches [Page N] convention)
+      pageIndex: (b.page_idx ?? 0) + 1, // 1-indexed
       order: order++,
       panelCount: countPanels(rawCap),
     });
   }
+
   return out;
 }
 
