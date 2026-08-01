@@ -12,15 +12,29 @@ import { NextRequest, NextResponse } from "next/server";
  *   - `/_next/*`       Next.js static assets
  *   - `/favicon.ico`
  *
- * Routes that REQUIRE LOGIN:
+ * Routes that REQUIRE LOGIN (gated by this middleware):
  *   - `/app/*`         workspace
  *   - `/admin/*`       admin (still does its own role check in handler)
- *   - any other page not in the public list
- *   - `/api/upload`, `/api/analyze`, `/api/chat`, `/api/translate`,
- *     `/api/vision`, `/api/paper-images`, `/api/followups`, …
+ *   - `/api/upload`    PDF upload (login required — quota keyed off userId)
+ *   - `/api/analyze`   structured analysis (writes Paper state, needs owner)
+ *   - `/api/figures`, `/api/figure-detail`, `/api/figure-image/*`
+ *   - `/api/paper-images`, `/api/paper/*`, `/api/followups`
+ *   - `/api/feedback`  requires valid chatLogId (owned by some user)
+ *
+ * Routes that ALLOW ANONYMOUS (IP-hash quota in route handler):
+ *   - `/api/chat`        50/day for anon, login encouraged via UI nudge
+ *   - `/api/translate`   100/day for anon
+ *   - `/api/vision`      20/day for anon
+ *   - `/api/llm-test`    connection test — anonymous ok (no quota gate)
+ *   - `/api/quota`       shows remaining quota for current user/IP
+ *
+ *   These routes wrap `getServerSession()` in try/catch and gracefully
+ *   degrade to anonymous flow (keyed off IP+UA hash in DailyQuota).
+ *   The middleware must NOT 401 them — otherwise the shared-paper link
+ *   recipient (not logged in) cannot ask questions about the paper.
  *
  * Behavior on missing session cookie:
- *   - For `/api/*` routes → 401 JSON `{ error: "请先登录", code: "UNAUTHORIZED" }`
+ *   - For protected `/api/*` routes → 401 JSON `{ error: "请先登录", code: "UNAUTHORIZED" }`
  *     (so the frontend can show a friendly "请先登录" toast and redirect
  *     to /login, instead of receiving an HTML redirect body it can't
  *     parse).
@@ -48,7 +62,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // No session cookie — block.
+  // No session cookie — block protected routes.
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(
       { error: "请先登录", code: "UNAUTHORIZED" },
@@ -63,14 +77,20 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   // Match everything EXCEPT:
-  //   login | register | landing   — public auth/landing pages
-  //   api/auth                     — NextAuth endpoints
-  //   api/upload                   — 大文件上传，绕过 middleware 避免被 Next.js 16
-  //                                  默认 10MB body 限制截断（route 内部用
-  //                                  getServerSession 做真正的认证）
-  //   _next                        — Next.js static assets
-  //   favicon.ico                  — browser favicon
+  //   login | register | landing              — public auth/landing pages
+  //   api/auth                                — NextAuth endpoints
+  //   api/upload                              — 大文件上传，绕过 middleware 避免被
+  //                                              Next.js 16 默认 10MB body 限制截断
+  //                                              (route 内部用 getServerSession 做真正的认证)
+  //   api/chat | api/translate | api/vision   — 匿名访问 (路由内部按 IP hash 限额)
+  //   api/llm-test                            — LLM 连接测试，匿名可用
+  //   api/quota                               — 查询额度，匿名也能看自己的 IP 额度
+  //   api/paper-images                        — 论文图片资源 (公开)
+  //   _next                                   — Next.js static assets
+  //   favicon.ico                             — browser favicon
   // Root `/` is matched by this regex too, but the middleware function
   // short-circuits it (see above).
-  matcher: ["/((?!login|register|landing|api/auth|api/upload|_next|favicon.ico).*)"],
+  matcher: [
+    "/((?!login|register|landing|api/auth|api/upload|api/chat|api/translate|api/vision|api/llm-test|api/quota|api/paper-images|_next|favicon.ico).*)",
+  ],
 };
