@@ -134,6 +134,37 @@ export async function POST(req: NextRequest) {
 async function parsePdfBackground(paperId: string, filePath: string): Promise<void> {
   try {
     const result = await parseWithMinerU(filePath);
+
+    // Extract figures + citations BEFORE marking the paper as "done".
+    //
+    // Why order matters:
+    //   The frontend polls /api/paper/[id] and, on parseStatus="done",
+    //   immediately fetches /api/figures. If we set "done" first and then
+    //   run extractAndStoreFigures, the frontend sees "done" + empty
+    //   figures array and marks figuresStatus="idle" — never retrying.
+    //   Result: figures never appear until the user manually refreshes.
+    //
+    // By extracting first and only then flipping parseStatus to "done",
+    // the frontend's first figures fetch will see the full list.
+    // Extraction is pure-code (no LLM), takes <2s for a typical paper.
+    let figCount = 0;
+    try {
+      const { extractAndStoreFigures } = await import("@/lib/extract-figures");
+      figCount = await extractAndStoreFigures(paperId, result.blocks, result.imagesDir);
+      console.log(`[upload] extracted ${figCount} figures for paper ${paperId}`);
+    } catch (e) {
+      console.warn(`[upload] extractAndStoreFigures failed (non-fatal) for ${paperId}:`, e);
+    }
+    try {
+      const { buildCitationsAndStore } = await import("@/lib/align-citations");
+      const cites = await buildCitationsAndStore(paperId);
+      console.log(`[upload] stored ${cites.length} citations for paper ${paperId}`);
+    } catch (e) {
+      console.warn(`[upload] buildCitationsAndStore failed (non-fatal) for ${paperId}:`, e);
+    }
+
+    // Now flip parseStatus to "done" — frontend will see done + figures
+    // already populated.
     await db.paper.update({
       where: { id: paperId },
       data: {
@@ -146,24 +177,6 @@ async function parsePdfBackground(paperId: string, filePath: string): Promise<vo
         parsedText: markdownToPlainText(result.markdown),
       },
     });
-
-    // Extract figures + citations so that /api/figures and /api/figure-detail
-    // have data to work with on the first request. These are pure-code (no
-    // LLM) and run in the background; failures are non-fatal.
-    try {
-      const { extractAndStoreFigures } = await import("@/lib/extract-figures");
-      const figCount = await extractAndStoreFigures(paperId);
-      console.log(`[upload] extracted ${figCount} figures for paper ${paperId}`);
-    } catch (e) {
-      console.warn(`[upload] extractAndStoreFigures failed (non-fatal) for ${paperId}:`, e);
-    }
-    try {
-      const { buildCitationsAndStore } = await import("@/lib/align-citations");
-      const cites = await buildCitationsAndStore(paperId);
-      console.log(`[upload] stored ${cites.length} citations for paper ${paperId}`);
-    } catch (e) {
-      console.warn(`[upload] buildCitationsAndStore failed (non-fatal) for ${paperId}:`, e);
-    }
   } catch (e) {
     console.error(`[upload] MinerU parse failed for ${paperId}:`, e);
     // Fallback: try pdfjs-dist

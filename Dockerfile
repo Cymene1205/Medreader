@@ -69,6 +69,12 @@ ENV NODE_ENV=production
 # Port the standalone server listens on. docker-compose maps 3000:3000.
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Where uploaded PDFs + MinerU-extracted images live.
+# MUST match the volume mount in docker-compose.yml (./uploads:/app/uploads).
+# Without this, the upload route falls back to /home/z/my-project/uploads
+# (the dev sandbox path) which doesn't exist in the alpine container —
+# files would be written to the container's overlay FS and LOST on rebuild.
+ENV UPLOADS_DIR=/app/uploads
 
 # Copy the standalone build — `server.js` lands at /app/server.js.
 # `COPY --from=builder /app/.next/standalone ./` copies the CONTENTS of

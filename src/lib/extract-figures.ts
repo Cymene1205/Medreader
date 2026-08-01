@@ -598,38 +598,57 @@ export function extractFiguresFromBlocks(
  * Returns the count of figures written. Returns 0 if blocksJson is missing
  * or no figures were found (e.g. pdfjs fallback mode, or a review paper
  * with no figures).
+ *
+ * Optional `blocks` and `imagesDir` parameters let the caller pass in
+ * freshly-parsed data (e.g. from the upload route, which just received
+ * them from MinerU and hasn't persisted them yet). If omitted, the
+ * function falls back to reading them from the DB.
  */
-export async function extractAndStoreFigures(paperId: string): Promise<number> {
-  const paper = await db.paper.findUnique({
-    where: { id: paperId },
-    select: { blocksJson: true, imagesDir: true },
-  });
-  if (!paper || !paper.blocksJson) return 0;
+export async function extractAndStoreFigures(
+  paperId: string,
+  preloadedBlocks?: MinerUBlock[],
+  preloadedImagesDir?: string | null
+): Promise<number> {
+  let blocks: MinerUBlock[] = preloadedBlocks ?? [];
+  let imagesDir: string | null = preloadedImagesDir ?? null;
 
-  let blocks: MinerUBlock[] = [];
-  try {
-    const parsed = JSON.parse(paper.blocksJson);
-    if (Array.isArray(parsed)) blocks = parsed as MinerUBlock[];
-  } catch {
-    return 0;
+  // Fall back to DB read if caller didn't pre-load
+  if (blocks.length === 0 || imagesDir === null) {
+    const paper = await db.paper.findUnique({
+      where: { id: paperId },
+      select: { blocksJson: true, imagesDir: true },
+    });
+    if (!paper || !paper.blocksJson) return 0;
+
+    try {
+      const parsed = JSON.parse(paper.blocksJson);
+      if (Array.isArray(parsed)) blocks = parsed as MinerUBlock[];
+    } catch {
+      return 0;
+    }
+    if (blocks.length === 0) return 0;
+    imagesDir = paper.imagesDir;
   }
-  if (blocks.length === 0) return 0;
 
-  const figures = extractFiguresFromBlocks(blocks, paper.imagesDir);
+  const figures = extractFiguresFromBlocks(blocks, imagesDir);
   if (figures.length === 0) return 0;
 
   // Idempotent: clear any prior rows (e.g. from a previous attempt), then insert.
-  await db.figure.deleteMany({ where: { paperId } });
-  await db.figure.createMany({
-    data: figures.map((f) => ({
-      paperId,
-      label: f.label,
-      caption: f.caption,
-      imagePath: f.imagePath,
-      pageIndex: f.pageIndex,
-      order: f.order,
-      panelCount: f.panelCount,
-    })),
+  // Wrapped in a transaction so a partial failure (e.g. constraint violation
+  // mid-createMany) doesn't leave the paper with zero figures.
+  await db.$transaction(async (tx) => {
+    await tx.figure.deleteMany({ where: { paperId } });
+    await tx.figure.createMany({
+      data: figures.map((f) => ({
+        paperId,
+        label: f.label,
+        caption: f.caption,
+        imagePath: f.imagePath,
+        pageIndex: f.pageIndex,
+        order: f.order,
+        panelCount: f.panelCount,
+      })),
+    });
   });
 
   return figures.length;

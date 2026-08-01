@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { readFile } from "fs/promises";
-import { extname } from "path";
+import { extname, resolve, relative, isAbsolute } from "path";
 
 export const runtime = "nodejs";
+
+// Uploads root — must match `UPLOADS_DIR` env var. Resolved to an
+// absolute path so `relative()` checks below are reliable.
+const ALLOWED_ROOT = resolve(process.env.UPLOADS_DIR || "/home/z/my-project/uploads");
 
 /**
  * GET /api/figure-image/[figureId]
@@ -12,11 +16,12 @@ export const runtime = "nodejs";
  * Security:
  *   - figureId must exist in DB
  *   - imagePath is read from the row, not from query params (prevents path traversal)
- *   - we verify the imagePath is under uploads/ (defence in depth)
+ *   - we verify the imagePath resolves UNDER ALLOWED_ROOT (defence in depth)
  *
  * Returns:
  *   200 — image bytes with correct Content-Type
  *   404 — figure not found, or imagePath missing, or file doesn't exist on disk
+ *   403 — imagePath escapes ALLOWED_ROOT (would indicate DB corruption or attack)
  *   500 — read error
  */
 export async function GET(
@@ -39,11 +44,18 @@ export async function GET(
       );
     }
 
-    // Defence in depth: ensure path is under /uploads/
-    // (Figure rows are only ever written by extract-figures.ts, which sets
-    // imagePath from MinerU's imagesDir under uploads/, but belt-and-braces.)
-    const normalized = figure.imagePath;
-    if (!normalized.includes("/uploads/")) {
+    // Defence in depth: ensure path resolves UNDER ALLOWED_ROOT.
+    // Previous check used `includes("/uploads/")` which is bypassable
+    // by sibling directories like `/home/z/my-project/uploads-evil/foo.jpg`.
+    // `path.relative` is the correct primitive — see paper-images route
+    // for detailed comments on why.
+    const resolved = resolve(figure.imagePath);
+    const rel = relative(ALLOWED_ROOT, resolved);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      console.error(
+        `[figure-image] SECURITY: figure ${figureId} imagePath escapes ALLOWED_ROOT: ` +
+        `${figure.imagePath} (resolved=${resolved}, ALLOWED_ROOT=${ALLOWED_ROOT})`
+      );
       return NextResponse.json(
         { error: "Image path is outside allowed directory" },
         { status: 403 }
@@ -52,7 +64,7 @@ export async function GET(
 
     let buf: Buffer;
     try {
-      buf = await readFile(normalized);
+      buf = await readFile(resolved);
     } catch {
       return NextResponse.json(
         { error: "Image file not found on disk" },
@@ -61,7 +73,7 @@ export async function GET(
     }
 
     // Determine Content-Type from extension
-    const ext = extname(normalized).toLowerCase();
+    const ext = extname(resolved).toLowerCase();
     const contentType =
       ext === ".png"
         ? "image/png"

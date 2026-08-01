@@ -1439,3 +1439,29 @@ Stage Summary:
   * src/app/app/page.tsx —— handleShare 加 replaceState + clipboard fallback 链；sharedLoad 加详细日志
 - dev server 已热加载，polyfills.js 新版本已通过 HTTP 验证
 - 待用户在微信中重新打开 PDF 验证：刷新页面（清除缓存）→ 重新加载 PDF → 应该不再报 a.toHex 错误
+
+---
+Task ID: FIGURE-AUDIT
+Agent: Explore
+Task: Audit figure extraction + figure-serving pipeline for runtime correctness
+
+Work Log:
+- Read /home/z/my-project/worklog.md (1441 lines) for prior context — project is Next.js 16 App Router, MinerU-based PDF parse, SQLite via Prisma, Docker deployment via docker-compose with /app/uploads volume mount
+- Read in full: src/lib/extract-figures.ts (637 lines), src/lib/mineru.ts (601 lines), src/app/api/figures/route.ts (262 lines), src/app/api/figure-detail/route.ts (243 lines), src/app/api/figure-image/[figureId]/route.ts (89 lines), src/app/api/paper-images/route.ts (69 lines), prisma/schema.prisma (194 lines)
+- Read related files for context: src/app/api/upload/route.ts (calls extractAndStoreFigures), src/app/api/paper/[id]/route.ts (exposes imagesDir to client), src/components/block-reader.tsx (client-side imageUrl helper duplicating mapImagePath), src/lib/db.ts, src/middleware.ts, src/app/app/page.tsx (frontend polling + shared-paper loader)
+- Inspected Dockerfile + docker-compose.yml + .env.production.example to verify Docker path assumptions
+- Searched callers of extractAndStoreFigures: only src/app/api/upload/route.ts:155 (background) + scripts/reextract-bun.ts:51 (one-off script)
+- Searched callers of mapImagePath: ZERO call sites — exported from mineru.ts:566 but never used; the same logic is duplicated inline in src/components/block-reader.tsx:285-288
+- Searched imagesDir usages: 14 source files reference it (extract-figures, mineru, paper-images route, paper/[id] route, upload route, block-reader, page.tsx) plus ~10 throwaway scripts under scripts/
+- Verified uploads/ directory exists at /home/z/my-project/uploads with multiple <uuid>.pdf + <uuid>_images/ subdirs
+
+Stage Summary:
+- See final report delivered to operator. Top critical issues:
+  (1) UPLOADS_DIR env var is never set inside the Docker container (Dockerfile creates /app/uploads but doesn't `ENV UPLOADS_DIR=/app/uploads`, .env.production.example omits it) → upload route + paper-images route both fall back to hardcoded `/home/z/my-project/uploads` which does not exist in the alpine container → uploads + extracted images are written to a transient in-container path, bypassing the docker-compose volume mount, and are LOST on every container rebuild
+  (2) figure-image route uses a substring `.includes("/uploads/")` check instead of `path.resolve()` + `startsWith` — bypassable by sibling dirs like `/tmp/uploads-evil/`
+  (3) paper-images route is PUBLIC (excluded from middleware matcher line 94) and does not verify `dir` corresponds to a Paper the caller owns — any anonymous client knowing the uploads path can fetch any extracted image
+  (4) Race condition: upload/route.ts sets parseStatus="done" at line 140 BEFORE calling extractAndStoreFigures at line 155 → frontend sees "done" and fetches /api/figures, which returns empty array → frontend marks figuresStatus="idle" and never auto-retries
+  (5) extractAndStoreFigures runs deleteMany + createMany OUTSIDE a transaction — concurrent calls (e.g. user re-upload) can wipe just-inserted rows
+  (6) mapImagePath is dead code (no callers); same logic duplicated client-side in block-reader.tsx
+- Files audited: extract-figures.ts, mineru.ts, api/figures/route.ts, api/figure-detail/route.ts, api/figure-image/[figureId]/route.ts, api/paper-images/route.ts, prisma/schema.prisma, plus context files (upload, paper/[id], block-reader, middleware, page.tsx, Dockerfile, docker-compose.yml, .env.production.example)
+- No files modified (read-only audit)
