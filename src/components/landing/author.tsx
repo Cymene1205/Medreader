@@ -29,7 +29,7 @@ export function Author() {
               {/* 头像占位 */}
               <div className="flex items-center gap-5 mb-6 pb-6 border-b border-[var(--rule)]">
                 <div className="w-20 h-20 rounded-sm bg-[var(--burgundy)] text-[var(--paper)] flex items-center justify-center font-serif-cn text-3xl font-semibold shrink-0">
-                  止
+                  陈
                 </div>
                 <div>
                   <div className="font-serif-cn text-2xl font-semibold text-[var(--ink)]">
