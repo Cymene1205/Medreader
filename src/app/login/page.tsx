@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Loader2, BookOpen, LogIn } from "lucide-react";
-import Image from "next/image";
 
 import {
   Card,
@@ -57,13 +56,13 @@ function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4 py-10">
       <Card className="w-full max-w-sm shadow-md">
         <CardHeader className="space-y-2 items-center text-center">
-          <Image
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
             src="/biorhythm-avatar.jpg"
             alt="行止集 BioRhythm"
             width={72}
             height={72}
             className="rounded-full border-2 border-primary/20 shadow-sm object-cover"
-            priority
           />
           <div className="flex items-center justify-center gap-2">
             <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center shadow-sm">
