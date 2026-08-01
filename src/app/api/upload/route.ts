@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
     // (production hardening, see fix #1 in the production fix pack).
     const session = await getServerSession(authOptions);
     const userId = (session?.user as any)?.id ?? null;
+    const userRole = (session?.user as any)?.role ?? null;
     if (!userId) {
       return NextResponse.json(
         { error: "请先登录后再上传 PDF", code: "UNAUTHORIZED" },
@@ -43,7 +44,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Quota check — MinerU is the expensive resource.
-    const quota = await checkAndIncrement("mineru_parse", userId, req);
+    // Admins bypass the counter entirely (see roleBypassesQuota in src/lib/quota.ts).
+    const quota = await checkAndIncrement("mineru_parse", userId, req, userRole);
     if (!quota.ok) {
       return NextResponse.json(
         {

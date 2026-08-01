@@ -6,8 +6,9 @@
 import { db } from "./db";
 
 // Per-user-per-day caps
+// Admins bypass these limits entirely (see roleBypassesQuota).
 export const QUOTA_LIMITS = {
-  mineru_parse: 10,    // 10 PDFs/day per user (MinerU's actual page cap is 1000, this is conservative)
+  mineru_parse: 20,    // 20 PDFs/day per user (raised from 10 on user request)
   chat: 50,            // 50 chat messages/day per user
   translate: 100,      // 100 translations/day per user
   vision: 20,          // 20 vision Q&As/day per user

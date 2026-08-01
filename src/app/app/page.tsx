@@ -46,6 +46,7 @@ import {
   FileCode2,
   Share2,
   Check,
+  Gauge,
 } from "lucide-react";
 import Link from "next/link";
 import { exportAnalysisMarkdown, exportMindmapHtml } from "@/lib/export-utils";
@@ -57,6 +58,22 @@ type HighlightToken = {
 };
 
 type UploadStage = "idle" | "uploading" | "parsing" | "analyzing" | "done";
+
+// ── Quota display types ────────────────────────────────────────────────
+// Mirror of the response from GET /api/quota. Used to render the "X/20"
+// badge in the workspace header so users can see how much daily quota they
+// have left without having to hit a 429 first.
+type QuotaActionKey = "mineru_parse" | "chat" | "translate" | "vision";
+type QuotaActionInfo = {
+  label: string;
+  count: number;
+  limit: number;
+  remaining: number;
+};
+type QuotaResponse = {
+  isAdmin: boolean;
+  actions: Record<QuotaActionKey, QuotaActionInfo>;
+};
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -148,6 +165,23 @@ export default function Home() {
   // any other state — every visit to a shared URL starts a fresh React
   // session that loads only this paper from the server via /api/paper/[id].
   const [shareCopied, setShareCopied] = useState(false);
+
+  // ── Quota display state ──────────────────────────────────────────────
+  // Fetched from /api/quota on mount, after login state changes, and after
+  // each successful upload (the most quota-consuming action). null while
+  // loading or if the request failed — in that case the badge is simply
+  // hidden rather than showing a misleading 0/0.
+  const [quota, setQuota] = useState<QuotaResponse | null>(null);
+  const refreshQuota = useCallback(() => {
+    fetch("/api/quota", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: QuotaResponse | null) => {
+        if (data && data.actions) setQuota(data);
+      })
+      .catch(() => {
+        // non-fatal — UI just stays hidden
+      });
+  }, []);
   const handleShare = useCallback(async () => {
     if (!paperId) return;
     try {
@@ -225,6 +259,16 @@ export default function Home() {
   useEffect(() => {
     setLlmConfigured(hasUserLLMConfig());
   }, [llmSettingsOpen]);
+
+  // ── Quota badge refresh ──────────────────────────────────────────────
+  // Refetch quota on mount and whenever the session status flips (login /
+  // logout). The /api/quota endpoint resolves the user from the session
+  // cookie server-side, so we don't need to pass any token. We also re-fetch
+  // after each successful upload via the explicit refreshQuota() call in
+  // the onFile handler — see the upload success path below.
+  useEffect(() => {
+    refreshQuota();
+  }, [status, refreshQuota]);
 
   // Build a headers snapshot for outgoing fetches; refresh when dialog closes.
   // We expose this via a ref-like state so child ChatPanel/TranslationPanel can
@@ -487,6 +531,10 @@ export default function Home() {
         setPaperId(upData.paperId);
         setUploadStage("parsing");
         setMineruStatus("MinerU 解析中（30-90 秒）…");
+        // Server just incremented the mineru_parse counter — refresh the
+        // header badge so the user sees their remaining quota drop in
+        // real time. Fire-and-forget; failures are non-fatal.
+        refreshQuota();
 
         // Poll for parse status
         let pollTimeoutReached = true;
@@ -916,6 +964,92 @@ export default function Home() {
           )}
           {shareCopied ? "已复制" : "分享"}
         </Button>
+
+        {/* Quota badge — shows the user's remaining daily quota.
+            Hidden entirely if /api/quota hasn't returned yet (or errored),
+            so we never show a misleading 0/0. Admins get an "不限量" pill
+            and the dropdown still lists the configured limits for
+            transparency. */}
+        {quota && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-background hover:bg-background/10"
+                title="今日剩余额度（每日 00:00 UTC+8 重置）"
+              >
+                <Gauge className="h-3.5 w-3.5" />
+                {quota.isAdmin ? (
+                  <span className="text-[11px] font-medium">不限量</span>
+                ) : (
+                  <span className="text-[11px] tabular-nums">
+                    {quota.actions.mineru_parse.count}/
+                    {quota.actions.mineru_parse.limit}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <div className="px-2 py-1.5 text-[11px] font-medium text-muted-foreground flex items-center justify-between">
+                <span>今日用量</span>
+                <span className="text-[10px] opacity-80">00:00 (UTC+8) 重置</span>
+              </div>
+              {quota.isAdmin && (
+                <div className="mx-2 mb-1 px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[11px] flex items-center gap-1.5">
+                  <Shield className="h-3 w-3" />
+                  管理员账号 · 不受额度限制
+                </div>
+              )}
+              {(Object.keys(quota.actions) as QuotaActionKey[]).map((k) => {
+                const a = quota.actions[k];
+                const pct = a.limit > 0 ? Math.min(100, (a.count / a.limit) * 100) : 0;
+                const exhausted = !quota.isAdmin && a.count >= a.limit;
+                return (
+                  <div key={k} className="px-2 py-1.5">
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="font-medium">{a.label}</span>
+                      <span
+                        className={cn(
+                          "tabular-nums",
+                          exhausted
+                            ? "text-red-600 dark:text-red-400 font-semibold"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        {quota.isAdmin ? (
+                          <span className="text-emerald-600 dark:text-emerald-400">不限量</span>
+                        ) : (
+                          <>
+                            {a.count} / {a.limit}
+                            {a.remaining > 0 && (
+                              <span className="ml-1 opacity-70">（剩 {a.remaining}）</span>
+                            )}
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    {!quota.isAdmin && (
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all",
+                            exhausted
+                              ? "bg-red-500"
+                              : pct > 70
+                              ? "bg-amber-500"
+                              : "bg-emerald-500"
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         {/* Auth area */}
         {status === "loading" ? (
