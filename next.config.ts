@@ -6,11 +6,6 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  // undici (Node's fetch impl) must be required at runtime from node_modules
-  // so we can construct a custom Agent with longer headersTimeout /
-  // bodyTimeout. Without this, Next.js webpack would try to bundle it
-  // and break at runtime.
-  serverExternalPackages: ["undici"],
   // 允许预览平台的 cross-origin 域名加载 _next 资源
   // 否则 Next.js 16 在 dev 模式下会拒绝来自 preview-*.space-z.ai 的请求
   allowedDevOrigins: [
@@ -24,14 +19,20 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: "50mb",
     },
+    // Next.js 16 breaking change: proxy (was "middleware" in 15.x) now
+    // caps request body at 10 MB by default. Our auth proxy matches
+    // /api/upload, so PDFs > 10 MB were silently truncated to 10 MB before
+    // reaching the route handler, breaking `request.formData()` with
+    // "Failed to parse body as FormData".
+    // Bump to 50 MB to match serverActions.bodySizeLimit and MAX_UPLOAD_BYTES.
+    //
+    // ⚠️ Option name changed in Next.js 16:
+    //   - 15.x: experimental.middlewareClientMaxBodySize
+    //   - 16.x: experimental.proxyClientMaxBodySize  (middleware→proxy rename)
+    // Using the old name produces a deprecation warning AND the limit
+    // doesn't actually take effect, so 10+ MB uploads would still break.
+    proxyClientMaxBodySize: "50mb",
   },
-  // Next.js 16 breaking change: middleware now caps request body at 10 MB
-  // by default (was unlimited in 15.x). Our auth middleware matches
-  // /api/upload, so PDFs > 10 MB were silently truncated to 10 MB before
-  // reaching the route handler, breaking `request.formData()` with
-  // "Failed to parse body as FormData".
-  // Bump to 50 MB to match serverActions.bodySizeLimit and MAX_UPLOAD_BYTES.
-  middlewareClientMaxBodySize: "50mb",
 };
 
 export default nextConfig;

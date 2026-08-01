@@ -14,17 +14,6 @@
 import JSZip from "jszip";
 import { readFile, mkdir, writeFile, rm, readdir } from "fs/promises";
 import { join, basename, dirname } from "path";
-// undici is Node's built-in fetch implementation. We import its Agent
-// class so we can construct a custom dispatcher with much longer
-// headersTimeout / bodyTimeout than the default 5 min.
-//
-// Why this is needed: Node's global `fetch` uses undici under the hood,
-// and undici's default headersTimeout is 300_000 ms (5 min). When MinerU's
-// API is overloaded or processing a large PDF, the request can hang past
-// that limit and fail with `UND_ERR_HEADERS_TIMEOUT` — a TypeError that
-// says "fetch failed" with cause "Headers Timeout Error". Bumping the
-// timeout to 10 min and adding retry on transient errors fixes this.
-import { Agent } from "undici";
 
 const MINERU_BASE = "https://mineru.net";
 // No hardcoded fallback — must be supplied via env var.
@@ -36,66 +25,48 @@ const POLL_INTERVAL_MS = 3500;
 // and falling through to pdfjs-dist.
 const POLL_TIMEOUT_MS = 600_000; // 10 min cap
 
-// Custom undici dispatcher.
+// We deliberately do NOT import undici as an explicit dependency.
+// Node 20+ ships with undici built-in, and the global `fetch` uses it.
+// Importing `undici` as a top-level dep + adding it to
+// `serverExternalPackages` breaks Next.js 16 Turbopack at page-data
+// collection time with:
+//   "Failed to load external module undici-XXX:
+//    TypeError: webidl.util.markAsUncloneable is not a function"
+// (undici 8.x's internal webidl lib is incompatible with Turbopack's
+// module-cloning runtime on node:20-alpine).
 //
-// Why we don't rely on Node's default global fetch:
-//   1. Default headersTimeout is 5 min — fine when MinerU is healthy, but
-//      offers no margin when there's a network hiccup. We bump to 10 min
-//      as a safety net (NOT because MinerU is slow).
-//   2. Node 20+ prefers IPv6 by default. If the container has IPv6
-//      configured but the route is half-broken (SYN-ACK comes back,
-//      then no data flows), the connection hangs until headersTimeout.
-//      autoSelectFamily = "Happy Eyeballs" — tries both IPv4 and IPv6
-//      in parallel, uses whichever answers first. This is the actual
-//      fix for most "Headers Timeout Error" cases in Docker.
-//   3. keepAlive + longer pipelining windows for the polling loop.
-const mineruAgent = new Agent({
-  headersTimeout: 10 * 60 * 1000, // 10 min — safety net, not the primary fix
-  bodyTimeout: 10 * 60 * 1000,    // 10 min — same
-  connect: {
-    timeout: 30_000,              // 30 s — TCP/TLS handshake
-    // "Happy Eyeballs" (RFC 8305). undici attempts IPv6 first, then IPv4
-    // after this delay. 250ms is the recommended default — short enough
-    // that users don't notice, long enough that IPv6 gets a fair shot.
-    // This is the SINGLE most impactful setting for fixing
-    // UND_ERR_HEADERS_TIMEOUT in Docker deployments.
-  },
-  autoSelectFamily: true,
-  autoSelectFamilyAttemptTimeout: 250,
-  keepAliveTimeout: 60_000,
-  keepAliveMaxTimeout: 300_000,
-});
+// Instead, we rely on:
+//   - Native `fetch` (uses built-in undici, headersTimeout=5min)
+//   - Per-call `AbortController` for shorter, hard wall-clock timeouts
+//   - `fetchWithRetry` for transient-error retry with backoff
+//   - Per-call timing logs so we can see exactly which endpoint hangs
+//
+// The earlier `UND_ERR_HEADERS_TIMEOUT` was likely a downstream symptom
+// of Docker marking the container unhealthy (IPv6 localhost issue in
+// the healthcheck) and killing in-flight requests mid-flight — that's
+// now fixed at the healthcheck level (see docker-compose.yml).
 
-// undici's `fetch` accepts a `dispatcher` option, but TypeScript's DOM
-// `RequestInit` type doesn't include it. We use a small wrapper to inject
-// the dispatcher without littering call sites with `as any` casts.
-//
-// `timeoutMs` is an optional per-call wall-clock limit enforced via
-// AbortController. This is DEFENSE-IN-DEPTH on top of the undici Agent's
-// headersTimeout/bodyTimeout — if those settings somehow don't take effect
-// (e.g. wrong undici version, dispatcher override), AbortController still
-// guarantees the call can't hang forever.
+// Per-call options. `timeoutMs` is enforced via AbortController —
+// this works with native fetch, no undici import needed.
 type MinerURequestInit = RequestInit & {
-  dispatcher?: Agent;
   /** Per-call wall-clock timeout in ms. Default: 30000 (30s). */
   timeoutMs?: number;
 };
 
 /**
- * Wrap fetch with: (a) our custom Agent, (b) per-call AbortController
- * timeout, (c) per-call timing log so we can see EXACTLY which MinerU
- * endpoint hangs and how long it takes.
+ * Wrap fetch with: (a) per-call AbortController timeout, (b) per-call
+ * timing log so we can see EXACTLY which MinerU endpoint hangs and how
+ * long it takes.
  *
  * Sample log lines (success / failure):
- *   [mineru] POST mineru.net/api/v4/file-urls/batch → 200 in 412ms
- *   [mineru] PUT  xxxx.oss-cn-xxx.aliyuncs.com → FAIL (AbortError) after 30012ms: The operation was aborted
+ *   [mineru] POST mineru.net → 200 in 412ms
+ *   [mineru] PUT  xxx.oss-cn-xxx.aliyuncs.com → FAIL (ABORT_TIMEOUT) after 30012ms
  *
  * The host is logged instead of the full URL so presigned OSS URLs
  * (which contain signed query strings) don't leak into logs.
  */
 async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<Response> {
-  const { dispatcher, timeoutMs, ...restInit } = init;
-  const merged: MinerURequestInit = { dispatcher: dispatcher ?? mineruAgent, ...restInit };
+  const { timeoutMs, ...restInit } = init;
   const method = init.method || "GET";
   // Extract host for logging (strip query string, strip path)
   let host = "?";
@@ -108,31 +79,26 @@ async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<R
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   // If caller provided their own signal, propagate its abort to ours.
-  // (No caller currently does, but be safe.)
   if (restInit.signal) {
     const callerSignal = restInit.signal as AbortSignal;
     if (callerSignal.aborted) controller.abort();
     else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
   }
-  merged.signal = controller.signal;
+  restInit.signal = controller.signal;
   const t0 = Date.now();
   try {
-    // Cast to RequestInit — the runtime accepts `dispatcher` even though TS
-    // doesn't know about it.
-    const res = await fetch(url, merged as RequestInit);
+    const res = await fetch(url, restInit);
     const ms = Date.now() - t0;
     console.log(`[mineru] ${method} ${host} → ${res.status} in ${ms}ms`);
     return res;
   } catch (e: any) {
     const ms = Date.now() - t0;
-    // AbortController abort produces e.name === 'AbortError'. undici wraps
-    // it as a TypeError with cause.code === 'UND_ERR_ABORTED' in some
-    // versions. Normalize the code for the retry logic downstream.
+    // AbortController abort produces e.name === 'AbortError'. Native fetch
+    // in Node 20+ wraps it as a TypeError with cause.code === 'UND_ERR_ABORTED'
+    // in some cases. Normalize the code for the retry logic downstream.
     let code = e?.code || e?.cause?.code || "?";
     if (e?.name === "AbortError" || code === "UND_ERR_ABORTED") {
       code = "ABORT_TIMEOUT";
-      // Rewrite the error message so logs make it obvious this was OUR
-      // timeout, not undici's headersTimeout.
       e.message = `Request aborted after ${ms}ms (timeoutMs=${timeout})`;
     }
     console.error(
