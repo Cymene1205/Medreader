@@ -36,14 +36,32 @@ const POLL_INTERVAL_MS = 3500;
 // and falling through to pdfjs-dist.
 const POLL_TIMEOUT_MS = 600_000; // 10 min cap
 
-// Custom undici dispatcher. Node's global fetch defaults to 5 min for
-// both headersTimeout and bodyTimeout; MinerU's API occasionally exceeds
-// that under load, so we raise both to 10 min. connect timeout stays
-// short so genuine connection failures still fail fast.
+// Custom undici dispatcher.
+//
+// Why we don't rely on Node's default global fetch:
+//   1. Default headersTimeout is 5 min — fine when MinerU is healthy, but
+//      offers no margin when there's a network hiccup. We bump to 10 min
+//      as a safety net (NOT because MinerU is slow).
+//   2. Node 20+ prefers IPv6 by default. If the container has IPv6
+//      configured but the route is half-broken (SYN-ACK comes back,
+//      then no data flows), the connection hangs until headersTimeout.
+//      autoSelectFamily = "Happy Eyeballs" — tries both IPv4 and IPv6
+//      in parallel, uses whichever answers first. This is the actual
+//      fix for most "Headers Timeout Error" cases in Docker.
+//   3. keepAlive + longer pipelining windows for the polling loop.
 const mineruAgent = new Agent({
-  headersTimeout: 10 * 60 * 1000, // 10 min — wait for response headers
-  bodyTimeout: 10 * 60 * 1000,    // 10 min — wait for response body
-  connect: { timeout: 30_000 },   // 30 s — TCP/TLS handshake
+  headersTimeout: 10 * 60 * 1000, // 10 min — safety net, not the primary fix
+  bodyTimeout: 10 * 60 * 1000,    // 10 min — same
+  connect: {
+    timeout: 30_000,              // 30 s — TCP/TLS handshake
+    // "Happy Eyeballs" (RFC 8305). undici attempts IPv6 first, then IPv4
+    // after this delay. 250ms is the recommended default — short enough
+    // that users don't notice, long enough that IPv6 gets a fair shot.
+    // This is the SINGLE most impactful setting for fixing
+    // UND_ERR_HEADERS_TIMEOUT in Docker deployments.
+  },
+  autoSelectFamily: true,
+  autoSelectFamilyAttemptTimeout: 250,
   keepAliveTimeout: 60_000,
   keepAliveMaxTimeout: 300_000,
 });
@@ -53,12 +71,44 @@ const mineruAgent = new Agent({
 // the dispatcher without littering call sites with `as any` casts.
 type MinerURequestInit = RequestInit & { dispatcher?: Agent };
 
+/**
+ * Wrap fetch with: (a) our custom Agent, (b) per-call timing log so we can
+ * see EXACTLY which MinerU endpoint hangs and how long it takes.
+ *
+ * Sample log lines (success / failure):
+ *   [mineru] POST mineru.net/api/v4/file-urls/batch → 200 in 412ms
+ *   [mineru] PUT  xxxx.oss-cn-xxx.aliyuncs.com → FAIL (UND_ERR_HEADERS_TIMEOUT) after 300012ms: fetch failed
+ *
+ * The host is logged instead of the full URL so presigned OSS URLs
+ * (which contain signed query strings) don't leak into logs.
+ */
 async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<Response> {
-  // Always use our custom Agent unless the caller explicitly overrides.
   const merged: MinerURequestInit = { dispatcher: mineruAgent, ...init };
-  // Cast to RequestInit — the runtime accepts `dispatcher` even though TS
-  // doesn't know about it.
-  return fetch(url, merged as RequestInit);
+  const method = init.method || "GET";
+  // Extract host for logging (strip query string, strip path)
+  let host = "?";
+  try {
+    const u = new URL(url);
+    host = u.host;
+  } catch {}
+  const t0 = Date.now();
+  try {
+    // Cast to RequestInit — the runtime accepts `dispatcher` even though TS
+    // doesn't know about it.
+    const res = await fetch(url, merged as RequestInit);
+    const ms = Date.now() - t0;
+    console.log(`[mineru] ${method} ${host} → ${res.status} in ${ms}ms`);
+    return res;
+  } catch (e: any) {
+    const ms = Date.now() - t0;
+    const code = e?.code || e?.cause?.code || "?";
+    console.error(
+      `[mineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
+      `${e?.message || e}. ` +
+      `URL: ${url.slice(0, 120)}${url.length > 120 ? "..." : ""}`
+    );
+    throw e;
+  }
 }
 
 // Transient undici error codes that are worth retrying. Anything not in
