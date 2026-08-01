@@ -97,15 +97,37 @@ async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<R
     // in Node 20+ wraps it as a TypeError with cause.code === 'UND_ERR_ABORTED'
     // in some cases. Normalize the code for the retry logic downstream.
     let code = e?.code || e?.cause?.code || "?";
-    if (e?.name === "AbortError" || code === "UND_ERR_ABORTED") {
+    const isAbort = e?.name === "AbortError" || code === "UND_ERR_ABORTED";
+    if (isAbort) {
       code = "ABORT_TIMEOUT";
-      e.message = `Request aborted after ${ms}ms (timeoutMs=${timeout})`;
     }
+    // Do NOT mutate e.message directly. When `e` is a DOMException
+    // (the type AbortController produces), `.message` is a getter-only
+    // property on the prototype — direct assignment throws
+    // "Cannot set property message of which has only a getter",
+    // which masks the real error and bubbles up as a TypeError.
+    const logMsg = isAbort
+      ? `Request aborted after ${ms}ms (timeoutMs=${timeout})`
+      : (e?.message || String(e));
     console.error(
-      `[mineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
-      `${e?.message || e}. ` +
+      `ineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
+      `${logMsg}. ` +
       `URL: ${url.slice(0, 120)}${url.length > 120 ? "..." : ""}`
     );
+    // DOMException.code is a numeric getter (returns 0 for AbortError),
+    // not the string "ABORT_TIMEOUT" we set above. fetchWithRetry reads
+    // e.code to decide whether to retry — if the original error's code
+    // doesn't match our normalized value, wrap it in a plain Error that
+    // carries .code as a real own property.
+    if (e?.code !== code) {
+      const wrapped = new Error(`${code}: ${logMsg}`) as Error & {
+        code?: string;
+        cause?: unknown;
+      };
+      wrapped.code = code;
+      wrapped.cause = e;
+      throw wrapped;
+    }
     throw e;
   } finally {
     clearTimeout(timer);
