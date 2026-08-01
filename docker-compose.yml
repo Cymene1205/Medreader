@@ -50,8 +50,17 @@ services:
 
     # Health check — hit the home page; if it returns 200 the server is up.
     # `start_period: 60s` gives Next.js + Prisma time to boot on first run.
+    #
+    # ⚠️ MUST use 127.0.0.1, NOT localhost:
+    #   Docker containers' /etc/hosts maps `localhost` to BOTH 127.0.0.1 (IPv4)
+    #   AND ::1 (IPv6). Node 20+ and wget prefer IPv6 by default. But Next.js
+    #   standalone server binds to 0.0.0.0 (IPv4 only) — no IPv6 listener
+    #   exists. So a `localhost` probe tries ::1 first, gets Connection
+    #   refused, and the container is marked unhealthy even though the app
+    #   is fine. This caused FailingStreak=37 in production.
+    #   Using 127.0.0.1 forces IPv4 and matches the actual listener.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 5s
       retries: 3

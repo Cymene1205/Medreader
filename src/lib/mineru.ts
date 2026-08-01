@@ -69,21 +69,33 @@ const mineruAgent = new Agent({
 // undici's `fetch` accepts a `dispatcher` option, but TypeScript's DOM
 // `RequestInit` type doesn't include it. We use a small wrapper to inject
 // the dispatcher without littering call sites with `as any` casts.
-type MinerURequestInit = RequestInit & { dispatcher?: Agent };
+//
+// `timeoutMs` is an optional per-call wall-clock limit enforced via
+// AbortController. This is DEFENSE-IN-DEPTH on top of the undici Agent's
+// headersTimeout/bodyTimeout — if those settings somehow don't take effect
+// (e.g. wrong undici version, dispatcher override), AbortController still
+// guarantees the call can't hang forever.
+type MinerURequestInit = RequestInit & {
+  dispatcher?: Agent;
+  /** Per-call wall-clock timeout in ms. Default: 30000 (30s). */
+  timeoutMs?: number;
+};
 
 /**
- * Wrap fetch with: (a) our custom Agent, (b) per-call timing log so we can
- * see EXACTLY which MinerU endpoint hangs and how long it takes.
+ * Wrap fetch with: (a) our custom Agent, (b) per-call AbortController
+ * timeout, (c) per-call timing log so we can see EXACTLY which MinerU
+ * endpoint hangs and how long it takes.
  *
  * Sample log lines (success / failure):
  *   [mineru] POST mineru.net/api/v4/file-urls/batch → 200 in 412ms
- *   [mineru] PUT  xxxx.oss-cn-xxx.aliyuncs.com → FAIL (UND_ERR_HEADERS_TIMEOUT) after 300012ms: fetch failed
+ *   [mineru] PUT  xxxx.oss-cn-xxx.aliyuncs.com → FAIL (AbortError) after 30012ms: The operation was aborted
  *
  * The host is logged instead of the full URL so presigned OSS URLs
  * (which contain signed query strings) don't leak into logs.
  */
 async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<Response> {
-  const merged: MinerURequestInit = { dispatcher: mineruAgent, ...init };
+  const { dispatcher, timeoutMs, ...restInit } = init;
+  const merged: MinerURequestInit = { dispatcher: dispatcher ?? mineruAgent, ...restInit };
   const method = init.method || "GET";
   // Extract host for logging (strip query string, strip path)
   let host = "?";
@@ -91,6 +103,18 @@ async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<R
     const u = new URL(url);
     host = u.host;
   } catch {}
+  // Set up AbortController for hard wall-clock timeout.
+  const timeout = timeoutMs ?? 30_000; // default 30s
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  // If caller provided their own signal, propagate its abort to ours.
+  // (No caller currently does, but be safe.)
+  if (restInit.signal) {
+    const callerSignal = restInit.signal as AbortSignal;
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  merged.signal = controller.signal;
   const t0 = Date.now();
   try {
     // Cast to RequestInit — the runtime accepts `dispatcher` even though TS
@@ -101,13 +125,24 @@ async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<R
     return res;
   } catch (e: any) {
     const ms = Date.now() - t0;
-    const code = e?.code || e?.cause?.code || "?";
+    // AbortController abort produces e.name === 'AbortError'. undici wraps
+    // it as a TypeError with cause.code === 'UND_ERR_ABORTED' in some
+    // versions. Normalize the code for the retry logic downstream.
+    let code = e?.code || e?.cause?.code || "?";
+    if (e?.name === "AbortError" || code === "UND_ERR_ABORTED") {
+      code = "ABORT_TIMEOUT";
+      // Rewrite the error message so logs make it obvious this was OUR
+      // timeout, not undici's headersTimeout.
+      e.message = `Request aborted after ${ms}ms (timeoutMs=${timeout})`;
+    }
     console.error(
       `[mineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
       `${e?.message || e}. ` +
       `URL: ${url.slice(0, 120)}${url.length > 120 ? "..." : ""}`
     );
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -118,6 +153,7 @@ const TRANSIENT_ERR_CODES = new Set([
   "UND_ERR_BODY_TIMEOUT",    // server stopped sending body mid-stream
   "UND_ERR_CONNECT_TIMEOUT", // couldn't establish TCP connection in time
   "UND_ERR_SOCKET",          // socket closed unexpectedly
+  "ABORT_TIMEOUT",           // our own AbortController fired (per-call timeout)
   "ECONNRESET",              // TCP RST from peer or load balancer
   "ECONNREFUSED",            // server not listening (might come back up)
   "ENOTFOUND",               // DNS lookup failed (might be transient)
@@ -224,9 +260,13 @@ type BatchStatus = {
 export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
   // Step 1: request presigned upload URLs.
   // Retry on transient errors (MinerU API can be overloaded).
+  // POST submit is a tiny JSON request to a fast endpoint — normally
+  // returns in <1s. 30s timeout is generous; if it takes longer,
+  // something is wrong and we should retry rather than hang.
   const fileName = basename(filePath);
   const submitRes = await fetchWithRetry(`${MINERU_BASE}/api/v4/file-urls/batch`, {
     method: "POST",
+    timeoutMs: 30_000,
     headers: {
       Authorization: `Bearer ${MINERU_TOKEN}`,
       "Content-Type": "application/json",
@@ -259,9 +299,13 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
   // Step 2: PUT the file to the presigned URL. Note: do NOT send
   // Content-Type header — OSS will reject it.
   // Retry on transient errors (network blips during large upload).
+  // Timeout scales with file size: 30s per MB, capped at 5 min.
+  // A 5MB PDF gets 150s; a 30MB PDF gets 300s (5 min cap).
   const fileBuffer = await readFile(filePath);
+  const putTimeoutMs = Math.min(5 * 60 * 1000, 30_000 * Math.max(1, Math.ceil(fileBuffer.length / (1024 * 1024))));
   const putRes = await fetchWithRetry(fileUrls[0], {
     method: "PUT",
+    timeoutMs: putTimeoutMs,
     body: fileBuffer,
     headers: {
       // OSS requires the body to be sent as raw bytes; specifying
@@ -290,7 +334,7 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
     try {
       resp = await mineruFetch(
         `${MINERU_BASE}/api/v4/extract-results/batch/${batchId}`,
-        { headers: { Authorization: `Bearer ${MINERU_TOKEN}`, Accept: "*/*" } }
+        { headers: { Authorization: `Bearer ${MINERU_TOKEN}`, Accept: "*/*" }, timeoutMs: 30_000 }
       );
     } catch (e) {
       console.warn("[mineru] poll fetch error:", e);
@@ -328,7 +372,8 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
 async function downloadAndExtract(zipUrl: string, originalPath: string): Promise<MinerUResult> {
   // Use the custom Agent (longer timeouts) and retry on transient errors.
   // MinerU's OSS-hosted zip can be slow to start streaming for large PDFs.
-  const zipRes = await fetchWithRetry(zipUrl, { method: "GET" });
+  // Zip is typically 1-30MB; 180s gives margin for slow connections.
+  const zipRes = await fetchWithRetry(zipUrl, { method: "GET", timeoutMs: 180_000 });
   if (!zipRes.ok) {
     throw new Error(`MinerU zip download failed ${zipRes.status}`);
   }
