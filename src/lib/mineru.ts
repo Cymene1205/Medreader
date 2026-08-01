@@ -1,18 +1,33 @@
 /**
- * MinerU Cloud API client.
+ * MinerU Cloud API client (URL-pull mode).
+ *
+ * IMPORTANT — 2026-08-01 switch:
+ *   We previously used /api/v4/file-urls/batch, which returns OSS presigned
+ *   PUT URLs and requires the client to upload the PDF to OSS. On Alibaba
+ *   Cloud Lightweight Server (2 vCPU / 2 GiB / ~3 Mbps public uplink),
+ *   PUT-ing a 5 MB medical PDF to oss-cn-shanghai kept timing out after
+ *   5 minutes (ABORT_TIMEOUT, retried 3x, total 15 min) because the
+ *   public uplink is too slow to push the file before OSS presigned URL
+ *   signature expiry. The container was healthy, network to mineru.net
+ *   was fine — only the upstream bandwidth to OSS was the bottleneck.
+ *
+ *   Switched to /api/v4/extract/task/batch (URL-pull mode): we POST a
+ *   short JSON containing a public URL pointing back to OUR server, and
+ *   MinerU's backend downloads the PDF itself. Our server's downstream
+ *   bandwidth is 100 Mbps+, so MinerU can pull the file in milliseconds.
+ *
+ * Flow (URL-pull mode):
+ *   1. POST /api/v4/extract/task/batch  with files[].url = our public PDF URL
+ *      → returns batch_id
+ *   2. GET  /api/v4/extract-results/batch/{batch_id}  → poll state
+ *   3. When state === "done", download full_zip_url, unzip, read full.md
+ *      + content_list.json (block-level structure with page_idx/bbox)
  *
  * Reference: https://mineru.net/apiManage/docs
- *
- * Flow (精准解析 / batch upload mode):
- *   1. POST /api/v4/file-urls/batch  → get presigned OSS URLs + batch_id
- *   2. PUT each file to its presigned URL (no Content-Type header)
- *   3. GET  /api/v4/extract-results/batch/{batch_id}  → poll state
- *   4. When state === "done", download full_zip_url, unzip, read full.md
- *      + content_list.json (block-level structure with page_idx/bbox)
  */
 
 import JSZip from "jszip";
-import { readFile, mkdir, writeFile, rm, readdir } from "fs/promises";
+import { readFile, mkdir, writeFile, readdir } from "fs/promises";
 import { join, basename, dirname } from "path";
 
 const MINERU_BASE = "https://mineru.net";
@@ -25,27 +40,6 @@ const POLL_INTERVAL_MS = 3500;
 // and falling through to pdfjs-dist.
 const POLL_TIMEOUT_MS = 600_000; // 10 min cap
 
-// We deliberately do NOT import undici as an explicit dependency.
-// Node 20+ ships with undici built-in, and the global `fetch` uses it.
-// Importing `undici` as a top-level dep + adding it to
-// `serverExternalPackages` breaks Next.js 16 Turbopack at page-data
-// collection time with:
-//   "Failed to load external module undici-XXX:
-//    TypeError: webidl.util.markAsUncloneable is not a function"
-// (undici 8.x's internal webidl lib is incompatible with Turbopack's
-// module-cloning runtime on node:20-alpine).
-//
-// Instead, we rely on:
-//   - Native `fetch` (uses built-in undici, headersTimeout=5min)
-//   - Per-call `AbortController` for shorter, hard wall-clock timeouts
-//   - `fetchWithRetry` for transient-error retry with backoff
-//   - Per-call timing logs so we can see exactly which endpoint hangs
-//
-// The earlier `UND_ERR_HEADERS_TIMEOUT` was likely a downstream symptom
-// of Docker marking the container unhealthy (IPv6 localhost issue in
-// the healthcheck) and killing in-flight requests mid-flight — that's
-// now fixed at the healthcheck level (see docker-compose.yml).
-
 // Per-call options. `timeoutMs` is enforced via AbortController —
 // this works with native fetch, no undici import needed.
 type MinerURequestInit = RequestInit & {
@@ -57,13 +51,6 @@ type MinerURequestInit = RequestInit & {
  * Wrap fetch with: (a) per-call AbortController timeout, (b) per-call
  * timing log so we can see EXACTLY which MinerU endpoint hangs and how
  * long it takes.
- *
- * Sample log lines (success / failure):
- *   [mineru] POST mineru.net → 200 in 412ms
- *   [mineru] PUT  xxx.oss-cn-xxx.aliyuncs.com → FAIL (ABORT_TIMEOUT) after 30012ms
- *
- * The host is logged instead of the full URL so presigned OSS URLs
- * (which contain signed query strings) don't leak into logs.
  */
 async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<Response> {
   const { timeoutMs, ...restInit } = init;
@@ -110,7 +97,7 @@ async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<R
       ? `Request aborted after ${ms}ms (timeoutMs=${timeout})`
       : (e?.message || String(e));
     console.error(
-      `ineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
+      `[mineru] ${method} ${host} → FAIL (${code}) after ${ms}ms: ` +
       `${logMsg}. ` +
       `URL: ${url.slice(0, 120)}${url.length > 120 ? "..." : ""}`
     );
@@ -151,15 +138,6 @@ const TRANSIENT_ERR_CODES = new Set([
 
 /**
  * Fetch with retry on transient failures and 5xx server errors.
- * - Network-level errors (timeouts, RST, DNS) → retry if code is in
- *   TRANSIENT_ERR_CODES.
- * - HTTP 5xx responses → retry (server may be overloaded).
- * - HTTP 4xx → never retry (client error, won't fix itself).
- * - HTTP 2xx → return immediately.
- *
- * Uses linear backoff: 1s, 2s, 3s for 3 attempts. Total worst-case
- * delay before giving up on a single call is ~6s plus the final
- * (failed) request's own timeout.
  */
 async function fetchWithRetry(
   url: string,
@@ -214,13 +192,7 @@ export type MinerUBlock = {
   table_caption?: string;
   table_footnote?: string;
   // ⚠️ MinerU vlm mode emits BOTH chart_caption AND image_caption as ARRAYS
-  // of strings — NOT flat strings. Typical content:
-  //   chart_caption: ["Figure 2. SiglecF^hi neutrophils populate..."]
-  //   image_caption: ["G", "Single-cell regulatory network inference (SCENIC)",
-  //                   "Figure 1. Single-cell RNA (scRNA)-seq reveals..."]
-  // The last item that starts with "Figure N" is the real caption; earlier
-  // items are panel labels (A, B, C, G, ...). The Figure-extraction code in
-  // src/lib/extract-figures.ts iterates the array and picks the "Figure N" item.
+  // of strings — NOT flat strings.
   chart_caption?: string[];
   chart_footnote?: string[];
   image_caption?: string[];
@@ -242,17 +214,24 @@ type BatchStatus = {
 };
 
 /**
- * Upload a local PDF file to MinerU, poll for completion, then download
- * and unzip the result. Returns the markdown + blocks.
+ * Submit a PDF (by public URL) to MinerU for extraction.
+ *
+ * Uses /api/v4/extract/task/batch (URL-pull mode) instead of the
+ * legacy /api/v4/file-urls/batch (OSS PUT mode). See file header
+ * comment for the rationale.
+ *
+ * @param pdfPublicUrl  Public URL MinerU's backend can fetch. Must be
+ *                      reachable from the public internet (no login
+ *                      required). The /api/paper/[id]/pdf route on our
+ *                      own server serves this — see upload/route.ts.
+ * @param fileName      Original filename, used as data_id for tracing.
+ * @returns             batch_id to poll with pollBatchStatus().
  */
-export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
-  // Step 1: request presigned upload URLs.
-  // Retry on transient errors (MinerU API can be overloaded).
-  // POST submit is a tiny JSON request to a fast endpoint — normally
-  // returns in <1s. 30s timeout is generous; if it takes longer,
-  // something is wrong and we should retry rather than hang.
-  const fileName = basename(filePath);
-  const submitRes = await fetchWithRetry(`${MINERU_BASE}/api/v4/file-urls/batch`, {
+export async function submitToMinerU(
+  pdfPublicUrl: string,
+  fileName: string
+): Promise<string> {
+  const submitRes = await fetchWithRetry(`${MINERU_BASE}/api/v4/extract/task/batch`, {
     method: "POST",
     timeoutMs: 30_000,
     headers: {
@@ -261,7 +240,7 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
       Accept: "*/*",
     },
     body: JSON.stringify({
-      files: [{ name: fileName, is_ocr: false, data_id: fileName }],
+      files: [{ url: pdfPublicUrl, is_ocr: false, data_id: fileName }],
       // vlm = best for scientific PDFs with tables/equations/figures
       model_version: "vlm",
       enable_formula: true,
@@ -279,37 +258,35 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
     throw new Error(`MinerU submit error: ${JSON.stringify(submitJson)}`);
   }
   const batchId: string = submitJson.data.batch_id;
-  const fileUrls: string[] = submitJson.data.file_urls;
-  if (!batchId || !fileUrls || fileUrls.length === 0) {
-    throw new Error(`MinerU submit missing batch_id / file_urls: ${JSON.stringify(submitJson)}`);
+  if (!batchId) {
+    throw new Error(`MinerU submit missing batch_id: ${JSON.stringify(submitJson)}`);
   }
+  return batchId;
+}
 
-  // Step 2: PUT the file to the presigned URL. Note: do NOT send
-  // Content-Type header — OSS will reject it.
-  // Retry on transient errors (network blips during large upload).
-  // Timeout scales with file size: 30s per MB, capped at 5 min.
-  // A 5MB PDF gets 150s; a 30MB PDF gets 300s (5 min cap).
-  const fileBuffer = await readFile(filePath);
-  const putTimeoutMs = Math.min(5 * 60 * 1000, 30_000 * Math.max(1, Math.ceil(fileBuffer.length / (1024 * 1024))));
-  const putRes = await fetchWithRetry(fileUrls[0], {
-    method: "PUT",
-    timeoutMs: putTimeoutMs,
-    body: fileBuffer,
-    headers: {
-      // OSS requires the body to be sent as raw bytes; specifying
-      // Content-Type breaks the signature.
-    },
-  });
-  if (!putRes.ok) {
-    const txt = await putRes.text();
-    throw new Error(`MinerU PUT upload failed ${putRes.status}: ${txt.slice(0, 300)}`);
-  }
+/**
+ * Upload a local PDF file to MinerU, poll for completion, then download
+ * and unzip the result.
+ *
+ * NOTE: In URL-pull mode, this function does NOT upload the PDF bytes
+ * anywhere. It only tells MinerU "go fetch the PDF from this URL".
+ * The caller is responsible for ensuring the PDF is publicly reachable
+ * at `pdfPublicUrl` BEFORE calling this function.
+ */
+export async function parseWithMinerU(
+  localFilePath: string,
+  pdfPublicUrl: string
+): Promise<MinerUResult> {
+  const fileName = basename(localFilePath);
 
-  // Step 3: poll batch status.
+  // Step 1: submit URL to MinerU (no PUT step anymore).
+  const batchId = await submitToMinerU(pdfPublicUrl, fileName);
+
+  // Step 2: poll batch status.
   const status = await pollBatchStatus(batchId);
 
-  // Step 4: download and unzip.
-  return await downloadAndExtract(status.full_zip_url!, filePath);
+  // Step 3: download and unzip.
+  return await downloadAndExtract(status.full_zip_url!, localFilePath);
 }
 
 async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string; pageCount: number }> {
@@ -358,7 +335,6 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
 }
 
 async function downloadAndExtract(zipUrl: string, originalPath: string): Promise<MinerUResult> {
-  // Use the custom Agent (longer timeouts) and retry on transient errors.
   // MinerU's OSS-hosted zip can be slow to start streaming for large PDFs.
   // Zip is typically 1-30MB; 180s gives margin for slow connections.
   const zipRes = await fetchWithRetry(zipUrl, { method: "GET", timeoutMs: 180_000 });
@@ -410,10 +386,6 @@ async function downloadAndExtract(zipUrl: string, originalPath: string): Promise
     await writeFile(join(imagesDir, name), data);
   }
 
-  // Rewrite image paths in markdown from images/xxx.jpg → absolute /api/paper-images/... later
-  // (BlockReader will handle relative → served-URL mapping)
-  // For now keep the original markdown; BlockReader uses blocks JSON which has img_path.
-
   // Page count: max page_idx + 1, fallback 0
   const pageCount =
     blocks.reduce((m, b) => Math.max(m, (b.page_idx ?? 0) + 1), 0) || 0;
@@ -427,29 +399,10 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Extract the paper title from MinerU blocks.
- *
- * MinerU usually emits the article title as one of the first few text blocks
- * on page 0, often (but not always) with text_level === 1. This function
- * scans the first ~15 blocks of page 0 and picks the most title-like text.
- *
- * Heuristics (in priority order):
- *   1. First text_level === 1 block that's > 15 chars and doesn't look like
- *      a section name (Abstract, Introduction, Methods, Results, etc.)
- *   2. First text block that:
- *        - is on page_idx 0
- *        - is not a page_number / header / footer
- *        - is between 20 and 280 chars
- *        - doesn't start with a section keyword
- *        - doesn't look like a date / DOI / email / author affiliation
- *   3. Fallback: return null (caller keeps the filename)
- *
- * The goal is "usually right" — when uncertain, we return null and let the
- * caller keep the original filename rather than guess wrong.
  */
 export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
   if (!Array.isArray(blocks) || blocks.length === 0) return null;
 
-  // Section keywords that should NOT be treated as titles
   const sectionKeywords = [
     "abstract", "introduction", "methods", "materials",
     "results", "discussion", "conclusion", "references",
@@ -457,23 +410,22 @@ export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
     "摘要", "引言", "方法", "结果", "讨论", "结论", "参考文献",
   ];
 
-  // Patterns that indicate "not a title"
   const notTitlePatterns = [
-    /^https?:\/\//i,         // URLs
-    /^doi:\s*/i,             // DOIs
-    /^\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{2,4}/,  // Dates
-    /^\w+\s+\d{1,2},?\s*\d{4}$/,                    // "January 15, 2020"
-    /^[\w.+-]+@[\w.-]+\.\w+$/,                      // Email
-    /^vol\.?\s*\d+/i,        // Volume markers
-    /^issue\s*\d+/i,         // Issue markers
-    /^page\s*\d+/i,          // Page markers
+    /^https?:\/\//i,
+    /^doi:\s*/i,
+    /^\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{2,4}/,
+    /^\w+\s+\d{1,2},?\s*\d{4}$/,
+    /^[\w.+-]+@[\w.-]+\.\w+$/,
+    /^vol\.?\s*\d+/i,
+    /^issue\s*\d+/i,
+    /^page\s*\d+/i,
     /^manuscript\s/i,
     /^article\s/i,
     /^research\s+article\s*$/i,
     /^received\s*:/i,
     /^accepted\s*:/i,
     /^published\s*:/i,
-    /^©\s*\d{4}/i,           // Copyright
+    /^©\s*\d{4}/i,
     /^corresponding author/i,
     /^author contributions/i,
     /^author contribution$/i,
@@ -487,7 +439,6 @@ export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
   const isLikelyNotTitle = (text: string): boolean => {
     const lower = text.toLowerCase().trim();
     if (lower.length === 0) return true;
-    // Section keyword (exact match or "starts with keyword + colon/space")
     for (const kw of sectionKeywords) {
       if (lower === kw) return true;
       if (lower.startsWith(kw + ":") || lower.startsWith(kw + " —") || lower.startsWith(kw + " -")) {
@@ -497,21 +448,15 @@ export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
     for (const pat of notTitlePatterns) {
       if (pat.test(text.trim())) return true;
     }
-    // Pure author list: "Smith J, Brown K, Lee A et al." — usually short
-    // and full of commas. Skip if it has > 3 commas and < 100 chars.
     const commaCount = (text.match(/,/g) || []).length;
     if (commaCount >= 3 && text.length < 100) return true;
-    // Just numbers
     if (/^\d+$/.test(text.trim())) return true;
-    // Affiliation marker (starts with digit+superscript marker or "*")
     if (/^\d+\s/.test(text.trim()) && text.length < 80) return true;
     if (/^\*\s/.test(text.trim())) return true;
-    // All-caps short text (journal name like "NATURE", "CELL")
     if (text === text.toUpperCase() && text.length < 30 && /^[A-Z\s]+$/.test(text)) return true;
     return false;
   };
 
-  // Step 1: prefer a text_level === 1 block on page_idx 0 in the first ~15 blocks
   const head = blocks.slice(0, 20);
   const page0Headings = head.filter(
     (b) =>
@@ -527,7 +472,6 @@ export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
     return page0Headings[0].text!.trim().slice(0, 280);
   }
 
-  // Step 2: scan first ~15 page-0 text blocks for the first title-like text
   const page0Texts = head.filter(
     (b) =>
       (b.type === "text" || b.type === "title") &&
@@ -543,7 +487,6 @@ export function extractPaperTitle(blocks: MinerUBlock[]): string | null {
     }
   }
 
-  // Step 3: fallback — return null (caller keeps filename)
   return null;
 }
 
@@ -555,34 +498,24 @@ export function mapImagePath(imgPath: string | undefined, imagesDir: string | nu
   if (!imgPath) return null;
   const name = basename(imgPath);
   if (!imagesDir) return null;
-  // Encode imagesDir as query param; the route reads file from disk.
   return `/api/paper-images?dir=${encodeURIComponent(imagesDir)}&name=${encodeURIComponent(name)}`;
 }
 
 /**
  * Extract a plain-text representation of the markdown by stripping
- * markdown syntax. Used as fallback context for chat when blocks are
- * not yet loaded on the client, and as the analyze prompt input.
+ * markdown syntax.
  */
 export function markdownToPlainText(md: string): string {
   return md
-    // Remove image syntax
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "[图片]")
-    // Remove link syntax, keep text
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    // Remove bold/italic
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/__([^_]+)__/g, "$1")
-    // Remove heading markers
+    .replace(/__([^_]+)__/, "$1")
     .replace(/^#{1,6}\s+/gm, "")
-    // Remove code blocks
     .replace(/```[\s\S]*?```/g, "[代码块]")
-    // Remove inline code
     .replace(/`([^`]+)`/g, "$1")
-    // Remove blockquotes
     .replace(/^>\s+/gm, "")
-    // Collapse multiple blank lines
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

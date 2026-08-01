@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mkdirSync, writeFileSync } from "fs";
 import { join, extname } from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, createHmac } from "crypto";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -65,9 +65,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Size check — 50 MB hard cap. The client also enforces this, but we
-    // double-check on the server so a malicious or buggy client can't
-    // exceed the limit.
+    // Size check — 50 MB hard cap.
     if (file.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         {
@@ -100,10 +98,41 @@ export async function POST(req: NextRequest) {
 
     trackEvent(userId, "upload_pdf", originalName).catch(() => {});
 
+    // Generate a signed public URL that MinerU can fetch anonymously.
+    //
+    // The PDF route (/api/paper/[id]/pdf) serves the file, but normally
+    // requires a session cookie. We generate an HMAC-signed token using
+    // NEXTAUTH_SECRET and pass it as ?token=<paperId>.<hmac>. The PDF
+    // route verifies this token in constant time and serves the file
+    // without auth.
+    //
+    // The public base URL is read from NEXTAUTH_URL (which must be set
+    // to the externally reachable URL, e.g. http://1.2.3.4:3000).
+    const publicBaseUrl = (process.env.NEXTAUTH_URL || "").replace(/\/+$/, "");
+    if (!publicBaseUrl) {
+      // Can't generate a public URL — MinerU can't pull the PDF.
+      // Fail fast so the user sees a clear error instead of a 15-min hang.
+      await db.paper.update({
+        where: { id: paper.id },
+        data: { parseStatus: "error" },
+      }).catch(() => {});
+      return NextResponse.json(
+        {
+          error:
+            "Server misconfigured: NEXTAUTH_URL is not set. MinerU URL-pull mode requires a public base URL.",
+          code: "NEXTAUTH_URL_MISSING",
+        },
+        { status: 500 }
+      );
+    }
+    const pullToken = signPullToken(paper.id);
+    const pdfPublicUrl = `${publicBaseUrl}/api/paper/${paper.id}/pdf?token=${pullToken}`;
+    console.log(`[upload] generated pull URL for paper ${paper.id}: ${publicBaseUrl}/api/paper/${paper.id}/pdf?token=${pullToken.slice(0, paper.id.length + 4)}...`);
+
     // Fire-and-forget background parsing using MinerU.
     // CRITICAL: must NEVER reject — attach .catch() to prevent the
     // process from being killed by an unhandled rejection.
-    parsePdfBackground(paper.id, storedPath).catch((e) => {
+    parsePdfBackground(paper.id, storedPath, pdfPublicUrl).catch((e) => {
       console.error(`[upload] background parse crashed for ${paper.id}:`, e);
       // Last-ditch effort to mark as error in DB
       db.paper
@@ -127,26 +156,36 @@ export async function POST(req: NextRequest) {
 }
 
 /**
+ * Generate a pull token: <paperId>.<hex-hmac-sha256(paperId, NEXTAUTH_SECRET)>
+ *
+ * Verified by /api/paper/[id]/pdf/route.ts via verifyPullToken.
+ */
+function signPullToken(paperId: string): string {
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret) {
+    throw new Error("NEXTAUTH_SECRET is not set — cannot sign pull token");
+  }
+  const hmac = createHmac("sha256", secret).update(paperId).digest("hex");
+  return `${paperId}.${hmac}`;
+}
+
+/**
  * Run MinerU in the background, store markdown + blocks + imagesDir.
  * Falls back to pdfjs-dist only on MinerU failure (and stores plain
  * text only, no blocks).
+ *
+ * In URL-pull mode (new), `pdfPublicUrl` is the signed public URL
+ * MinerU will fetch. We pass it straight through to parseWithMinerU.
  */
-async function parsePdfBackground(paperId: string, filePath: string): Promise<void> {
+async function parsePdfBackground(
+  paperId: string,
+  filePath: string,
+  pdfPublicUrl: string
+): Promise<void> {
   try {
-    const result = await parseWithMinerU(filePath);
+    const result = await parseWithMinerU(filePath, pdfPublicUrl);
 
     // Extract figures + citations BEFORE marking the paper as "done".
-    //
-    // Why order matters:
-    //   The frontend polls /api/paper/[id] and, on parseStatus="done",
-    //   immediately fetches /api/figures. If we set "done" first and then
-    //   run extractAndStoreFigures, the frontend sees "done" + empty
-    //   figures array and marks figuresStatus="idle" — never retrying.
-    //   Result: figures never appear until the user manually refreshes.
-    //
-    // By extracting first and only then flipping parseStatus to "done",
-    // the frontend's first figures fetch will see the full list.
-    // Extraction is pure-code (no LLM), takes <2s for a typical paper.
     let figCount = 0;
     try {
       const { extractAndStoreFigures } = await import("@/lib/extract-figures");
@@ -163,8 +202,7 @@ async function parsePdfBackground(paperId: string, filePath: string): Promise<vo
       console.warn(`[upload] buildCitationsAndStore failed (non-fatal) for ${paperId}:`, e);
     }
 
-    // Now flip parseStatus to "done" — frontend will see done + figures
-    // already populated.
+    // Now flip parseStatus to "done".
     await db.paper.update({
       where: { id: paperId },
       data: {
@@ -188,11 +226,8 @@ async function parsePdfBackground(paperId: string, filePath: string): Promise<vo
         data: {
           parseStatus: "done",
           parsedText: text,
-          // No markdown / blocks available in fallback mode
         },
       });
-      // In pdfjs fallback mode there are no image blocks, so we can't extract
-      // figures. But we can still build citations from the plain text.
       try {
         const { buildCitationsAndStore } = await import("@/lib/align-citations");
         const cites = await buildCitationsAndStore(paperId);

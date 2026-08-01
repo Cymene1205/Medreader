@@ -33,6 +33,16 @@ import { NextRequest, NextResponse } from "next/server";
  *   The middleware must NOT 401 them — otherwise the shared-paper link
  *   recipient (not logged in) cannot ask questions about the paper.
  *
+ * SPECIAL CASE — MinerU PDF pull:
+ *   `/api/paper/[id]/pdf` normally requires a session cookie (it's
+ *   caught by the `api/paper/*` matcher below). But when MinerU's
+ *   backend fetches the PDF during parsing, it has no session cookie.
+ *   We let it through IF AND ONLY IF the request carries a `?token=`
+ *   query param. The route handler verifies the token (HMAC over
+ *   paperId signed with NEXTAUTH_SECRET) — so allowing the request
+ *   to reach the handler is safe; the handler will 403 if the token
+ *   is wrong or missing.
+ *
  * Behavior on missing session cookie:
  *   - For protected `/api/*` routes → 401 JSON `{ error: "请先登录", code: "UNAUTHORIZED" }`
  *     (so the frontend can show a friendly "请先登录" toast and redirect
@@ -51,6 +61,19 @@ export function middleware(req: NextRequest) {
 
   // Root is the public landing page — never protect it.
   if (pathname === "/") {
+    return NextResponse.next();
+  }
+
+  // MinerU PDF pull bypass: if this is a /api/paper/[id]/pdf request
+  // with a ?token= query param, let it through to the handler. The
+  // handler does its own HMAC verification; if the token is bad it
+  // returns 403. This keeps the middleware simple (no crypto in edge
+  // runtime) while still allowing anonymous MinerU fetches.
+  if (
+    pathname.startsWith("/api/paper/") &&
+    pathname.endsWith("/pdf") &&
+    req.nextUrl.searchParams.has("token")
+  ) {
     return NextResponse.next();
   }
 
