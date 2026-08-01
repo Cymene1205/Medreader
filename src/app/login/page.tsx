@@ -56,14 +56,6 @@ function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4 py-10">
       <Card className="w-full max-w-sm shadow-md">
         <CardHeader className="space-y-2 items-center text-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/biorhythm-avatar.jpg"
-            alt="行止集 BioRhythm"
-            width={72}
-            height={72}
-            className="rounded-full border-2 border-primary/20 shadow-sm object-cover"
-          />
           <div className="flex items-center justify-center gap-2">
             <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center shadow-sm">
               <BookOpen className="h-3.5 w-3.5 text-primary-foreground" />
