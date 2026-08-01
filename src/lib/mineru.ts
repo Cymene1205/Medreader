@@ -14,13 +14,118 @@
 import JSZip from "jszip";
 import { readFile, mkdir, writeFile, rm, readdir } from "fs/promises";
 import { join, basename, dirname } from "path";
+// undici is Node's built-in fetch implementation. We import its Agent
+// class so we can construct a custom dispatcher with much longer
+// headersTimeout / bodyTimeout than the default 5 min.
+//
+// Why this is needed: Node's global `fetch` uses undici under the hood,
+// and undici's default headersTimeout is 300_000 ms (5 min). When MinerU's
+// API is overloaded or processing a large PDF, the request can hang past
+// that limit and fail with `UND_ERR_HEADERS_TIMEOUT` — a TypeError that
+// says "fetch failed" with cause "Headers Timeout Error". Bumping the
+// timeout to 10 min and adding retry on transient errors fixes this.
+import { Agent } from "undici";
 
 const MINERU_BASE = "https://mineru.net";
 // No hardcoded fallback — must be supplied via env var.
 // On missing token, calls will fail fast with a clear auth error.
 const MINERU_TOKEN = process.env.MINERU_API_TOKEN || "";
 const POLL_INTERVAL_MS = 3500;
-const POLL_TIMEOUT_MS = 180_000; // 3 min cap
+// vlm mode on large scientific PDFs (30+ pages, lots of figures/tables)
+// can take 4-6 minutes. Give polling a 10-min ceiling before giving up
+// and falling through to pdfjs-dist.
+const POLL_TIMEOUT_MS = 600_000; // 10 min cap
+
+// Custom undici dispatcher. Node's global fetch defaults to 5 min for
+// both headersTimeout and bodyTimeout; MinerU's API occasionally exceeds
+// that under load, so we raise both to 10 min. connect timeout stays
+// short so genuine connection failures still fail fast.
+const mineruAgent = new Agent({
+  headersTimeout: 10 * 60 * 1000, // 10 min — wait for response headers
+  bodyTimeout: 10 * 60 * 1000,    // 10 min — wait for response body
+  connect: { timeout: 30_000 },   // 30 s — TCP/TLS handshake
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 300_000,
+});
+
+// undici's `fetch` accepts a `dispatcher` option, but TypeScript's DOM
+// `RequestInit` type doesn't include it. We use a small wrapper to inject
+// the dispatcher without littering call sites with `as any` casts.
+type MinerURequestInit = RequestInit & { dispatcher?: Agent };
+
+async function mineruFetch(url: string, init: MinerURequestInit = {}): Promise<Response> {
+  // Always use our custom Agent unless the caller explicitly overrides.
+  const merged: MinerURequestInit = { dispatcher: mineruAgent, ...init };
+  // Cast to RequestInit — the runtime accepts `dispatcher` even though TS
+  // doesn't know about it.
+  return fetch(url, merged as RequestInit);
+}
+
+// Transient undici error codes that are worth retrying. Anything not in
+// this set (e.g. EACCES, EPERM) is a permanent failure and should bubble.
+const TRANSIENT_ERR_CODES = new Set([
+  "UND_ERR_HEADERS_TIMEOUT", // server took too long to send response headers
+  "UND_ERR_BODY_TIMEOUT",    // server stopped sending body mid-stream
+  "UND_ERR_CONNECT_TIMEOUT", // couldn't establish TCP connection in time
+  "UND_ERR_SOCKET",          // socket closed unexpectedly
+  "ECONNRESET",              // TCP RST from peer or load balancer
+  "ECONNREFUSED",            // server not listening (might come back up)
+  "ENOTFOUND",               // DNS lookup failed (might be transient)
+  "EAI_AGAIN",               // DNS temporary failure
+  "ETIMEDOUT",               // generic OS-level timeout
+]);
+
+/**
+ * Fetch with retry on transient failures and 5xx server errors.
+ * - Network-level errors (timeouts, RST, DNS) → retry if code is in
+ *   TRANSIENT_ERR_CODES.
+ * - HTTP 5xx responses → retry (server may be overloaded).
+ * - HTTP 4xx → never retry (client error, won't fix itself).
+ * - HTTP 2xx → return immediately.
+ *
+ * Uses linear backoff: 1s, 2s, 3s for 3 attempts. Total worst-case
+ * delay before giving up on a single call is ~6s plus the final
+ * (failed) request's own timeout.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: MinerURequestInit,
+  maxAttempts = 3,
+  backoffMs = 1000
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await mineruFetch(url, init);
+      // Retry on 5xx if we have attempts left
+      if (res.status >= 500 && attempt < maxAttempts) {
+        // Drain body to free the socket for reuse
+        try { await res.text(); } catch {}
+        console.warn(
+          `[mineru] ${init.method || "GET"} ${url} → ${res.status}, retrying ` +
+          `(attempt ${attempt}/${maxAttempts}) in ${backoffMs * attempt}ms`
+        );
+        await sleep(backoffMs * attempt);
+        continue;
+      }
+      return res;
+    } catch (e: any) {
+      lastErr = e;
+      const code = e?.code || e?.cause?.code;
+      const isTransient = TRANSIENT_ERR_CODES.has(code);
+      if (attempt < maxAttempts && isTransient) {
+        console.warn(
+          `[mineru] ${init.method || "GET"} ${url} → ${code || e?.message}, ` +
+          `retrying (attempt ${attempt}/${maxAttempts}) in ${backoffMs * attempt}ms`
+        );
+        await sleep(backoffMs * attempt);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
 
 export type MinerUBlock = {
   type: string; // text | image | table | equation | chart | header | footer | page_number | page_footnote | ref_text
@@ -68,8 +173,9 @@ type BatchStatus = {
  */
 export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
   // Step 1: request presigned upload URLs.
+  // Retry on transient errors (MinerU API can be overloaded).
   const fileName = basename(filePath);
-  const submitRes = await fetch(`${MINERU_BASE}/api/v4/file-urls/batch`, {
+  const submitRes = await fetchWithRetry(`${MINERU_BASE}/api/v4/file-urls/batch`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${MINERU_TOKEN}`,
@@ -102,8 +208,9 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
 
   // Step 2: PUT the file to the presigned URL. Note: do NOT send
   // Content-Type header — OSS will reject it.
+  // Retry on transient errors (network blips during large upload).
   const fileBuffer = await readFile(filePath);
-  const putRes = await fetch(fileUrls[0], {
+  const putRes = await fetchWithRetry(fileUrls[0], {
     method: "PUT",
     body: fileBuffer,
     headers: {
@@ -131,7 +238,7 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
     await sleep(POLL_INTERVAL_MS);
     let resp: Response;
     try {
-      resp = await fetch(
+      resp = await mineruFetch(
         `${MINERU_BASE}/api/v4/extract-results/batch/${batchId}`,
         { headers: { Authorization: `Bearer ${MINERU_TOKEN}`, Accept: "*/*" } }
       );
@@ -169,7 +276,9 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
 }
 
 async function downloadAndExtract(zipUrl: string, originalPath: string): Promise<MinerUResult> {
-  const zipRes = await fetch(zipUrl);
+  // Use the custom Agent (longer timeouts) and retry on transient errors.
+  // MinerU's OSS-hosted zip can be slow to start streaming for large PDFs.
+  const zipRes = await fetchWithRetry(zipUrl, { method: "GET" });
   if (!zipRes.ok) {
     throw new Error(`MinerU zip download failed ${zipRes.status}`);
   }

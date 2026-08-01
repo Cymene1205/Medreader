@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // undici (Node's fetch impl) must be required at runtime from node_modules
+  // so we can construct a custom Agent with longer headersTimeout /
+  // bodyTimeout. Without this, Next.js webpack would try to bundle it
+  // and break at runtime.
+  serverExternalPackages: ["undici"],
   // 允许预览平台的 cross-origin 域名加载 _next 资源
   // 否则 Next.js 16 在 dev 模式下会拒绝来自 preview-*.space-z.ai 的请求
   allowedDevOrigins: [
