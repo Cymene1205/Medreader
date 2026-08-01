@@ -403,22 +403,106 @@ export default function Home() {
           console.warn("[shared] analyze fetch failed:", e);
         }
 
-        // 5. Fetch figures (Call A result) — if figures exist, mark status as done
+        // 5. Fetch figures (Call A result).
+        //
+        // IMPORTANT FIX: figures rows can exist with question=null if the
+        // original uploader closed their browser before Call A finished
+        // (Call A is fire-and-forget on the upload path). In that case we
+        // must RE-TRIGGER Call A here, otherwise the argument spine stays
+        // empty and dufigure (figure-detail expansion) can't be activated
+        // — figures have no `question` anchor for the chain.
+        //
+        // Logic:
+        //   - figures.length === 0                  → idle (no figures in this paper)
+        //   - figures.length > 0 && allHaveQuestion → done (cached Call A result)
+        //   - figures.length > 0 && !allHaveQuestion → trigger Call A POST +
+        //     poll until done, driving the same extracting→call-a→spine→done
+        //     state machine as the upload path (page.tsx ~line 680).
+        let initialFigs: Figure[] = [];
         try {
           const figRes = await fetch(`/api/figures?paperId=${sharedId}`);
           if (figRes.ok) {
             const figData = await figRes.json();
             if (Array.isArray(figData.figures)) {
-              setFigures(figData.figures);
-              if (figData.figures.length > 0) {
-                setFiguresStatus("done");
-              } else {
-                setFiguresStatus("idle");
-              }
+              initialFigs = figData.figures as Figure[];
+              setFigures(initialFigs);
             }
           }
         } catch (e) {
           console.warn("[shared] figures fetch failed:", e);
+        }
+
+        if (initialFigs.length === 0) {
+          setFiguresStatus("idle");
+        } else {
+          const allHaveQuestion = initialFigs.every((f) => f.question);
+          if (allHaveQuestion) {
+            setFiguresStatus("done");
+          } else {
+            // Call A never ran (or never finished) — re-trigger it now.
+            console.log(`[shared] figures exist but ${initialFigs.length - initialFigs.filter(f => f.question).length}/${initialFigs.length} lack question — re-triggering Call A`);
+            setFiguresLoading(true);
+            setFiguresStatus("extracting");
+
+            fetch("/api/figures", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...refreshLLMHeaders(),
+              },
+              body: JSON.stringify({ paperId: sharedId }),
+            }).catch((e) => {
+              console.warn("[shared] Call A re-trigger failed:", e);
+              setFiguresStatus("error");
+              setFiguresLoading(false);
+            });
+
+            // Poll for Call A completion (same logic as upload path ~line 708).
+            let pollCount = 0;
+            const poll = async () => {
+              pollCount++;
+              try {
+                const [figRes2, analysisRes2] = await Promise.all([
+                  fetch(`/api/figures?paperId=${sharedId}`).then((r) => r.json()),
+                  fetch(`/api/analyze?paperId=${sharedId}`).then((r) => r.json()),
+                ]);
+                if (Array.isArray(figRes2.figures)) {
+                  setFigures(figRes2.figures as Figure[]);
+                }
+                if (analysisRes2.outline) {
+                  setOutline(analysisRes2.outline as Outline);
+                }
+
+                const figs: Figure[] = Array.isArray(figRes2.figures) ? figRes2.figures : [];
+                const allQ = figs.length > 0 && figs.every((f) => f.question);
+                const spineReady = !!analysisRes2.outline?.argumentSpine;
+
+                if (spineReady && allQ) {
+                  setFiguresStatus("done");
+                  setFiguresLoading(false);
+                  return;
+                }
+                if (allQ && !spineReady) {
+                  setFiguresStatus("spine");
+                } else if (figs.length > 0 && !allQ) {
+                  setFiguresStatus("call-a");
+                } else if (pollCount > 1) {
+                  setFiguresStatus("extracting");
+                }
+
+                if (pollCount > 90) {
+                  console.warn("[shared] poll exhausted 90 iterations, giving up");
+                  setFiguresStatus("error");
+                  setFiguresLoading(false);
+                  return;
+                }
+              } catch (e) {
+                console.warn("[shared] poll fetch failed:", e);
+              }
+              setTimeout(poll, 4000);
+            };
+            setTimeout(poll, 3000);
+          }
         }
 
         setUploadStage("done");
