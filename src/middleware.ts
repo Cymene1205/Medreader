@@ -25,7 +25,8 @@ import { NextRequest, NextResponse } from "next/server";
  *   - `/api/chat`        50/day for anon, login encouraged via UI nudge
  *   - `/api/translate`   100/day for anon
  *   - `/api/vision`      20/day for anon
- *   - `/api/llm-test`    connection test — anonymous ok (no quota gate)
+ *   - `/api/llm-test`    LLM connection test — anonymous ok (no quota gate)
+ *   - `/api/vision-test` Vision connection test — anonymous ok (no quota gate)
  *   - `/api/quota`       shows remaining quota for current user/IP
  *
  *   These routes wrap `getServerSession()` in try/catch and gracefully
@@ -83,7 +84,7 @@ export const config = {
   //                                              Next.js 16 默认 10MB body 限制截断
   //                                              (route 内部用 getServerSession 做真正的认证)
   //   api/chat | api/translate | api/vision   — 匿名访问 (路由内部按 IP hash 限额)
-  //   api/llm-test                            — LLM 连接测试，匿名可用
+  //   api/llm-test | api/vision-test          — LLM / Vision 连接测试，匿名可用
   //   api/quota                               — 查询额度，匿名也能看自己的 IP 额度
   //   api/paper-images                        — 论文图片资源 (公开)
   //   _next                                   — Next.js static assets
@@ -91,6 +92,6 @@ export const config = {
   // Root `/` is matched by this regex too, but the middleware function
   // short-circuits it (see above).
   matcher: [
-    "/((?!login|register|landing|api/auth|api/upload|api/chat|api/translate|api/vision|api/llm-test|api/quota|api/paper-images|_next|favicon.ico).*)",
+    "/((?!login|register|landing|api/auth|api/upload|api/chat|api/translate|api/vision|api/vision-test|api/llm-test|api/quota|api/paper-images|_next|favicon.ico).*)",
   ],
 };

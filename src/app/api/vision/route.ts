@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { resolveLLMConfig, callVisionLLM } from "@/lib/llm";
+import { resolveVisionConfig, callVisionLLM } from "@/lib/llm";
 import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
@@ -9,7 +9,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
-    const cfg = resolveLLMConfig(req);
+    const vcfg = resolveVisionConfig(req);
     const { prompt, image, history, paperContext } = await req.json();
     if (!image || typeof image !== "string") {
       return NextResponse.json(
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await callVisionLLM(
-      cfg,
+      vcfg,
       prompt || "请按照四段式结构解读这张科研图表。",
       image,
       Array.isArray(history) ? history : [],

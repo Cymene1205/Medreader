@@ -14,6 +14,7 @@ import {
   streamLLM,
   callVisionLLM,
   getDefaultLLMConfig,
+  getDefaultVisionConfig,
   type ChatMessage,
   type LLMCallOptions,
   type LLMConfig,
@@ -43,16 +44,18 @@ export async function* streamDeepSeek(
 }
 
 /**
- * Vision chat using Zhipu GLM-4V (default, OpenAI-compatible multimodal API)
- * OR a user-supplied OpenAI-compatible vision endpoint. Accepts base64 image
- * and a prompt, returns assistant text. If paperContext is provided, uses a
- * structured "teach-how-to-read → explain → connect" workflow.
+ * Vision chat using a server-default OpenAI-compatible multimodal endpoint
+ * (Zhipu GLM-4V by default). Accepts base64 image and a prompt, returns
+ * assistant text. If paperContext is provided, uses a structured
+ * "teach-how-to-read → explain → connect" workflow.
  *
- * Vision endpoint is configured via VISION_API_KEY / VISION_BASE_URL / VISION_MODEL
- * env vars (no .z-ai-config file needed). Default model is glm-4v-flash.
+ * Vision endpoint is configured via VISION_API_KEY / VISION_BASE_URL /
+ * VISION_MODEL env vars. Default model is glm-4v-flash.
  *
- * For per-request override, use callVisionLLM(cfg, ...) directly from an API route
- * that has resolved the LLMConfig from request headers.
+ * For per-request override (e.g. user picks a different vision provider in
+ * the LLMSettingsDialog "图像识别" tab), use callVisionLLM(vcfg, ...)
+ * directly from an API route that has resolved the VisionConfig from
+ * request headers via resolveVisionConfig(req).
  */
 export async function callVision(
   prompt: string,
@@ -60,8 +63,8 @@ export async function callVision(
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
   paperContext?: string
 ): Promise<string> {
-  return callVisionLLM(getDefaultLLMConfig(), prompt, imageBase64, history, paperContext);
+  return callVisionLLM(getDefaultVisionConfig(), prompt, imageBase64, history, paperContext);
 }
 
-export { callLLM, streamLLM, callVisionLLM, getDefaultLLMConfig };
+export { callLLM, streamLLM, callVisionLLM, getDefaultLLMConfig, getDefaultVisionConfig };
 export type { LLMConfig, LLMCallOptions };

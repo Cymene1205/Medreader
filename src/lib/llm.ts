@@ -35,6 +35,20 @@ export type LLMConfig = {
   model: string;
 };
 
+/**
+ * Vision (multimodal) config — INDEPENDENT from the text LLM config.
+ *
+ * Resolved from `X-Vision-*` request headers (set by the LLMSettingsDialog
+ * "图像识别" tab) and falls back to VISION_* env vars. This lets the user
+ * pick e.g. DeepSeek for chat while still using Zhipu GLM-4V for figure Q&A
+ * — or vice versa — without coupling the two.
+ */
+export type VisionConfig = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -443,28 +457,65 @@ export async function* streamLLM(
 
 // --- Vision (image-based) ----------------------------------------------------
 //
-// Vision is routed through Zhipu GLM-4V (OpenAI-compatible multimodal API).
-// The vision endpoint is INDEPENDENT of the chat LLM provider — even when
-// the user picks DeepSeek for chat, vision calls still go to Zhipu because
-// DeepSeek doesn't provide a public vision endpoint we can rely on.
+// Vision is routed through a dedicated OpenAI-compatible multimodal endpoint
+// (Zhipu GLM-4V by default). The vision config is INDEPENDENT of the chat
+// LLM provider — even when the user picks DeepSeek for chat, vision calls
+// can still go to Zhipu (or any other multimodal endpoint the user picks).
 //
-// Configure via env vars (no .z-ai-config file needed):
+// Resolution order (highest priority first):
+//   1. Per-request `X-Vision-*` headers (sent by the LLMSettingsDialog
+//      "图像识别" tab when the user fills in the vision config in the UI)
+//   2. VISION_* env vars (server-side defaults, see .env.production)
+//
+// Env vars:
 //   VISION_BASE_URL — default https://open.bigmodel.cn/api/paas/v4
-//   VISION_API_KEY  — required (Zhipu API key, e.g. ab99....xxxx)
+//   VISION_API_KEY  — required if no per-request header is supplied
 //   VISION_MODEL    — default glm-4v-flash (free tier; switch to glm-4v / glm-4.5v if needed)
-//
-// If the user supplies a custom OpenAI-compatible endpoint that supports
-// vision (e.g. gpt-4o), and the chosen provider is NOT the default DeepSeek,
-// we transparently route through the user's endpoint instead.
 
-const VISION_DEFAULTS = {
+const VISION_ENV_DEFAULTS: VisionConfig = {
   baseUrl: process.env.VISION_BASE_URL || "https://open.bigmodel.cn/api/paas/v4",
   apiKey: process.env.VISION_API_KEY || "",
   model: process.env.VISION_MODEL || "glm-4v-flash",
 };
 
+/**
+ * Resolve a VisionConfig from incoming request headers (Next.js Request).
+ * Falls back to VISION_* env defaults if a header is missing.
+ *
+ * Headers (all optional — any missing one inherits from env):
+ *   X-Vision-Base-Url
+ *   X-Vision-Api-Key
+ *   X-Vision-Model
+ */
+export function resolveVisionConfig(req: Request): VisionConfig {
+  const headers = req.headers;
+  const baseUrl = (headers.get("x-vision-base-url") || "").trim() || VISION_ENV_DEFAULTS.baseUrl;
+  const apiKey = (headers.get("x-vision-api-key") || "").trim() || VISION_ENV_DEFAULTS.apiKey;
+  const model = (headers.get("x-vision-model") || "").trim() || VISION_ENV_DEFAULTS.model;
+
+  if (!apiKey) {
+    throw new Error(
+      'Vision API key 未配置。请在右上角「模型设置 → 图像识别」中填写 API Key，或在服务端 .env 中设置 VISION_API_KEY。'
+    );
+  }
+  if (!baseUrl) {
+    throw new Error('Vision Base URL 未配置。请在「模型设置 → 图像识别」中填写，或在 .env 中设置 VISION_BASE_URL。');
+  }
+
+  return { baseUrl, apiKey, model };
+}
+
+/**
+ * Get the server-default VisionConfig (no per-request override). Used by
+ * background tasks like the deepseek.ts shim that have no incoming HTTP
+ * request.
+ */
+export function getDefaultVisionConfig(): VisionConfig {
+  return { ...VISION_ENV_DEFAULTS };
+}
+
 export async function callVisionLLM(
-  cfg: LLMConfig,
+  vcfg: VisionConfig,
   prompt: string,
   imageBase64: string,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
@@ -501,35 +552,15 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
 
   const imageUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/png;base64,${imageBase64}`;
 
-  // Decide which endpoint to use:
-  //   - If the user has explicitly chosen a non-deepseek provider in their
-  //     LLM config, honor it and route vision through that provider's
-  //     OpenAI-compatible multimodal endpoint (e.g. gpt-4o).
-  //   - Otherwise (default DeepSeek, which has no public vision API), fall
-  //     back to the dedicated vision endpoint configured via VISION_* env
-  //     vars (Zhipu GLM-4V by default).
-  let visionBaseUrl: string;
-  let visionApiKey: string;
-  let visionModel: string;
-  let visionProviderLabel: string; // for token usage attribution
-
-  if (cfg.provider !== "deepseek") {
-    visionBaseUrl = cfg.baseUrl;
-    visionApiKey = cfg.apiKey;
-    visionModel = cfg.model;
-    visionProviderLabel = cfg.provider;
-  } else {
-    visionBaseUrl = VISION_DEFAULTS.baseUrl;
-    visionApiKey = VISION_DEFAULTS.apiKey;
-    visionModel = VISION_DEFAULTS.model;
-    visionProviderLabel = "zhipu-vision";
-  }
-
-  if (!visionApiKey) {
+  if (!vcfg.apiKey) {
     throw new Error(
-      'Vision API key 未配置。请在 .env.production 中设置 VISION_API_KEY（智谱 API key），或在右上角「模型设置」中切换到自带 vision 能力的 provider（如 openai/gpt-4o、zhipu/glm-4v）。'
+      'Vision API key 未配置。请在右上角「模型设置 → 图像识别」中填写 API Key，或在服务端 .env 中设置 VISION_API_KEY。'
     );
   }
+
+  // Provider label for token-usage attribution. We infer it from the baseUrl
+  // host so the admin dashboard can still group by provider.
+  const visionProviderLabel = inferVisionProviderLabel(vcfg.baseUrl);
 
   // Build OpenAI-compatible multimodal message list
   const messages: any[] = [
@@ -545,25 +576,25 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
   ];
 
   const body = {
-    model: visionModel,
+    model: vcfg.model,
     messages,
     temperature: 0.4,
     stream: false,
   };
 
-  const url = `${visionBaseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const url = `${vcfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${visionApiKey}`,
+      Authorization: `Bearer ${vcfg.apiKey}`,
     },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Vision LLM error ${res.status} (${visionProviderLabel}/${visionModel}): ${errText.slice(0, 400)}`);
+    throw new Error(`Vision LLM error ${res.status} (${visionProviderLabel}/${vcfg.model}): ${errText.slice(0, 400)}`);
   }
 
   const data = await res.json();
@@ -586,7 +617,7 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
       userId: usage.userId,
       action: usage.action,
       provider: visionProviderLabel,
-      model: visionModel,
+      model: vcfg.model,
       promptTokens: promptT,
       completionTokens: completionT,
       totalTokens: promptT + completionT,
@@ -595,6 +626,23 @@ ${paperContext ? `\n以下是论文原文（供你做"结合原文解释"时参�
   }
 
   return content;
+}
+
+/**
+ * Map a vision baseUrl to a short provider label for token-usage attribution.
+ * Falls back to "vision-custom" for unknown hosts.
+ */
+function inferVisionProviderLabel(baseUrl: string): string {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    if (host.includes("bigmodel") || host.includes("zhipu")) return "zhipu-vision";
+    if (host.includes("openai.com")) return "openai-vision";
+    if (host.includes("anthropic")) return "anthropic-vision";
+    if (host.includes("moonshot")) return "moonshot-vision";
+    return "vision-custom";
+  } catch {
+    return "vision-custom";
+  }
 }
 
 // --- Helpers for parsing the LLM response into JSON --------------------------

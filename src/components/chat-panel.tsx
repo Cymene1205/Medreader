@@ -51,8 +51,10 @@ type Props = {
   paperText?: string;
   /** current paper id (for ChatLog bookkeeping) */
   paperId?: string | null;
-  /** LLM headers from LLMSettingsDialog — attached to all API calls */
+  /** LLM headers from LLMSettingsDialog — attached to text chat / translate / followups API calls */
   llmHeaders?: Record<string, string>;
+  /** Vision headers from LLMSettingsDialog — attached to /api/vision calls only */
+  visionHeaders?: Record<string, string>;
 };
 
 const genId = () =>
@@ -66,6 +68,7 @@ export default function ChatPanel({
   paperText,
   paperId,
   llmHeaders = {},
+  visionHeaders = {},
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -74,6 +77,8 @@ export default function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const headersRef = useRef(llmHeaders);
   headersRef.current = llmHeaders;
+  const visionHeadersRef = useRef(visionHeaders);
+  visionHeadersRef.current = visionHeaders;
 
   // Auto-scroll
   useEffect(() => {
@@ -202,9 +207,14 @@ export default function ChatPanel({
       if (hasImage) {
         // Vision path — pass paper markdown as context so the model can
         // connect the figure with the paper's narrative.
+        //
+        // NOTE: vision uses its own config (X-Vision-* headers) which can
+        // point to a different provider than the text LLM. Falls back to
+        // the server-default VISION_* env vars when the user hasn't filled
+        // in the vision tab.
         const res = await fetch("/api/vision", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...headersRef.current },
+          headers: { "Content-Type": "application/json", ...visionHeadersRef.current },
           body: JSON.stringify({
             prompt: userMsg.content,
             image: attachedImage,

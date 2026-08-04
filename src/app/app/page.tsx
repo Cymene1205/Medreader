@@ -16,6 +16,7 @@ import MindmapView from "@/components/mindmap-view";
 import BlockReader, { type MinerUBlock, type BlockReaderHandle } from "@/components/block-reader";
 import LLMSettingsDialog, {
   refreshLLMHeaders,
+  refreshVisionHeaders,
   hasUserLLMConfig,
 } from "@/components/llm-settings-dialog";
 import { Button } from "@/components/ui/button";
@@ -275,8 +276,10 @@ export default function Home() {
   // pick it up. For simplicity we put headers into window-level var (the chat
   // panel reads LLM headers from the latest snapshot via a custom hook).
   const [llmHeaders, setLlmHeaders] = useState<Record<string, string>>({});
+  const [visionHeaders, setVisionHeaders] = useState<Record<string, string>>({});
   useEffect(() => {
     setLlmHeaders(refreshLLMHeaders());
+    setVisionHeaders(refreshVisionHeaders());
   }, [llmSettingsOpen]);
 
   // Listen for "analysis updated" events — triggered by OutlinePanel's retry
@@ -1290,6 +1293,7 @@ export default function Home() {
                     paperText={paperText || undefined}
                     paperId={paperId}
                     llmHeaders={llmHeaders}
+                    visionHeaders={visionHeaders}
                   />
                 </div>
               </Panel>
@@ -1320,6 +1324,7 @@ export default function Home() {
         onOpenChange={setLlmSettingsOpen}
         onSaved={() => {
           setLlmHeaders(refreshLLMHeaders());
+          setVisionHeaders(refreshVisionHeaders());
           setLlmConfigured(hasUserLLMConfig());
         }}
       />
