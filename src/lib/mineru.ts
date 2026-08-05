@@ -35,16 +35,39 @@ const POLL_TIMEOUT_MS = 600_000; // 10 min cap
 // (undici 8.x's internal webidl lib is incompatible with Turbopack's
 // module-cloning runtime on node:20-alpine).
 //
-// Instead, we rely on:
-//   - Native `fetch` (uses built-in undici, headersTimeout=5min)
+// Instead, we attack the IPv6-first problem at the DNS layer using
+// Node's built-in `dns` module. Node 20+ `fetch` (undici) uses
+// `dns.lookup` under the hood, which by default returns IPv6 first
+// if the host has AAAA records. On hosts with broken IPv6 routes
+// (e.g. Alibaba Cloud ECS in us-east-1 — IPv6 SYN-ACK comes back
+// but no data flows), fetch hangs until headersTimeout.
+//
+// `dns.setDefaultResultOrder("ipv4first")` makes dns.lookup return
+// IPv4 addresses first. fetch then connects via IPv4 immediately,
+// avoiding the IPv6 hang entirely. This is functionally equivalent
+// to undici's `autoSelectFamily: true` (Happy Eyeballs) for our case
+// because IPv4 always works on these hosts.
+//
+// We also raise the per-call AbortController timeout (kept below) and
+// use fetchWithRetry for transient errors.
+//
+// Per-call defense-in-depth (kept):
 //   - Per-call `AbortController` for shorter, hard wall-clock timeouts
 //   - `fetchWithRetry` for transient-error retry with backoff
 //   - Per-call timing logs so we can see exactly which endpoint hangs
+
+import { setDefaultResultOrder } from "dns";
+
+// Force IPv4-first DNS resolution. This is the actual fix for the
+// "ABORT_TIMEOUT after 120002ms on PUT to OSS" we saw in production:
+// the ECS host has no working IPv6 route, but Node 20+ fetch defaults
+// to IPv6-first, so it hangs on IPv6 SYN-ACK-then-no-data until the
+// 5-min headersTimeout fires.
 //
-// The earlier `UND_ERR_HEADERS_TIMEOUT` was likely a downstream symptom
-// of Docker marking the container unhealthy (IPv6 localhost issue in
-// the healthcheck) and killing in-flight requests mid-flight — that's
-// now fixed at the healthcheck level (see docker-compose.yml).
+// This must run BEFORE any fetch() call. Module-load time is safe —
+// Node evaluates all imports first, so this runs before any route
+// handler executes.
+setDefaultResultOrder("ipv4first");
 
 // Per-call options. `timeoutMs` is enforced via AbortController —
 // this works with native fetch, no undici import needed.
