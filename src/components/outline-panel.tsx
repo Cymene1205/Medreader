@@ -150,6 +150,9 @@ type Props = {
   uploadStage?: "idle" | "uploading" | "parsing" | "analyzing" | "done";
   /** Human-readable status text from the parent (e.g. "MinerU 解析中（30-90 秒）…"). */
   mineruStatus?: string;
+  /** LLM headers from LLMSettingsDialog — attached to retry /api/analyze calls
+   *  so the user's UI-configured key is used instead of the server env default. */
+  llmHeaders?: Record<string, string>;
 };
 
 // ── Section config: which parts exist + their display metadata ────────────
@@ -193,8 +196,11 @@ export default function OutlinePanel({
   figuresStatus = "idle",
   uploadStage = "idle",
   mineruStatus = "",
+  llmHeaders = {},
 }: Props) {
   const [retrying, setRetrying] = useState<string | null>(null);
+  const llmHeadersRef = useRef(llmHeaders);
+  llmHeadersRef.current = llmHeaders;
 
   // ── Per-section fold state ────────────────────────────────────────────
   // User request: "开始的时候就展开成这样就可以了,不用把所有的内容都展开"
@@ -236,7 +242,7 @@ export default function OutlinePanel({
       try {
         const res = await fetch(`/api/analyze?part=${part}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...llmHeadersRef.current },
           body: JSON.stringify({ paperId }),
         });
         if (!res.ok) {
@@ -490,6 +496,7 @@ export default function OutlinePanel({
                                   citations={citations}
                                   onPanelChipClick={onPanelChipClick || (() => {})}
                                   onJumpToPage={onJumpToPage || (() => {})}
+                                  llmHeaders={llmHeaders}
                                 />
                               ) : (
                                 <div className="text-center py-3 text-[10px] text-muted-foreground/60">

@@ -119,6 +119,9 @@ type Props = {
   citations: Citation[];
   onPanelChipClick: (quote: string, pageIndex: number) => void;
   onJumpToPage: (pageIndex: number) => void;
+  /** LLM headers from LLMSettingsDialog — attached to /api/figure-detail calls
+   *  so the user's UI-configured key is used instead of the server env default. */
+  llmHeaders?: Record<string, string>;
 };
 
 export default function FigureChain({
@@ -127,6 +130,7 @@ export default function FigureChain({
   citations,
   onPanelChipClick,
   onJumpToPage,
+  llmHeaders = {},
 }: Props) {
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
   const [expandedLayers, setExpandedLayers] = useState<Record<string, boolean>>({});
@@ -135,6 +139,8 @@ export default function FigureChain({
   const [errorLabel, setErrorLabel] = useState<string | null>(null);
   const [captionDialogFigure, setCaptionDialogFigure] = useState<Figure | null>(null);
   const fetchedRef = useRef<Set<string>>(new Set());
+  const llmHeadersRef = useRef(llmHeaders);
+  llmHeadersRef.current = llmHeaders;
 
   // Sort figures by FIGURE NUMBER (Figure 1 → 2 → 3 ...).
   // We used to sort by chainIndex (LLM-assigned argument-chain order), but
@@ -170,7 +176,7 @@ export default function FigureChain({
       try {
         const res = await fetch("/api/figure-detail", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...llmHeadersRef.current },
           body: JSON.stringify({ paperId, figureLabel: figure.label }),
         });
         if (res.status === 409) {

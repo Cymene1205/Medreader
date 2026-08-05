@@ -1135,6 +1135,7 @@ export default function Home() {
                   figuresStatus={figuresStatus}
                   uploadStage={uploadStage}
                   mineruStatus={mineruStatus}
+                  llmHeaders={llmHeaders}
                   onPanelChipClick={(quote, pageIndex) => {
                     // Jump to the citing sentence in BOTH views:
                     //  - 智能解析 (blocks): use highlightToken (quote-based match)
