@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MedReader Agent — One-shot deployment from GitHub
+# MedReader Agent — Deploy from tarball (no Git required)
 # =============================================================================
-# Run ON YOUR SERVER as root or sudo user:
+# Use this AFTER you've uploaded medreader.tar.gz to the server via scp.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Cymene1205/Medreader/main/deploy.sh | sudo bash
+# Local (your dev machine):
+#   scp /home/z/my-project/download/deploy/medreader.tar.gz \
+#       admin@47.253.133.131:/opt/
+#   scp /home/z/my-project/download/deploy/deploy-from-tarball.sh \
+#       admin@47.253.133.131:/opt/
 #
-#   — or, if you've cloned the repo onto the server —
-#   git clone https://github.com/Cymene1205/Medreader.git /opt/medreader
-#   cd /opt/medreader && sudo bash deploy.sh
+# Server:
+#   ssh admin@47.253.133.131
+#   cd /opt
+#   sudo bash deploy-from-tarball.sh
 #
 # What this script does:
-#   1. Installs Docker + Docker Compose if missing
-#   2. Clones (or git pulls) the latest code from GitHub
-#   3. Generates .env.production (random NEXTAUTH_SECRET + server IP)
-#   4. Migrates existing SQLite DB + uploads (if found)
+#   1. Installs Docker if missing
+#   2. Extracts medreader.tar.gz to /opt/medreader
+#   3. Generates .env.production (random NEXTAUTH_SECRET, server IP)
+#   4. Migrates existing SQLite db + uploads (if found)
 #   5. docker compose up -d --build
-#   6. Waits for health check, prints the URL
+#   6. Waits for health check, prints URL
 #
-# After the first run, re-running this script just git-pulls + rebuilds.
-# Data in /opt/medreader/data and /opt/medreader/uploads is preserved.
+# Re-run after uploading a new tarball:
+#   sudo bash deploy-from-tarball.sh   # extracts on top + rebuilds
 # =============================================================================
 
 set -euo pipefail
 
 # --- Config -----------------------------------------------------------------
 APP_DIR="${APP_DIR:-/opt/medreader}"
-REPO_URL="${REPO_URL:-https://github.com/Cymene1205/Medreader.git}"
-BRANCH="${BRANCH:-main}"
+TARBALL="${TARBALL:-/opt/medreader.tar.gz}"
 SERVER_IP="${SERVER_IP:-47.253.133.131}"
 PORT="${PORT:-3000}"
 
@@ -63,51 +67,84 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- 2. Clone / pull from GitHub --------------------------------------------
-step "2/6  Sync code to ${APP_DIR}"
-if [[ -d "${APP_DIR}/.git" ]]; then
-  log "existing repo — pulling latest from ${BRANCH}"
-  cd "${APP_DIR}"
-  ${SUDO} git fetch --prune origin 2>&1 | tail -3
-  ${SUDO} git reset --hard "origin/${BRANCH}" 2>&1 | tail -3
-  ${SUDO} chown -R "$(whoami)" . 2>/dev/null || true
-else
-  log "no repo at ${APP_DIR} — cloning from GitHub"
-  ${SUDO} mkdir -p "${APP_DIR}"
-  ${SUDO} chown "$(whoami)" "${APP_DIR}"
-  git clone --depth 1 --branch "${BRANCH}" "${REPO_URL}" "${APP_DIR}"
-  cd "${APP_DIR}"
+# --- 2. Extract tarball -----------------------------------------------------
+step "2/6  Extract ${TARBALL} → ${APP_DIR}"
+if [[ ! -f "${TARBALL}" ]]; then
+  err "tarball not found at ${TARBALL}"
+  err "upload it first:  scp medreader.tar.gz admin@<server>:/opt/"
+  exit 1
 fi
-log "current commit: $(git rev-parse --short HEAD) — $(git log -1 --format='%s')"
+
+# Preserve data + uploads + .env across redeploys
+BACKUP_DATA=""
+if [[ -d "${APP_DIR}/data" ]]; then
+  BACKUP_DATA="$(mktemp -d)"
+  log "preserving existing ${APP_DIR}/data → ${BACKUP_DATA}/data"
+  cp -a "${APP_DIR}/data" "${BACKUP_DATA}/data"
+fi
+BACKUP_UPLOADS=""
+if [[ -d "${APP_DIR}/uploads" ]]; then
+  BACKUP_UPLOADS="$(mktemp -d)"
+  log "preserving existing ${APP_DIR}/uploads → ${BACKUP_UPLOADS}/uploads"
+  cp -a "${APP_DIR}/uploads" "${BACKUP_UPLOADS}/uploads"
+fi
+BACKUP_ENV=""
+if [[ -f "${APP_DIR}/.env.production" ]]; then
+  BACKUP_ENV="$(mktemp)"
+  log "preserving existing ${APP_DIR}/.env.production"
+  cp "${APP_DIR}/.env.production" "${BACKUP_ENV}"
+fi
+
+# Wipe + re-extract (cleaner than overlay; avoids stale deleted files)
+${SUDO} rm -rf "${APP_DIR}"
+${SUDO} mkdir -p "${APP_DIR}"
+${SUDO} chown "$(whoami)" "${APP_DIR}"
+tar -xzf "${TARBALL}" -C "${APP_DIR}"
+
+# Restore preserved data
+if [[ -n "${BACKUP_DATA}" ]]; then
+  log "restoring data/"
+  rm -rf "${APP_DIR}/data"
+  cp -a "${BACKUP_DATA}/data" "${APP_DIR}/data"
+  rm -rf "${BACKUP_DATA}"
+fi
+if [[ -n "${BACKUP_UPLOADS}" ]]; then
+  log "restoring uploads/"
+  rm -rf "${APP_DIR}/uploads"
+  cp -a "${BACKUP_UPLOADS}/uploads" "${APP_DIR}/uploads"
+  rm -rf "${BACKUP_UPLOADS}"
+fi
+
+cd "${APP_DIR}"
 
 # --- 3. .env.production -----------------------------------------------------
 step "3/6  Prepare .env.production"
-if [[ ! -f .env.production ]]; then
-  log "no .env.production found — creating from template"
+if [[ -n "${BACKUP_ENV}" ]]; then
+  log "restoring previous .env.production"
+  cp "${BACKUP_ENV}" .env.production
+  rm -f "${BACKUP_ENV}"
+elif [[ ! -f .env.production ]]; then
+  log "no .env.production found — creating one from template"
   cp .env.production.example .env.production
   SECRET="$(openssl rand -base64 32)"
   sed -i "s|NEXTAUTH_SECRET=PLEASE_REPLACE_WITH_RANDOM_32_BYTES|NEXTAUTH_SECRET=${SECRET}|" .env.production
   sed -i "s|NEXTAUTH_URL=http://.*|NEXTAUTH_URL=http://${SERVER_IP}:${PORT}|" .env.production
   warn "edit .env.production to add DEEPSEEK_API_KEY / MINERU_API_TOKEN if needed"
-  warn "  vi ${APP_DIR}/.env.production"
 else
   log ".env.production already exists — leaving it"
 fi
 
-# --- 4. Migrate existing data -----------------------------------------------
-step "4/6  Ensure data + uploads dirs exist"
+# --- 4. Migrate existing dev data (if present in the tarball) ---------------
+step "4/6  Migrate SQLite DB + uploads"
 mkdir -p data uploads
-
-# If there's a dev-mode db/ dir (file-based SQLite at db/custom.db), copy it in.
-# Skipped if data/custom.db already exists (don't overwrite prod data).
-if [[ -f db/custom.db && ! -f data/custom.db ]]; then
-  log "copying db/custom.db → data/custom.db (preserves dev users + papers)"
+if [[ -f db/custom.db ]]; then
+  log "copying db/custom.db → data/custom.db (preserves users + papers)"
   cp db/custom.db data/custom.db
   [[ -f db/custom.db-journal ]] && cp db/custom.db-journal data/ || true
   [[ -f db/custom.db-wal ]]     && cp db/custom.db-wal     data/ || true
   [[ -f db/custom.db-shm ]]     && cp db/custom.db-shm     data/ || true
 else
-  log "no migration needed — data/ already has custom.db or no dev db to import"
+  log "no db/custom.db in tarball — starting fresh"
 fi
 
 # --- 5. Build + start -------------------------------------------------------
@@ -116,7 +153,7 @@ docker compose up -d --build
 
 # --- 6. Health check --------------------------------------------------------
 step "6/6  Wait for health check"
-log "waiting for container to become healthy..."
+log "waiting for the container to become healthy..."
 HEALTHY=0
 for i in $(seq 1 40); do
   STATUS="$(docker inspect --format='{{.State.Health.Status}}' medreader 2>/dev/null || echo "none")"
@@ -140,7 +177,7 @@ for i in $(seq 1 40); do
 done
 
 if [[ "${HEALTHY}" -ne 1 ]]; then
-  warn "health check timed out — container may still be starting"
+  warn "health check timed out — container may still be starting up"
   warn "check logs:  docker compose logs -f medreader"
 fi
 
@@ -148,7 +185,6 @@ echo
 log "============================================================"
 log "  MedReader Agent is running"
 log "  →  http://${SERVER_IP}:${PORT}"
-log "  commit: $(git rev-parse --short HEAD)"
 log "============================================================"
 echo
 log "Useful commands:"
@@ -156,7 +192,7 @@ echo "  cd ${APP_DIR}"
 echo "  docker compose logs -f         # follow logs"
 echo "  docker compose restart         # restart after env change"
 echo "  docker compose down            # stop"
-echo "  sudo bash deploy.sh            # pull + rebuild (re-run this script)"
+echo "  docker compose up -d --build   # rebuild after new tarball"
 echo
 log "If port 3000 is unreachable, open it in Alibaba Cloud security group:"
 echo "  protocol: TCP   port: 3000/3000   source: 0.0.0.0/0"
