@@ -89,6 +89,7 @@ export default function Home() {
 
   const [outline, setOutline] = useState<Outline | null>(null);
   const [outlineLoading, setOutlineLoading] = useState(false);
+  const [parseNotice, setParseNotice] = useState<string | null>(null);
   const [outlineError, setOutlineError] = useState<string | null>(null);
   const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
   const [mineruStatus, setMineruStatus] = useState<string>("");
@@ -314,7 +315,7 @@ export default function Home() {
       const headers = { "Content-Type": "application/json", ...refreshLLMHeaders() };
       const response = await fetch("/api/analyze", {
         method: "POST", headers,
-        body: JSON.stringify({ paperId, title: fileName, text: paperText, markdown: paperMarkdown || undefined }),
+        body: JSON.stringify({ paperId, title: fileName, text: paperText, markdown: paperMarkdown || undefined, force: Boolean(outline) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -322,7 +323,7 @@ export default function Home() {
       setOutlineCollapsed(false);
       setOutlineLoading(false);
       setFiguresStatus("call-a");
-      const figureResponse = await fetch("/api/figures", { method: "POST", headers, body: JSON.stringify({paperId}) });
+      const figureResponse = await fetch("/api/figures", { method: "POST", headers, body: JSON.stringify({paperId, force: Boolean(outline)}) });
       const figureData = await figureResponse.json();
       if (!figureResponse.ok) throw new Error(figureData.error || `HTTP ${figureResponse.status}`);
       if (Array.isArray(figureData.figures)) setFigures(figureData.figures);
@@ -413,6 +414,7 @@ export default function Home() {
         }
 
         // 3. Apply state — similar to onFile's post-upload state
+        setParseNotice(paperData.parseMessage?.includes("本地") ? paperData.parseMessage : null);
         setPaperId(sharedId);
         setFileName(paperData.title || "shared-paper.pdf");
         setPaperText(paperData.parsedText || "");
@@ -610,6 +612,7 @@ export default function Home() {
           }
           const sData = await sRes.json();
           if (sData.parseStatus === "done") {
+            setParseNotice(sData.parseMessage?.includes("本地") ? sData.parseMessage : null);
             serverParsedText = sData.parsedText;
             serverMarkdown = sData.markdown;
             serverBlocks = sData.blocks;
@@ -940,9 +943,9 @@ export default function Home() {
           导入 PDF
         </Button>
 
-        {paperId && paperText && !outline && (
+        {paperId && paperText && (
           <Button onClick={analyzeSavedPaper} size="sm" variant="secondary" disabled={isBusy} className="h-8">
-            生成分析
+            {outline ? "重新分析" : "生成分析"}
           </Button>
         )}
 
@@ -1156,6 +1159,12 @@ export default function Home() {
           >
             <X className="h-3 w-3" />
           </button>
+        </div>
+      )}
+
+      {parseNotice && (
+        <div className="px-4 py-2 text-xs bg-amber-50 text-amber-900 border-b border-amber-200">
+          {parseNotice}
         </div>
       )}
 

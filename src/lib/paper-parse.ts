@@ -80,19 +80,17 @@ async function parsePdfBackground(paperId: string, filePath: string, batchId?: s
     console.error(`[upload] MinerU parse failed for ${paperId}:`, e);
     // Fallback: try pdfjs-dist
     try {
-      const { parseWithPdfjs } = await import("@/lib/pdf-parse");
-      const text = await parseWithPdfjs(filePath);
-      await db.paper.update({
-        where: { id: paperId },
-        data: {
-          parseStatus: "done",
-          parseMessage: "MinerU 暂不可用，已使用本地文字提取",
-          parsedText: text,
-          // No markdown / blocks available in fallback mode
-        },
-      });
-      // In pdfjs fallback mode there are no image blocks, so we can't extract
-      // figures. But we can still build citations from the plain text.
+      const { parseLocalPdf } = await import("@/lib/pdf-local");
+      const result = await parseLocalPdf(filePath);
+      await db.paper.update({where:{id:paperId},data:{
+        parsedText: markdownToPlainText(result.markdown), markdown:result.markdown,
+        blocksJson:JSON.stringify(result.blocks),imagesDir:result.imagesDir,pageCount:result.pageCount,
+        parseMessage:"MinerU 尚未返回；已使用本地解析，图片为图表所在原文页面",
+      }});
+      const {extractAndStoreFigures}=await import("@/lib/extract-figures");
+      // Local figures have explicit captions; body references are not captions.
+      await extractAndStoreFigures(paperId,result.blocks.filter(b=>b.type==='image'),result.imagesDir);
+      // Build citations after local text and figure records are available.
       try {
         const { buildCitationsAndStore } = await import("@/lib/align-citations");
         const cites = await buildCitationsAndStore(paperId);
@@ -100,6 +98,7 @@ async function parsePdfBackground(paperId: string, filePath: string, batchId?: s
       } catch (e2) {
         console.warn(`[upload] (fallback) buildCitationsAndStore failed for ${paperId}:`, e2);
       }
+      await db.paper.update({where:{id:paperId},data:{parseStatus:"done"}});
     } catch (e2) {
       console.error(`[upload] pdfjs fallback also failed for ${paperId}:`, e2);
       try {

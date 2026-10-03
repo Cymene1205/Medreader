@@ -237,11 +237,12 @@ export async function POST(req: NextRequest) {
     const retryPart = url.searchParams.get("part"); // if set, only redo this part
 
     const body = await req.json();
-    const { paperId, text, markdown, title } = body as {
+    const { paperId, text, markdown, title, force } = body as {
       paperId?: string;
       text?: string;
       markdown?: string;
       title?: string;
+      force?: boolean;
     };
 
     if (!paperId) {
@@ -298,7 +299,7 @@ export async function POST(req: NextRequest) {
 
     // Parse existing analysisJson (if any) so we can do partial retries
     let analysis: AnalysisJson;
-    if (paper.analysisJson) {
+    if (paper.analysisJson && force !== true) {
       try {
         analysis = JSON.parse(paper.analysisJson) as AnalysisJson;
         // Sync the title — older analyses may have stored the PDF filename

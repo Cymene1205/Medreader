@@ -45,7 +45,7 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const cfg = resolveLLMConfig(req);
-    const { paperId } = await req.json();
+    const { paperId, force } = await req.json();
     if (typeof paperId !== "string" || !paperId) {
       return NextResponse.json(
         { error: "paperId is required" },
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
 
     // Idempotent: if ALL figures already have question, return cache.
     const allDone = paper.figures.every((f) => typeof f.question === "string" && f.question.trim());
-    if (allDone) {
+    if (allDone && force !== true) {
       return NextResponse.json({ figures: paper.figures, cached: true });
     }
 

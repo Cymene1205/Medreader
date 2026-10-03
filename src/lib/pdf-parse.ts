@@ -106,7 +106,7 @@ interface TextItem {
   hasEOL: boolean;
 }
 
-async function extractPageText(doc: any, pageNum: number): Promise<string> {
+export async function extractPageText(doc: any, pageNum: number): Promise<string> {
   const page = await doc.getPage(pageNum);
   try {
     const viewport = page.getViewport({ scale: 1 });
@@ -176,10 +176,26 @@ async function extractPageText(doc: any, pageNum: number): Promise<string> {
     const medianHeight =
       heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 10;
 
+    // Detect the gutter from gaps inside rows, before grouping left/right text.
+    const gutters: number[] = [];
+    for (const line of lines) {
+      const row = [...line.items].sort((a,b)=>a.x-b.x);
+      for (let i=1;i<row.length;i++) {
+        const leftEnd=row[i-1].x+row[i-1].width;
+        const rightStart=row[i].x;
+        const middle=(leftEnd+rightStart)/2;
+        if(rightStart-leftEnd>pageWidth*0.035 && middle>pageWidth*0.38 && middle<pageWidth*0.62) gutters.push(middle);
+      }
+    }
+    if(gutters.length>=4) {
+      gutters.sort((a,b)=>a-b);
+      splitX=gutters[Math.floor(gutters.length/2)];
+      isTwoColumn=true;
+    }
     if (isTwoColumn) {
-      const left = lines.filter((l) => Math.min(...l.items.map((i) => i.x)) < splitX);
-      const right = lines.filter((l) => Math.min(...l.items.map((i) => i.x)) >= splitX);
-      return renderLines(left, medianHeight) + "\n" + renderLines(right, medianHeight);
+      const left=lines.map(l=>({y:l.y,items:l.items.filter(i=>i.x<splitX)})).filter(l=>l.items.length);
+      const right=lines.map(l=>({y:l.y,items:l.items.filter(i=>i.x>=splitX)})).filter(l=>l.items.length);
+      return renderLines(left, medianHeight) + "\n\n" + renderLines(right, medianHeight);
     }
 
     return renderLines(lines, medianHeight);
