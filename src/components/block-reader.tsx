@@ -350,8 +350,8 @@ const BlockReader = forwardRef<BlockReaderHandle, Props>(function BlockReader(
       const t = (
         blocks[i].text ||
         blocks[i].table_caption ||
-        (Array.isArray(blocks[i].chart_caption) ? blocks[i].chart_caption.join(" ") : "") ||
-        (Array.isArray(blocks[i].image_caption) ? blocks[i].image_caption.join(" ") : "") ||
+        (Array.isArray(blocks[i].chart_caption) ? blocks[i].chart_caption?.join(" ") : "") ||
+        (Array.isArray(blocks[i].image_caption) ? blocks[i].image_caption?.join(" ") : "") ||
         ""
       ).toLowerCase();
       if (t.includes(q)) idxs.push(i);

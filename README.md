@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 [![Status: Healthy](https://img.shields.io/badge/Status-Healthy-success.svg)](#deployment)
 
-**仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader) · **版本**：v0.3.0 · **协议**：MIT
+**仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader) · **版本**：v0.3.1 · **协议**：MIT
 
 ---
 
@@ -34,7 +34,7 @@ MedReader Agent 是一个面向生命科学研究者的开源 AI 阅读器，专
 
 ### 当前状态
 
-v0.3.0 已经在阿里云 ECS（2 vCPU / 2 GiB / 40 GiB）上稳定运行，支持 Docker Compose 一键部署。生产环境实测：MinerU POST 提交 580ms 返回、10MB PDF 上传 + 解析全流程约 2–4 分钟、DeepSeek 4 层分析 30–60 秒。
+v0.3.1 支持 Docker Compose 和 macOS 本地部署，增加 MinerU 阶段显示、已上传任务恢复和直接本地文字兜底。云端解析耗时受排队和网络影响，2026-10-03 的测试任务持续返回 `pending`；本地读取已保存的正文、PDF 和图片无需重新解析。AI 问答与分析仍需配置模型并联网。详见 [本地部署与升级说明](LOCAL_DEPLOY.md)。
 
 ---
 
@@ -885,4 +885,4 @@ copies or substantial portions of the Software.
 **仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader)
 **作者**：[行止集 · Biorhythm](https://github.com/Cymene1205) · 华中科技大学同济医学院
 **协议**：MIT
-**版本**：v0.3.0 · 2026
+**版本**：v0.3.1 · 2026

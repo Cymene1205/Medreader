@@ -48,3 +48,11 @@ Thumbs.db
 worklog.md
 README-DEPLOY.md
 DEPLOY.md
+
+# Local demo state and credentials
+data
+output
+.playwright-cli
+local-demo-guide.md
+*.before-mineru-fix-*
+.env*

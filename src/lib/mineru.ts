@@ -10,27 +10,13 @@
  *   4. When state === "done", download full_zip_url, unzip, read full.md
  *      + content_list.json (block-level structure with page_idx/bbox)
  *
- * ---------------------------------------------------------------------------
- * IMPORTANT: Keep this file simple. Do NOT add:
- *   - `dns.setDefaultResultOrder("ipv4first")` — global Node DNS hack that
- *     interferes with undici's Happy Eyeballs and caused mysterious PUT
- *     hangs in production (commit fd77c58, later reverted).
- *   - `AbortController` per-call timeout wrapper — the `30_000 * ceil(MB)`
- *     formula produced 120s for a 4MB file, which fired before OSS could
- *     complete the upload through Next.js's standalone server pipeline.
- *     Node's built-in undici headersTimeout (5 min) is plenty.
- *   - `fetchWithRetry` with TRANSIENT_ERR_CODES — adds complexity without
- *     solving the actual problem; the original simple version worked fine.
- *
- * The original simple version (commit 9cf3a50, July 2026) used plain
- * `fetch()` calls with no wrappers, and it worked end-to-end including
- * PUT uploads to OSS. The "fixes" added between 99c74a6 and fd77c58
- * introduced regressions that surfaced as ABORT_TIMEOUT on PUT.
- * ---------------------------------------------------------------------------
+ * Upload sends raw bytes without Content-Type to preserve the OSS signature.
+ * Request limits are generous for file transfers; status requests are bounded
+ * separately so an unreachable API cannot leave the UI waiting indefinitely.
  */
 
 import JSZip from "jszip";
-import { readFile, mkdir, writeFile, rm, readdir } from "fs/promises";
+import { readFile, mkdir, writeFile } from "fs/promises";
 import { join, basename, dirname } from "path";
 
 const MINERU_BASE = "https://mineru.net";
@@ -38,10 +24,8 @@ const MINERU_BASE = "https://mineru.net";
 // On missing token, calls will fail fast with a clear auth error.
 const MINERU_TOKEN = process.env.MINERU_API_TOKEN || "";
 const POLL_INTERVAL_MS = 3500;
-// 3 min cap was the original working value. vlm mode on 30+ page PDFs
-// can take longer, but if we exceed 3 min the user probably wants to
-// fall through to pdfjs-dist rather than wait indefinitely.
-const POLL_TIMEOUT_MS = 180_000; // 3 min cap
+// Allow cloud queueing; fall back to local text extraction after 15 minutes.
+const POLL_TIMEOUT_MS = 900_000;
 
 export type MinerUBlock = {
   type: string; // text | image | table | equation | chart | header | footer | page_number | page_footnote | ref_text
@@ -87,17 +71,25 @@ type BatchStatus = {
  * Upload a local PDF file to MinerU, poll for completion, then download
  * and unzip the result. Returns the markdown + blocks.
  *
- * Uses plain fetch() — no AbortController wrapper, no retry logic.
- * Node's built-in undici fetch has a 5-minute headersTimeout and a
- * 5-minute bodyTimeout, which is more than enough for any PDF upload
- * or zip download. Adding per-call AbortController timeouts caused
- * regressions (see file header comment).
  */
-export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
+export type MinerUOptions = {
+  batchId?: string;
+  onProgress?: (message: string, batchId?: string) => Promise<void>;
+};
+export async function parseWithMinerU(filePath: string, options: MinerUOptions = {}): Promise<MinerUResult> {
+  if (!MINERU_TOKEN) throw new Error("未配置 MINERU_API_TOKEN");
+  if (options.batchId) {
+    const status = await pollBatchStatus(options.batchId, options.onProgress);
+    await options.onProgress?.("正在下载解析结果", options.batchId);
+    return downloadAndExtract(status.full_zip_url, filePath);
+  }
+  await options.onProgress?.("正在创建 MinerU 任务");
   // Step 1: request presigned upload URLs.
   const fileName = basename(filePath);
+  console.log(`[mineru] file=${fileName} stage=submit`);
   const submitRes = await fetch(`${MINERU_BASE}/api/v4/file-urls/batch`, {
     method: "POST",
+    signal: AbortSignal.timeout(60_000),
     headers: {
       Authorization: `Bearer ${MINERU_TOKEN}`,
       "Content-Type": "application/json",
@@ -129,12 +121,13 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
 
   // Step 2: PUT the file to the presigned URL. Note: do NOT send
   // Content-Type header — OSS will reject it.
-  // Plain fetch — no AbortController. Node's undici default 5-min
-  // headersTimeout is more than enough; per-call timeouts caused
-  // regressions on 4MB+ files (see file header).
+  // Allow five minutes for file upload; do not derive short limits from file size.
+  console.log(`[mineru] file=${fileName} batch=${batchId} stage=upload`);
+  await options.onProgress?.("正在上传 PDF 到 MinerU");
   const fileBuffer = await readFile(filePath);
   const putRes = await fetch(fileUrls[0], {
     method: "PUT",
+    signal: AbortSignal.timeout(300_000),
     body: fileBuffer,
     headers: {
       // OSS requires the body to be sent as raw bytes; specifying
@@ -147,13 +140,19 @@ export async function parseWithMinerU(filePath: string): Promise<MinerUResult> {
   }
 
   // Step 3: poll batch status.
-  const status = await pollBatchStatus(batchId);
+  console.log(`[mineru] file=${fileName} batch=${batchId} stage=poll`);
+  await options.onProgress?.("上传完成，等待云端解析", batchId);
+  const status = await pollBatchStatus(batchId, options.onProgress);
+  console.log(`[mineru] file=${fileName} batch=${batchId} stage=download`);
 
   // Step 4: download and unzip.
-  return await downloadAndExtract(status.full_zip_url!, filePath);
+  await options.onProgress?.("正在下载解析结果", batchId);
+  const result = await downloadAndExtract(status.full_zip_url!, filePath);
+  console.log(`[mineru] file=${fileName} batch=${batchId} stage=extracted blocks=${result.blocks.length}`);
+  return result;
 }
 
-async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string; pageCount: number }> {
+async function pollBatchStatus(batchId: string, onProgress?: MinerUOptions["onProgress"]): Promise<{ full_zip_url: string; pageCount: number }> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let lastStatus: BatchStatus | null = null;
 
@@ -163,12 +162,13 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
     try {
       resp = await fetch(
         `${MINERU_BASE}/api/v4/extract-results/batch/${batchId}`,
-        { headers: { Authorization: `Bearer ${MINERU_TOKEN}`, Accept: "*/*" } }
+        { headers: { Authorization: `Bearer ${MINERU_TOKEN}`, Accept: "*/*" }, signal: AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))) }
       );
     } catch (e) {
       console.warn("[mineru] poll fetch error:", e);
       continue;
     }
+    if ([401, 403, 404].includes(resp.status)) throw new Error(`MinerU status query failed ${resp.status}`);
     if (!resp.ok) {
       console.warn(`[mineru] poll status ${resp.status}`);
       continue;
@@ -184,7 +184,10 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
     const r0 = results[0] as BatchStatus;
     lastStatus = r0;
     const state = r0.state;
-    console.log(`[mineru] state=${state} progress=${JSON.stringify(r0.extract_progress || {})}`);
+    const labels: Record<string, string> = {"waiting-file": "云端等待接收文件", pending: "MinerU 云端排队中", running: "MinerU 正在解析", converting: "MinerU 正在转换结果", done: "解析完成，正在获取结果", failed: "MinerU 解析失败"};
+    const progress = r0.extract_progress;
+    await onProgress?.((labels[state] || `MinerU 状态：${state}`) + (progress ? `（${progress.extracted_pages}/${progress.total_pages} 页）` : ""), batchId);
+    console.log(`[mineru] batch=${batchId} state=${state} progress=${JSON.stringify(r0.extract_progress || {})}`);
     if (state === "done" && r0.full_zip_url) {
       const pageCount = r0.extract_progress?.total_pages || 0;
       return { full_zip_url: r0.full_zip_url, pageCount };
@@ -194,12 +197,12 @@ async function pollBatchStatus(batchId: string): Promise<{ full_zip_url: string;
     }
   }
   throw new Error(
-    `MinerU polling timed out after ${POLL_TIMEOUT_MS / 1000}s. Last status: ${JSON.stringify(lastStatus)}`
+    `MinerU batch=${batchId} polling timed out after ${POLL_TIMEOUT_MS / 1000}s. Last status: ${JSON.stringify(lastStatus)}`
   );
 }
 
 async function downloadAndExtract(zipUrl: string, originalPath: string): Promise<MinerUResult> {
-  const zipRes = await fetch(zipUrl);
+  const zipRes = await fetch(zipUrl, { signal: AbortSignal.timeout(120_000) });
   if (!zipRes.ok) {
     throw new Error(`MinerU zip download failed ${zipRes.status}`);
   }
@@ -214,6 +217,8 @@ async function downloadAndExtract(zipUrl: string, originalPath: string): Promise
   if (mdFile) {
     markdown = await mdFile.async("string");
   }
+
+  if (!markdown.trim()) throw new Error("MinerU result contains no usable full.md markdown");
 
   // Locate content_list.json (any file ending with _content_list.json or
   // named content_list.json — MinerU varies)

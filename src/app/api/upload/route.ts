@@ -6,7 +6,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { trackEvent } from "@/lib/track";
-import { parseWithMinerU, markdownToPlainText } from "@/lib/mineru";
+import { ensurePaperParsing } from "@/lib/paper-parse";
 import { checkAndIncrement } from "@/lib/quota";
 
 export const runtime = "nodejs";
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget background parsing using MinerU.
     // CRITICAL: must NEVER reject — attach .catch() to prevent the
     // process from being killed by an unhandled rejection.
-    parsePdfBackground(paper.id, storedPath).catch((e) => {
+    ensurePaperParsing(paper.id, storedPath).catch((e) => {
       console.error(`[upload] background parse crashed for ${paper.id}:`, e);
       // Last-ditch effort to mark as error in DB
       db.paper
@@ -131,85 +131,3 @@ export async function POST(req: NextRequest) {
  * Falls back to pdfjs-dist only on MinerU failure (and stores plain
  * text only, no blocks).
  */
-async function parsePdfBackground(paperId: string, filePath: string): Promise<void> {
-  try {
-    const result = await parseWithMinerU(filePath);
-
-    // Extract figures + citations BEFORE marking the paper as "done".
-    //
-    // Why order matters:
-    //   The frontend polls /api/paper/[id] and, on parseStatus="done",
-    //   immediately fetches /api/figures. If we set "done" first and then
-    //   run extractAndStoreFigures, the frontend sees "done" + empty
-    //   figures array and marks figuresStatus="idle" — never retrying.
-    //   Result: figures never appear until the user manually refreshes.
-    //
-    // By extracting first and only then flipping parseStatus to "done",
-    // the frontend's first figures fetch will see the full list.
-    // Extraction is pure-code (no LLM), takes <2s for a typical paper.
-    let figCount = 0;
-    try {
-      const { extractAndStoreFigures } = await import("@/lib/extract-figures");
-      figCount = await extractAndStoreFigures(paperId, result.blocks, result.imagesDir);
-      console.log(`[upload] extracted ${figCount} figures for paper ${paperId}`);
-    } catch (e) {
-      console.warn(`[upload] extractAndStoreFigures failed (non-fatal) for ${paperId}:`, e);
-    }
-    try {
-      const { buildCitationsAndStore } = await import("@/lib/align-citations");
-      const cites = await buildCitationsAndStore(paperId);
-      console.log(`[upload] stored ${cites.length} citations for paper ${paperId}`);
-    } catch (e) {
-      console.warn(`[upload] buildCitationsAndStore failed (non-fatal) for ${paperId}:`, e);
-    }
-
-    // Now flip parseStatus to "done" — frontend will see done + figures
-    // already populated.
-    await db.paper.update({
-      where: { id: paperId },
-      data: {
-        parseStatus: "done",
-        markdown: result.markdown,
-        blocksJson: JSON.stringify(result.blocks),
-        imagesDir: result.imagesDir,
-        pageCount: result.pageCount,
-        // Also store a plain-text version (for chat context redundancy)
-        parsedText: markdownToPlainText(result.markdown),
-      },
-    });
-  } catch (e) {
-    console.error(`[upload] MinerU parse failed for ${paperId}:`, e);
-    // Fallback: try pdfjs-dist
-    try {
-      const { parsePdf } = await import("@/lib/pdf-parse");
-      const text = await parsePdf(filePath);
-      await db.paper.update({
-        where: { id: paperId },
-        data: {
-          parseStatus: "done",
-          parsedText: text,
-          // No markdown / blocks available in fallback mode
-        },
-      });
-      // In pdfjs fallback mode there are no image blocks, so we can't extract
-      // figures. But we can still build citations from the plain text.
-      try {
-        const { buildCitationsAndStore } = await import("@/lib/align-citations");
-        const cites = await buildCitationsAndStore(paperId);
-        console.log(`[upload] (fallback) stored ${cites.length} citations for paper ${paperId}`);
-      } catch (e2) {
-        console.warn(`[upload] (fallback) buildCitationsAndStore failed for ${paperId}:`, e2);
-      }
-    } catch (e2) {
-      console.error(`[upload] pdfjs fallback also failed for ${paperId}:`, e2);
-      try {
-        await db.paper.update({
-          where: { id: paperId },
-          data: { parseStatus: "error" },
-        });
-      } catch {
-        // ignore DB errors during error-state update
-      }
-    }
-  }
-}

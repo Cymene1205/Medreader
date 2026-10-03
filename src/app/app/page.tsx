@@ -304,6 +304,42 @@ export default function Home() {
     return () => window.removeEventListener("medreader:analysis-updated", handler);
   }, [paperId]);
 
+  async function analyzeSavedPaper() {
+    if (!paperId || !paperText) return;
+    if (!hasUserLLMConfig()) { setLlmSettingsOpen(true); return; }
+    setOutlineError(null);
+    setOutlineLoading(true);
+    setUploadStage("analyzing");
+    try {
+      const headers = { "Content-Type": "application/json", ...refreshLLMHeaders() };
+      const response = await fetch("/api/analyze", {
+        method: "POST", headers,
+        body: JSON.stringify({ paperId, title: fileName, text: paperText, markdown: paperMarkdown || undefined }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setOutline(data.outline);
+      setOutlineCollapsed(false);
+      setOutlineLoading(false);
+      setFiguresStatus("call-a");
+      const figureResponse = await fetch("/api/figures", { method: "POST", headers, body: JSON.stringify({paperId}) });
+      const figureData = await figureResponse.json();
+      if (!figureResponse.ok) throw new Error(figureData.error || `HTTP ${figureResponse.status}`);
+      if (Array.isArray(figureData.figures)) setFigures(figureData.figures);
+      const outlineResponse = await fetch(`/api/analyze?paperId=${paperId}`);
+      if (outlineResponse.ok) {
+        const updated = await outlineResponse.json();
+        if (updated.outline) setOutline(updated.outline);
+      }
+      setFiguresStatus("done");
+      setUploadStage("done");
+    } catch (error) {
+      setOutlineError(error instanceof Error ? error.message : String(error));
+      setFiguresStatus("error");
+      setUploadStage("done");
+    } finally { setOutlineLoading(false); }
+  }
+
   // ── Shared-paper URL loader ────────────────────────────────────────────
   // When the URL contains ?paperId=xxx (or ?p=xxx), treat it as a shared
   // paper: load the PDF binary + parsed content + analysis from the server
@@ -350,7 +386,15 @@ export default function Home() {
         if (!paperRes.ok) {
           throw new Error(`Paper fetch failed: HTTP ${paperRes.status}`);
         }
-        const paperData = await paperRes.json();
+        let paperData = await paperRes.json();
+        const parseDeadline = Date.now() + 20 * 60 * 1000;
+        while (paperData.parseStatus === "pending" && Date.now() < parseDeadline) {
+          setMineruStatus(paperData.parseMessage || "正在恢复解析任务…");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const statusRes = await fetch(`/api/paper/${sharedId}`);
+          if (statusRes.ok) paperData = await statusRes.json();
+        }
+        if (paperData.parseStatus !== "done") throw new Error(paperData.parseMessage || "解析尚未完成，请稍后重新打开");
         console.log(`[shared] paper metadata loaded: title="${paperData.title}", hasMarkdown=${!!paperData.markdown}, hasBlocks=${!!paperData.blocks}`);
 
         // 2. Fetch PDF binary (for PdfViewer)
@@ -532,6 +576,7 @@ export default function Home() {
         const upData = await upRes.json();
         serverPaperId = upData.paperId;
         setPaperId(upData.paperId);
+        window.history.replaceState(null, "", `/app?paperId=${encodeURIComponent(upData.paperId)}`);
         setUploadStage("parsing");
         setMineruStatus("MinerU 解析中（30-90 秒）…");
         // Server just incremented the mineru_parse counter — refresh the
@@ -542,7 +587,7 @@ export default function Home() {
         // Poll for parse status
         let pollTimeoutReached = true;
         let pollLastError: string | null = null;
-        for (let i = 0; i < 120; i++) {
+        for (let i = 0; i < 600; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           let sRes: Response;
           try {
@@ -578,13 +623,13 @@ export default function Home() {
           }
           pollLastError = null;
           if (i % 5 === 0) {
-            setMineruStatus(`MinerU 解析中…（已等 ${(i + 1) * 2}s）`);
+            setMineruStatus(`${sData.parseMessage || "MinerU 解析中"}…（已等 ${(i + 1) * 2}s）`);
           }
         }
         if (pollTimeoutReached) {
-          // 4 分钟没拿到 done/error——后台可能仍在跑或已哑死
+          // Backend cloud parsing and local fallback have not finished within 20 minutes.
           throw new Error(
-            `MinerU 解析超时（4 分钟未返回结果）。${
+            `MinerU 解析超时（20 分钟未返回结果）。${
               pollLastError ? `最后状态：${pollLastError}。` : ""
             }请重试，或刷新后从历史记录中查看。`
           );
@@ -894,6 +939,12 @@ export default function Home() {
           )}
           导入 PDF
         </Button>
+
+        {paperId && paperText && !outline && (
+          <Button onClick={analyzeSavedPaper} size="sm" variant="secondary" disabled={isBusy} className="h-8">
+            生成分析
+          </Button>
+        )}
 
         {/* Download dropdown — placed right next to the import button.
             Disabled until the analysis outline is ready. Two export options:

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ensurePaperParsing } from "@/lib/paper-parse";
 import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -36,6 +37,9 @@ export async function GET(
         id: true,
         title: true,
         parseStatus: true,
+        parseMessage: true,
+        mineruTaskId: true,
+        filePath: true,
         parsedText: true,
         markdown: true,
         blocksJson: true,
@@ -53,6 +57,9 @@ export async function GET(
       );
     }
 
+    if (paper.parseStatus === "pending") {
+      ensurePaperParsing(paper.id, paper.filePath, paper.mineruTaskId || undefined).catch(console.error);
+    }
     const isDone = paper.parseStatus === "done";
     let blocks: unknown = null;
     if (isDone && paper.blocksJson) {
@@ -77,6 +84,7 @@ export async function GET(
         id: paper.id,
         title: paper.title,
         parseStatus: paper.parseStatus,
+        parseMessage: paper.parseMessage,
         parsedText: isDone ? paper.parsedText : null,
         markdown: isDone ? paper.markdown : null,
         blocks,

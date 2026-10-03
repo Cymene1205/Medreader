@@ -71,6 +71,7 @@ model Paper {
   markdown    String?  // MinerU full.md content (knowledge base)
   blocksJson  String?  // JSON-stringified MinerU content_list.json (block-level: page_idx/bbox/text_level)
   imagesDir   String?  // local dir for extracted images
+  parseMessage String?
   mineruTaskId  String? // MinerU batch_id or task_id
   pageCount   Int?
   createdAt   DateTime @default(now())

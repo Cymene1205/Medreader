@@ -1,6 +1,6 @@
 {
   "name": "medreader-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -14,7 +14,10 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "start:local": "node scripts/start-local.mjs",
+    "stop:local": "node scripts/start-local.mjs stop",
+    "test:mineru": "tsx scripts/test-mineru-local.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
@@ -101,6 +104,7 @@
     "eslint": "^9",
     "eslint-config-next": "^16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
   }

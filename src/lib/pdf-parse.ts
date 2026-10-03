@@ -49,7 +49,7 @@ export async function parsePdf(filePath: string): Promise<string> {
 // Priority 2: pdfjs-dist Node fallback (FIXED worker setup)
 // ---------------------------------------------------------------------------
 
-async function parseWithPdfjs(filePath: string): Promise<string> {
+export async function parseWithPdfjs(filePath: string): Promise<string> {
   // Use the legacy build (designed for non-DOM environments).
   const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
@@ -58,24 +58,10 @@ async function parseWithPdfjs(filePath: string): Promise<string> {
   // spawn a "fake worker" by dynamically importing its worker source
   // file, but it couldn't locate it on disk. We use the .mjs path
   // that ships with pdfjs-dist; Node can resolve it directly.
-  try {
-    // Resolve via Node module resolution
-    const workerUrl = new URL(
-      "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-      // `import.meta.url` works in ESM mode (Next.js compiles .ts to ESM)
-      import.meta.url
-    );
-    pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.href;
-  } catch {
-    // Fallback: tell pdfjs to run worker on main thread (no worker).
-    try {
-      pdfjs.GlobalWorkerOptions.workerSrc = "";
-      // pdfjs-dist also exposes a "fake worker" path; setting
-      // disableWorker=true on the loadingTask below ensures it.
-    } catch {
-      // ignore
-    }
-  }
+  // Import the worker on the main thread so Next's output tracing includes it.
+  // A bare package name passed to new URL() incorrectly resolves beside this file.
+  const worker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  (globalThis as any).pdfjsWorker = worker;
 
   const fileBuffer = await readFile(filePath);
   const data = new Uint8Array(fileBuffer);

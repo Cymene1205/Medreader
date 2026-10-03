@@ -92,6 +92,6 @@ export const config = {
   // Root `/` is matched by this regex too, but the middleware function
   // short-circuits it (see above).
   matcher: [
-    "/((?!login|register|landing|api/auth|api/upload|api/chat|api/translate|api/vision|api/vision-test|api/llm-test|api/quota|api/paper-images|_next|favicon.ico).*)",
+    "/((?!login|register|landing|api/auth|api/upload|api/chat|api/translate|api/vision|api/vision-test|api/llm-test|api/quota|api/paper-images|_next|polyfills.js|pdf.worker.js|logo.svg|robots.txt|favicon.ico).*)",
   ],
 };
