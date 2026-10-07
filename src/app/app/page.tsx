@@ -580,7 +580,7 @@ export default function Home() {
         setPaperId(upData.paperId);
         window.history.replaceState(null, "", `/app?paperId=${encodeURIComponent(upData.paperId)}`);
         setUploadStage("parsing");
-        setMineruStatus("MinerU 解析中（30-90 秒）…");
+        setMineruStatus(upData.parseMode === "local" ? "正在本地提取文字和图表页面…" : "MinerU 云端解析中…");
         // Server just incremented the mineru_parse counter — refresh the
         // header badge so the user sees their remaining quota drop in
         // real time. Fire-and-forget; failures are non-fatal.

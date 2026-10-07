@@ -14,10 +14,11 @@ async function main() {
     await db.paper.update({where:{id},data:{
       markdown:result.markdown,parsedText:markdownToPlainText(result.markdown),blocksJson:JSON.stringify(result.blocks),
       imagesDir:result.imagesDir,pageCount:result.pageCount,
-      parseMessage:'MinerU 尚未返回；已使用本地解析，图片为图表所在原文页面',
+      parseMessage:'本地快速解析完成；图片为图表所在原文页面',
     }});
     const count=await extractAndStoreFigures(id,result.blocks.filter(b=>b.type==='image'),result.imagesDir);
     await buildCitationsAndStore(id);
+    await db.paper.update({where:{id},data:{parseStatus:"done"}});
     console.log({id,title:paper.title,pages:result.pageCount,figures:count,source:'local-pdf-page'});
   }
 }

@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingExcludes: {
+    "*": ["./uploads/**/*", "./data/**/*", "./.env*", "./.git/**/*", "./output/**/*", "./.playwright-cli/**/*"],
+  },
   serverExternalPackages: ["@napi-rs/canvas", "pdfjs-dist"],
   typescript: {
     ignoreBuildErrors: true,

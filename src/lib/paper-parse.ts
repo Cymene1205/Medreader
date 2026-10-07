@@ -13,7 +13,11 @@ export function ensurePaperParsing(paperId: string, filePath: string, batchId?: 
 
 async function parsePdfBackground(paperId: string, filePath: string, batchId?: string): Promise<void> {
   try {
-    const result = await parseWithMinerU(filePath, {
+    const localMode = process.env.PDF_PARSE_MODE === "local";
+    if (localMode) await db.paper.update({where:{id:paperId},data:{parseMessage:"正在本地提取文字和图表页面"}});
+    const result = localMode
+      ? await (await import("@/lib/pdf-local")).parseLocalPdf(filePath)
+      : await parseWithMinerU(filePath, {
       batchId,
       onProgress: async (parseMessage, mineruTaskId) => {
         await db.paper.update({ where: { id: paperId }, data: { parseMessage, ...(mineruTaskId ? { mineruTaskId } : {}) } });
@@ -48,7 +52,7 @@ async function parsePdfBackground(paperId: string, filePath: string, batchId?: s
     let figCount = 0;
     try {
       const { extractAndStoreFigures } = await import("@/lib/extract-figures");
-      figCount = await extractAndStoreFigures(paperId, result.blocks, result.imagesDir);
+      figCount = await extractAndStoreFigures(paperId, localMode ? result.blocks.filter(b=>b.type === "image") : result.blocks, result.imagesDir);
       console.log(`[upload] extracted ${figCount} figures for paper ${paperId}`);
     } catch (e) {
       console.warn(`[upload] extractAndStoreFigures failed (non-fatal) for ${paperId}:`, e);
@@ -67,7 +71,7 @@ async function parsePdfBackground(paperId: string, filePath: string, batchId?: s
       where: { id: paperId },
       data: {
         parseStatus: "done",
-        parseMessage: "解析结果已保存",
+        parseMessage: localMode ? "本地快速解析完成；图片为图表所在原文页面" : "解析结果已保存",
         markdown: result.markdown,
         blocksJson: JSON.stringify(result.blocks),
         imagesDir: result.imagesDir,

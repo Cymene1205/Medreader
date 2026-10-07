@@ -114,6 +114,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         paperId: paper.id,
+        parseMode: process.env.PDF_PARSE_MODE === "local" ? "local" : "mineru",
         uploadUrl: storedPath,
         quota: { count: quota.count, limit: quota.limit },
       },
