@@ -16,7 +16,7 @@ const prisma = new PrismaClient();
     headers: {
       'Content-Type': 'application/json',
       'X-LLM-Provider': 'deepseek',
-      'X-LLM-Api-Key': 'sk-edb16a1b2daa4982a45307247934cd91',
+      'X-LLM-Api-Key': process.env.DEEPSEEK_API_KEY || '',
       'X-LLM-Model': 'deepseek-chat',
     },
     body: JSON.stringify({

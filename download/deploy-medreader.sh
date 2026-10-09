@@ -44,13 +44,13 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # Zhipu GLM-4V key provided by user
-ZHIPU_KEY="ab99da4d58cc4f67bb858684be8e50fc.AnqgaeynbqrMTDtR"
+ZHIPU_KEY="${VISION_API_KEY:-}"
 
 # DeepSeek chat LLM key provided by user
-DEEPSEEK_KEY="sk-edb16a1b2daa4982a45307247934cd91"
+DEEPSEEK_KEY="${DEEPSEEK_API_KEY:-}"
 
 # MinerU PDF parsing API token provided by user
-MINERU_TOKEN="sk-X5ufJB2CZjaU9OezQps3SvNbbMtY3RdeB7VrrzBWYcKYZuad"
+MINERU_TOKEN="${MINERU_API_TOKEN:-}"
 
 # Helper: ensure a key exists in .env.production with a specific value
 ensure_var() {

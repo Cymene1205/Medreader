@@ -37,9 +37,9 @@ DEPLOY_DIR="/opt/medreader"
 BRANCH="main"
 
 # API keys (写入 .env.production)
-DEEPSEEK_KEY="sk-edb16a1b2daa4982a45307247934cd91"
-MINERU_TOKEN="sk-X5ufJB2CZjaU9OezQps3SvNbbMtY3RdeB7VrrzBWYcKYZuad"
-ZHIPU_KEY="ab99da4d58cc4f67bb858684be8e50fc.AnqgaeynbqrMTDtR"
+DEEPSEEK_KEY="${DEEPSEEK_API_KEY:-}"
+MINERU_TOKEN="${MINERU_API_TOKEN:-}"
+ZHIPU_KEY="${VISION_API_KEY:-}"
 
 # 如果是 private 仓库，把下面这行取消注释并填入你的 GitHub PAT
 # (公开仓库不需要，留空即可)
