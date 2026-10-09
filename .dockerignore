@@ -56,3 +56,7 @@ output
 local-demo-guide.md
 *.before-mineru-fix-*
 .env*
+
+# Pasted documents and legacy bundles may contain historic credentials.
+upload
+download/medreader*src*.tar.gz

@@ -75,3 +75,5 @@ agent-ctx/
 # NOTE: do NOT add `upload/` (no leading slash) here — it would also
 # match `src/app/api/upload/` and silently break the PDF upload route.
 # The user-uploads directory is already covered by `/uploads/` above.
+# Legacy source bundles may contain historic credentials; keep them private.
+/download/medreader*src*.tar.gz
