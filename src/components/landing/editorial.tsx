@@ -33,7 +33,7 @@ export function Editorial() {
                 MedReader Agent 想要做的事很简单：让 AI 不只是"摘要"文献，而是真正与读者一起<span className="text-[var(--burgundy)] font-semibold">逐段精读、结构化拆解、随时质疑</span>。我们设计了一个五面板协同工作区——左侧是 PDF 原文，中间是结构化解析与思维导图，右侧是 Agent 问答，下方是全文框架与段落导航。所有面板互相联动：在框架里点一个章节，原文自动滚到对应位置；在原文选中一段文字，Agent 立刻可以基于这段上下文回答问题。
               </p>
               <p>
-                更进一步，我们让 Agent 基于论文的<span className="text-[var(--burgundy)] font-semibold">六个核心维度</span>——科学问题、论证思路、实验方法与结果、论证逻辑解析、创新性、局限性——主动生成结构化分析。这不是简单的"摘要"或"翻译"，而是接近同行评议深度的二次解读。研究者拿到的不再是一份文本，而是一份可对话、可质疑、可引用的知识工件。
+                更进一步，我们让 Agent 基于论文的<span className="text-[var(--burgundy)] font-semibold">四个核心维度</span>——问题与背景、论证主线、创新性、局限与机会——主动生成结构化分析。其中，论证主线将论证思路、实验方法与结果、论证逻辑解析整合在一起，帮助读者沿着关键证据理解作者如何一步步得出结论。研究者拿到的是一份可对话、可质疑、可引用的知识工件。
               </p>
             </div>
           </div>
@@ -62,7 +62,7 @@ export function Editorial() {
                   k: "03",
                   title: "质疑，而非接受",
                   en: "Question, not accept",
-                  body: "六维度分析内置「局限性」维度，鼓励批判性阅读。",
+                  body: "四维度分析通过「局限与机会」鼓励批判性阅读与后续研究探索。",
                 },
               ].map((it) => (
                 <div key={it.k} className="flex gap-4 group">

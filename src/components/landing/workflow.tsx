@@ -27,8 +27,8 @@ const STEPS = [
     title: "AI 结构化分析",
     en: "Analyze",
     desc:
-      "DeepSeek 基于正文 8000 字符上下文识别章节结构，生成全文框架；并按六维度主动产出分析。",
-    detail: ["DeepSeek-V3", "8000 字符上下文", "六维度同步生成"],
+      "Agent 结合论文正文与主图，生成问题与背景、论证主线、创新性、局限与机会四维度分析，并在全文框架中呈现。",
+    detail: ["四维度结构化分析", "串联实验与图表证据", "论证主线一体呈现"],
   },
   {
     n: "IV",
@@ -118,7 +118,7 @@ export function Workflow() {
             { num: "30s", label: "平均解析时长", sub: "Avg. parsing" },
             { num: "150", label: "标题识别上限", sub: "Headings cap" },
             { num: "8K", label: "上下文字符", sub: "Context chars" },
-            { num: "6", label: "维度同时产出", sub: "Dimensions" },
+            { num: "4", label: "核心分析维度", sub: "Dimensions" },
           ].map((s) => (
             <div key={s.label} className="text-center">
               <div className="numeral text-3xl mb-1">{s.num}</div>

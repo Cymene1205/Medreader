@@ -28,7 +28,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "MedReader Agent — 让 AI 帮你真正读懂一篇医学文献",
   description:
-    "面向医学研究者的 AI 文献阅读 Agent。五面板协同 + 六维度论文分析 + DeepSeek 大模型问答，将 PDF 转化为可对话、可导航、可质疑的知识。",
+    "面向医学研究者的 AI 文献阅读 Agent。五面板协同 + 四维度论文分析 + DeepSeek 大模型问答，将 PDF 转化为可对话、可导航、可质疑的知识。",
   keywords: [
     "MedReader Agent",
     "AI 文献阅读",
@@ -37,14 +37,11 @@ export const metadata: Metadata = {
     "DeepSeek",
     "Next.js",
     "学术工具",
-    "行止集",
-    "Biorhythm",
   ],
-  authors: [{ name: "行止集 Biorhythm" }],
   openGraph: {
     title: "MedReader Agent — 让 AI 帮你真正读懂一篇医学文献",
     description:
-      "面向医学研究者的 AI 文献阅读 Agent。五面板协同 + 六维度论文分析。",
+      "面向医学研究者的 AI 文献阅读 Agent。五面板协同 + 四维度论文分析。",
     type: "website",
   },
 };

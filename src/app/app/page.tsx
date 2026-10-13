@@ -1122,7 +1122,7 @@ export default function Home() {
               </Link>
             )}
             <span className="text-xs opacity-90 max-w-[120px] truncate">
-              {(session.user as any).name || session.user.email}
+              已登录
             </span>
             <Button
               variant="ghost"

@@ -179,12 +179,10 @@ export function DeploymentSection() {
               Caddyfile 三行配置反代 + 自动 HTTPS · 详见仓库 README
             </p>
             <a
-              href="https://github.com/Cymene1205/Medreader"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#stack"
               className="font-sans-ui text-[10px] tracking-[0.18em] uppercase text-[var(--burgundy)] hover:underline"
             >
-              View deploy.sh on GitHub ↗
+              查看技术架构 ↗
             </a>
           </div>
         </div>

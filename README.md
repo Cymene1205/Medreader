@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 [![Status: Healthy](https://img.shields.io/badge/Status-Healthy-success.svg)](#deployment)
 
-**仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader) · **版本**：v0.3.3 · **协议**：MIT
+**仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader) · **版本**：v0.3.4 · **协议**：MIT
 
 ---
 
@@ -34,7 +34,9 @@ MedReader Agent 是一个面向生命科学研究者的开源 AI 阅读器，专
 
 ### 当前状态
 
-v0.3.3 支持 Docker Compose 和 macOS 本地部署，增加 MinerU 阶段显示、已上传任务恢复和直接本地文字兜底。云端解析耗时受排队和网络影响，2026-10-03 的测试任务持续返回 `pending`；本地读取已保存的正文、PDF 和图片无需重新解析。AI 问答与分析仍需配置模型并联网。详见 [本地部署与升级说明](LOCAL_DEPLOY.md)。
+**v0.3.4（参赛展示版）** 将公开页面的介绍统一为四维度，移除网页中的个人署名、学校标识和个人仓库入口，并隐藏阅读工作区的账号姓名与邮箱。「问题与背景」下的「已有不足」小标题显示为「研究现状」，保存的分析内容保持不变。详见 [版本记录](CHANGELOG.md)。
+
+自 v0.3.3 起支持 Docker Compose 和 macOS 本地部署，增加 MinerU 阶段显示、已上传任务恢复和直接本地文字兜底。云端解析耗时受排队和网络影响，2026-10-03 的测试任务持续返回 `pending`；本地读取已保存的正文、PDF 和图片无需重新解析。AI 问答与分析仍需配置模型并联网。详见 [本地部署与升级说明](LOCAL_DEPLOY.md)。
 
 ---
 
@@ -885,4 +887,4 @@ copies or substantial portions of the Software.
 **仓库**：[github.com/Cymene1205/Medreader](https://github.com/Cymene1205/Medreader)
 **作者**：[行止集 · Biorhythm](https://github.com/Cymene1205) · 华中科技大学同济医学院
 **协议**：MIT
-**版本**：v0.3.3 · 2026
+**版本**：v0.3.4 · 2026

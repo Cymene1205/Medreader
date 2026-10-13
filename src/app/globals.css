@@ -82,13 +82,13 @@
   --chart-3: #6B5B95;
   --chart-4: #C08552;
   --chart-5: #5B8C5A;
-  /* 6 dimension colors */
-  --dim-1: #2C5F8D; /* 科学问题 - deep blue */
-  --dim-2: #3F8E83; /* 论证思路 - teal */
-  --dim-3: #6B5B95; /* 实验方法与结果 - muted purple */
-  --dim-4: #C08552; /* 论证逻辑解析 - ochre */
-  --dim-5: #5B8C5A; /* 创新性 - olive green */
-  --dim-6: #B0546E; /* 局限性 - rose */
+  /* Shared accent palette for analysis cards and charts */
+  --dim-1: #2C5F8D; /* deep blue */
+  --dim-2: #3F8E83; /* teal */
+  --dim-3: #6B5B95; /* muted purple */
+  --dim-4: #C08552; /* ochre */
+  --dim-5: #5B8C5A; /* olive green */
+  --dim-6: #B0546E; /* rose */
   /* Sidebar */
   --sidebar: #FFFFFF;
   --sidebar-foreground: #1A2230;

@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowRight, FileText, Sparkles, MessageSquareQuote, Github } from "lucide-react";
+import { ArrowRight, FileText, Sparkles, MessageSquareQuote, BrainCircuit } from "lucide-react";
 
 export function Hero() {
   const { data: session, status } = useSession();
@@ -19,7 +19,7 @@ export function Hero() {
       <div className="absolute top-16 left-0 right-0 border-y border-[var(--rule)] bg-[var(--paper-soft)]/60">
         <div className="max-w-[1400px] mx-auto px-6 lg:px-10 py-2 flex items-center justify-between font-sans-ui text-[10px] tracking-[0.22em] uppercase text-[var(--ink-muted)]">
           <span>ISSN 2026-MDR · An AI Reading Agent for Medical Literature</span>
-          <span className="hidden md:inline">Huazhong UST · Tongji Medical College</span>
+          <span className="hidden md:inline">Question · Evidence · Insight</span>
           <span>№ 001 · First Edition</span>
         </div>
       </div>
@@ -52,7 +52,7 @@ export function Hero() {
             <p className="font-serif-cn text-xl md:text-2xl lg:text-[26px] leading-relaxed text-[var(--ink-soft)] max-w-2xl">
               让 AI 帮你真正<span className="text-[var(--burgundy)] font-semibold">读懂</span>一篇医学文献。
               <br />
-              五面板协同 · 六维度结构化分析 · 深度问答
+              五面板协同 · 四维度结构化分析 · 深度问答
             </p>
 
             <p className="font-serif-en italic text-base text-[var(--ink-muted)] mt-6 max-w-xl leading-relaxed">
@@ -70,13 +70,11 @@ export function Hero() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
               <a
-                href="https://github.com/Cymene1205/Medreader"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="#dimensions"
                 className="inline-flex items-center gap-2 px-6 py-3.5 bg-transparent text-[var(--ink)] font-sans-ui text-sm tracking-[0.08em] uppercase border border-[var(--ink)] rounded-sm hover:bg-[var(--ink)] hover:text-[var(--paper)] transition-all"
               >
-                <Github className="w-4 h-4" />
-                GitHub
+                <BrainCircuit className="w-4 h-4" />
+                四维分析
               </a>
               <a
                 href="#features"
@@ -90,7 +88,7 @@ export function Hero() {
             <div className="mt-14 grid grid-cols-3 gap-4 lg:gap-8 max-w-2xl border-t border-b border-[var(--rule)] py-6">
               {[
                 { num: "05", label: "协同面板", en: "Panels" },
-                { num: "06", label: "分析维度", en: "Dimensions" },
+                { num: "04", label: "分析维度", en: "Dimensions" },
                 { num: "∞", label: "可问问题", en: "Queries" },
               ].map((s) => (
                 <div key={s.label} className="text-center lg:text-left">
@@ -195,7 +193,7 @@ export function Hero() {
             ↓ Scroll to read the prospectus · 向下滚动阅读项目说明书
           </p>
           <p className="font-sans-ui text-[10px] tracking-[0.2em] uppercase">
-            Curated by Biorhythm · 行止集
+            MedReader Agent · 文献阅读助手
           </p>
         </div>
       </div>

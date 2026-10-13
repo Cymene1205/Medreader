@@ -375,7 +375,7 @@ export default function PdfViewer({
             <FileText className="h-10 w-10 opacity-40" />
             <p className="text-sm">点击上方按钮导入 PDF 文献</p>
             <p className="text-xs text-muted-foreground/70">
-              支持 PDF 格式；导入后将自动生成 6 维度层次化大纲
+              支持 PDF 格式；导入后将自动生成四维度结构化分析
             </p>
           </div>
         )}

@@ -516,6 +516,7 @@ export default function OutlinePanel({
                           {sec.key !== "argumentSpine" && part && (part as any).subsections && (part as any).subsections.length > 0 && (
                             <SubsectionChain
                               subsections={(part as any).subsections}
+                              sectionKey={sec.key}
                               accentColor={sec.color}
                               softColor={sec.soft}
                               borderColor={sec.border}
@@ -896,11 +897,13 @@ const MineruLoadingIndicator = PipelineLoadingIndicator;
 
 function SubsectionChain({
   subsections,
+  sectionKey,
   accentColor,
   softColor,
   borderColor,
 }: {
   subsections: Subsection[];
+  sectionKey: SectionKey;
   accentColor: string;
   softColor: string;
   borderColor: string;
@@ -964,7 +967,9 @@ function SubsectionChain({
                       className="font-medium leading-snug"
                       style={{ fontSize: fs(12), color: accentColor }}
                     >
-                      {stripMarkdownInline(sub.heading)}
+                      {sectionKey === "questionBackground" && stripMarkdownInline(sub.heading).trim() === "已有不足"
+                        ? "研究现状"
+                        : stripMarkdownInline(sub.heading)}
                     </div>
                     {/* Body preview — only when collapsed (avoid duplication) */}
                     {!isExpanded && bodyPreview && (

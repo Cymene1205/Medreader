@@ -31,7 +31,7 @@ const STAGES: Stage[] = [
     status: "done",
     items: [
       { name: "五面板协同工作区", detail: "PDF 原文 / 智能解析 / 思维导图 / Agent 提问 / 全文框架", done: true },
-      { name: "六维度结构化分析", detail: "科学问题 · 论证思路 · 实验方法 · 论证逻辑 · 创新性 · 局限性", done: true },
+      { name: "四维度结构化分析", detail: "问题与背景 · 论证主线 · 创新性 · 局限与机会", done: true },
       { name: "MinerU + DeepSeek 接入", detail: "PDF → Markdown → 结构化 JSON → 对话上下文", done: true },
       { name: "NextAuth + SQLite + Prisma", detail: "邮箱密码登录 / 个人文献库 / 用量配额", done: true },
     ],
@@ -223,12 +223,10 @@ export function Roadmap() {
             “Roadmaps are hypotheses, not promises.” — adjusted every sprint.
           </p>
           <a
-            href="https://github.com/Cymene1205/Medreader/milestones"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="#features"
             className="font-sans-ui text-[10px] tracking-[0.18em] uppercase text-[var(--burgundy)] hover:underline"
           >
-            Track milestones on GitHub ↗
+            查看已实现功能 ↗
           </a>
         </div>
       </div>

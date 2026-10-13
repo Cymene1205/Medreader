@@ -8,7 +8,6 @@ import { TechStack } from "@/components/landing/tech-stack";
 import { DeploymentSection } from "@/components/landing/deployment";
 import { Roadmap } from "@/components/landing/roadmap";
 import { UseCases } from "@/components/landing/use-cases";
-import { Author } from "@/components/landing/author";
 import { CTA } from "@/components/landing/cta";
 import { SiteFooter } from "@/components/landing/site-footer";
 
@@ -21,7 +20,7 @@ import { SiteFooter } from "@/components/landing/site-footer";
  * 章节顺序（v2.0 新增 Deployment + Roadmap）：
  *   Hero → Editorial → Features → Dimensions → Workflow
  *        → TechStack → Deployment → Roadmap
- *        → UseCases → Author → CTA
+ *        → UseCases → CTA
  */
 export function LandingPage() {
   return (
@@ -37,7 +36,6 @@ export function LandingPage() {
         <DeploymentSection />
         <Roadmap />
         <UseCases />
-        <Author />
         <CTA />
       </main>
       <SiteFooter />

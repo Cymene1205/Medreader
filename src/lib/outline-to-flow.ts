@@ -36,7 +36,7 @@ export type FlowEdge = {
   style?: CSSProperties;
 };
 
-// Dimension colors for the 6 sections (dim-1 through dim-6)
+// Accent palette shared by outline sections.
 export const DIM_COLORS: string[] = [
   "#2C5F8D", // dim-1
   "#3F8E83", // dim-2

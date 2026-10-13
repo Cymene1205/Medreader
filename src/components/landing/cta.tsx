@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { ArrowRight, Github, Server, FileText } from "lucide-react";
+import { ArrowRight, BrainCircuit, Server, FileText } from "lucide-react";
 
 export function CTA() {
   const { data: session, status } = useSession();
@@ -33,7 +33,7 @@ export function CTA() {
           <div className="col-span-12 lg:col-span-7">
             <div className="flex items-center gap-3 mb-6">
               <span className="font-serif-en italic text-xs tracking-[0.2em] uppercase text-[var(--gold)]">
-                § VIII. Coda · 结语
+                § IX. Coda · 结语
               </span>
             </div>
             <h2 className="font-serif-cn text-3xl md:text-5xl lg:text-6xl font-semibold text-[var(--paper)] leading-[1.15] mb-6">
@@ -70,19 +70,17 @@ export function CTA() {
               </Link>
 
               <a
-                href="https://github.com/Cymene1205/Medreader"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="#dimensions"
                 className="group flex items-center justify-between gap-4 px-6 py-5 bg-transparent text-[var(--paper)] border border-[var(--paper)]/40 rounded-sm hover:bg-[var(--paper)]/10 transition-colors"
               >
                 <div className="flex items-center gap-3">
-                  <Github className="w-5 h-5" />
+                  <BrainCircuit className="w-5 h-5" />
                   <div>
                     <div className="font-sans-ui text-sm tracking-[0.1em] uppercase font-semibold">
-                      GitHub 仓库
+                      四维度论文分析
                     </div>
                     <div className="font-serif-en italic text-xs opacity-70">
-                      Cymene1205/Medreader · MIT License
+                      问题与背景 · 论证主线 · 创新性 · 局限与机会
                     </div>
                   </div>
                 </div>

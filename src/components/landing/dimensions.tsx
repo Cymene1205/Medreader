@@ -1,12 +1,12 @@
 "use client";
 
-import { Microscope, GitBranch, FlaskConical, Workflow, Lightbulb, AlertTriangle } from "lucide-react";
+import { Microscope, GitBranch, Lightbulb, AlertTriangle } from "lucide-react";
 
 const DIMENSIONS = [
   {
     id: "01",
-    name: "科学问题",
-    en: "Research Question",
+    name: "问题与背景",
+    en: "Question & Background",
     desc:
       "这篇论文究竟想回答什么问题？问题从何而来？是否足够新颖、足够重要？",
     icon: Microscope,
@@ -15,36 +15,16 @@ const DIMENSIONS = [
   },
   {
     id: "02",
-    name: "论证思路",
-    en: "Argumentation Logic",
+    name: "论证主线",
+    en: "Argument Spine",
     desc:
-      "作者用什么样的逻辑链来回答问题？从前提到结论有几步？哪些步骤是关键假设？",
+      "作者如何从科学问题走向结论？串联关键实验、方法与图表结果，梳理证据之间的逻辑关系，并追问实验设计是否合理、结果是否足以支持结论。",
     icon: GitBranch,
     card: "dim-card-2",
-    question: "How does the author chain evidence to claim?",
+    question: "How do experiments and evidence support the central claim?",
   },
   {
     id: "03",
-    name: "实验方法与结果",
-    en: "Methods & Results",
-    desc:
-      "用了什么实验/计算方法？数据规模、对照设置、统计检验是否合理？关键结果有哪些？",
-    icon: FlaskConical,
-    card: "dim-card-3",
-    question: "What was done, and what was found?",
-  },
-  {
-    id: "04",
-    name: "论证逻辑解析",
-    en: "Logic Decoding",
-    desc:
-      "结果是否真的支持结论？是否存在过度推断、混淆变量、循环论证？反例与替代解释是什么？",
-    icon: Workflow,
-    card: "dim-card-4",
-    question: "Do the results truly entail the claims?",
-  },
-  {
-    id: "05",
     name: "创新性",
     en: "Novelty",
     desc:
@@ -54,14 +34,14 @@ const DIMENSIONS = [
     question: "What is genuinely new here?",
   },
   {
-    id: "06",
-    name: "局限性",
-    en: "Limitations",
+    id: "04",
+    name: "局限与机会",
+    en: "Limits & Opportunities",
     desc:
-      "样本、方法、推广性、可重复性方面的局限是什么？哪些下一步工作能弥补这些不足？",
+      "样本、方法、推广性、可重复性方面有哪些局限？还存在哪些未解问题？哪些后续研究能弥补不足、拓展发现？",
     icon: AlertTriangle,
     card: "dim-card-6",
-    question: "Where does this work stop short?",
+    question: "What remains unresolved, and what could come next?",
   },
 ];
 
@@ -78,7 +58,7 @@ export function Dimensions() {
       {/* 装饰性背景文字 */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.025]">
         <span className="font-serif-en italic text-[28rem] font-bold text-[var(--burgundy)] leading-none">
-          VI
+          IV
         </span>
       </div>
 
@@ -88,7 +68,7 @@ export function Dimensions() {
           <div className="col-span-12 lg:col-span-3">
             <div className="section-marker mb-2">§ III.</div>
             <div className="journal-heading-en text-sm">
-              Six Dimensions / 六维度分析
+              Four Dimensions / 四维度分析
             </div>
           </div>
           <div className="col-span-12 lg:col-span-9">
@@ -96,17 +76,17 @@ export function Dimensions() {
               像同行评议一样拆解一篇论文
             </h2>
             <p className="font-serif-cn text-[var(--ink-soft)] text-lg leading-relaxed max-w-3xl">
-              Agent 主动从六个核心维度对论文进行结构化分析——不是简单摘要，而是接近审稿深度的二次解读。每个维度都附带关键追问，便于读者带着问题回到原文。
+              Agent 从问题与背景、论证主线、创新性、局限与机会四个核心维度对论文进行结构化分析。论证主线整合论证思路、实验方法与结果、论证逻辑解析，串联从问题到证据再到结论的完整链条。每个维度都附带关键追问，便于读者带着问题回到原文。
             </p>
           </div>
         </div>
 
-        {/* 六维度网格 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 lg:gap-6">
+        {/* 四维度网格 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 lg:gap-6">
           {DIMENSIONS.map((d, i) => (
             <article
               key={d.id}
-              className="group relative overflow-hidden rounded-sm border border-[var(--rule)] bg-[var(--paper-soft)] fade-up"
+              className="group relative flex flex-col overflow-hidden rounded-sm border border-[var(--rule)] bg-[var(--paper-soft)] fade-up"
               style={{ animationDelay: `${i * 70}ms` }}
             >
               {/* 顶部色带 */}
@@ -132,8 +112,8 @@ export function Dimensions() {
               </div>
 
               {/* 主体 */}
-              <div className="p-5">
-                <p className="font-serif-cn text-sm leading-[1.8] text-[var(--ink-soft)] mb-4">
+              <div className="p-5 flex flex-col flex-1">
+                <p className="font-serif-cn text-sm leading-[1.8] text-[var(--ink-soft)] mb-4 flex-1">
                   {d.desc}
                 </p>
                 <div className="pt-3 border-t border-dotted border-[var(--rule)]">
@@ -156,7 +136,7 @@ export function Dimensions() {
               <span className="scholarly-chip">Auto-Generated</span>
             </div>
             <p className="font-serif-cn text-[15px] leading-relaxed text-[var(--ink-soft)]">
-              六维度分析由 Agent 基于论文正文自动生成，分析结果嵌入"全文框架"面板，
+              四维度分析由 Agent 基于论文正文与图表证据自动生成，分析结果嵌入"全文框架"面板，
               每条分析都可点击跳转到原文对应段落，便于读者复核与质疑。
             </p>
           </div>

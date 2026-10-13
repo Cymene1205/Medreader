@@ -44,7 +44,7 @@ export function SiteFooter() {
               {[
                 { label: "概览", href: "#overview" },
                 { label: "核心功能", href: "#features" },
-                { label: "六维分析", href: "#dimensions" },
+                { label: "四维分析", href: "#dimensions" },
                 { label: "工作流", href: "#workflow" },
               ].map((it) => (
                 <li key={it.href}>
@@ -68,7 +68,6 @@ export function SiteFooter() {
                 { label: "技术架构", href: "#stack" },
                 { label: "部署方案", href: "#deployment" },
                 { label: "路线图", href: "#roadmap" },
-                { label: "作者", href: "#author" },
                 { label: "立即开始", href: "/login" },
               ].map((it) => (
                 <li key={it.href}>
@@ -89,19 +88,11 @@ export function SiteFooter() {
             </div>
             <ul className="reference-list space-y-1">
               <li>
-                <span className="cite-num">[1]</span> 行止集 Biorhythm. MedReader Agent:
+                <span className="cite-num">[1]</span> MedReader Agent:
                 面向医学研究者的 AI 文献阅读 Agent [EB/OL]. 2026.
               </li>
               <li>
-                <span className="cite-num">[2]</span> Huazhong University of
-                Science and Technology, Tongji Medical College.
-              </li>
-              <li>
-                <span className="cite-num">[3]</span> 公众号「行止集」 ·
-                WeChat Channel “Xing Zhi Ji”.
-              </li>
-              <li>
-                <span className="cite-num">[4]</span> Built with Next.js 16 ·
+                <span className="cite-num">[2]</span> Built with Next.js 16 ·
                 TypeScript · MinerU Cloud · DeepSeek.
               </li>
             </ul>
@@ -111,7 +102,7 @@ export function SiteFooter() {
         {/* 版权条 */}
         <div className="mt-12 pt-6 border-t border-[var(--rule)] flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
           <p className="font-sans-ui text-[11px] tracking-[0.1em] text-[var(--ink-muted)]">
-            © 2026 MedReader Agent · MIT License · 由行止集 Biorhythm 设计与开发
+            © 2026 MedReader Agent · MIT License
           </p>
           <p className="font-serif-en italic text-xs text-[var(--ink-muted)]">
             Set in EB Garamond × Noto Serif SC · Printed digitally.

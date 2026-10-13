@@ -24,7 +24,7 @@ const SCENES = [
     title: "论文写作",
     en: "Paper Writing",
     body:
-      `在 Introduction 与 Discussion 之间反复横跳时，用六维度分析提醒自己「局限性」是否被诚实陈述；用 Agent 帮你重写一段更紧凑的论述。`,
+      `在 Introduction 与 Discussion 之间反复横跳时，用四维度分析提醒自己「局限与机会」是否被诚实陈述；用 Agent 帮你重写一段更紧凑的论述。`,
     color: "var(--moss)",
     soft: "rgba(45,74,62,0.06)",
   },
@@ -42,7 +42,7 @@ const SCENES = [
     title: "组会汇报",
     en: "Journal Club",
     body:
-      `每周组会精读一篇文献，把 PDF 上传后让 Agent 提前帮你生成「科学问题—方法—结果—局限」四段式摘要，汇报时按框架展开。`,
+      `每周组会精读一篇文献，把 PDF 上传后让 Agent 提前生成「问题与背景—论证主线—创新性—局限与机会」四维度分析，汇报时沿着关键实验与图表证据展开。`,
     color: "var(--burgundy-deep)",
     soft: "rgba(74,26,38,0.06)",
   },
@@ -51,7 +51,7 @@ const SCENES = [
     title: "综述撰写",
     en: "Review Synthesis",
     body:
-      `撰写综述时累积数十篇文献的结构化分析，按主题聚类对比「科学问题」与「创新性」维度，找出研究空白与潜在切入点。`,
+      `撰写综述时累积数十篇文献的结构化分析，按主题聚类对比「问题与背景」与「创新性」维度，找出研究空白与潜在切入点。`,
     color: "var(--moss-soft)",
     soft: "rgba(74,107,93,0.06)",
   },
@@ -60,7 +60,7 @@ const SCENES = [
     title: "同行评议",
     en: "Peer Review",
     body:
-      `审稿时用六维度框架逐项核对——尤其是「论证逻辑解析」与「局限性」——确保自己没有遗漏作者回避的关键问题。`,
+      `审稿时用四维度框架逐项核对——尤其是「论证主线」中的证据与结论，以及「局限与机会」——确保自己没有遗漏作者回避的关键问题。`,
     color: "var(--burgundy-soft)",
     soft: "rgba(142,58,77,0.06)",
   },
@@ -76,7 +76,7 @@ export function UseCases() {
         {/* 章节标头 */}
         <div className="grid grid-cols-12 gap-6 mb-14">
           <div className="col-span-12 lg:col-span-3">
-            <div className="section-marker mb-2">§ VI.</div>
+            <div className="section-marker mb-2">§ VIII.</div>
             <div className="journal-heading-en text-sm">Use Cases / 应用场景</div>
           </div>
           <div className="col-span-12 lg:col-span-9">
